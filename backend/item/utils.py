@@ -28,16 +28,17 @@ def _fetch_via_api(tweet_url: str) -> List[str]:
     api = f'https://api.twitter.com/2/tweets/{tweet_id}'
     params = {
         'expansions': 'attachments.media_keys',
-        'media.fields': 'type,url,preview_image_url,media_url_https'
+        # request a broad set of media fields; some fields may be absent depending on account/tweet
+        'media.fields': 'media_key,type,url,preview_image_url,variants,alt_text,media_key'
     }
     headers = {'Authorization': f'Bearer {bearer}'}
     try:
         r = requests.get(api, headers=headers, params=params, timeout=8)
         r.raise_for_status()
         j = r.json()
-        # store raw response for debugging
+        # store raw response and status for debugging
         try:
-            LAST_TW_API_RESP[tweet_id] = j
+            LAST_TW_API_RESP[tweet_id] = {'json': j, 'status': r.status_code}
         except Exception:
             pass
         # optional verbose logging when env var enabled
@@ -72,48 +73,135 @@ def _fetch_via_scrape(tweet_url: str) -> List[str]:
         r.raise_for_status()
         html = r.text
     except Exception:
-        return None
+        return []
 
     results: List[str] = []
-    # Try meta tags first (og:image)
+    seen = set()
+
+    def add(u: str):
+        if not u:
+            return
+        # ignore inline/data URIs (these can be extremely large blobs)
+        if u.strip().startswith('data:'):
+            return
+        full = urljoin(tweet_url, u)
+        if full not in seen:
+            seen.add(full)
+            results.append(full)
+
+    # Try meta tags first (og:image / twitter:image)
     if BeautifulSoup:
         soup = BeautifulSoup(html, 'html.parser')
         og = soup.find('meta', property='og:image')
         if og and og.get('content'):
-            results.append(urljoin(tweet_url, og.get('content')))
+            add(og.get('content'))
         tw = soup.find('meta', attrs={'name': 'twitter:image'})
         if tw and tw.get('content'):
-            results.append(urljoin(tweet_url, tw.get('content')))
+            add(tw.get('content'))
 
-        # collect image tags that look like tweet media
-        imgs = [img.get('src') for img in soup.find_all('img') if img.get('src')]
-        for src in imgs:
-            if 'pbs.twimg.com' in src or 'twimg' in src:
-                full = urljoin(tweet_url, src)
-                if full not in results:
-                    results.append(full)
+        # collect src/srcset/data-src/data-image-url/data-srcset attributes
+        # Prefer collecting images within the app root first: many Twitter assets
+        # (including gallery photos) are rendered under the element with id="react-root".
+        # Collect all <img> tags under that node (src, srcset, data-src, data-image-url).
+        root = soup.find(id='react-root')
+        if root:
+            for im in root.find_all('img'):
+                s = im.get('src')
+                if s:
+                    add(s)
+                ss = im.get('srcset') or im.get('data-srcset')
+                if ss:
+                    parts = [p.strip() for p in ss.split(',') if p.strip()]
+                    for p in parts:
+                        m = re.search(r'^(?P<url>[^\s]+)', p)
+                        if m:
+                            add(m.group('url'))
+                ds = im.get('data-src') or im.get('data-image-url')
+                if ds:
+                    add(ds)
 
-        # generic img collection as fallback; keep order deterministic
+        # Collect other <img> tags on the page as a fallback (legacy logic).
         for im in soup.find_all('img'):
+            # src
             s = im.get('src')
             if s:
-                full = urljoin(tweet_url, s)
-                if full not in results:
-                    results.append(full)
+                # prefer pbs.twimg.com and twimg images first
+                if 'pbs.twimg.com' in s or 'twimg' in s or 'pic.twitter.com' in s:
+                    add(s)
+            # srcset: pick all entries
+            ss = im.get('srcset') or im.get('data-srcset')
+            if ss:
+                parts = [p.strip() for p in ss.split(',') if p.strip()]
+                for p in parts:
+                    m = re.search(r'^(?P<url>[^\s]+)', p)
+                    if m:
+                        add(m.group('url'))
+            # data-src / data-image-url
+            ds = im.get('data-src') or im.get('data-image-url')
+            if ds:
+                add(ds)
 
-    # Fallback regex matches if nothing found yet
-    if not results:
-        matches = re.findall(r'https://pbs\.twimg\.com/media/[^"\s<>]+', html)
-        for m in matches:
-            full = urljoin(tweet_url, m)
-            if full not in results:
-                results.append(full)
-    if not results:
-        matches = re.findall(r'https?://[^"\s<>]*twimg[^"\s<>]+', html)
-        for m in matches:
-            full = urljoin(tweet_url, m)
-            if full not in results:
-                results.append(full)
+        # picture/figure fallback
+        for pic in soup.find_all('picture'):
+            for im in pic.find_all('img'):
+                if im.get('src'):
+                    add(im.get('src'))
+                ss = im.get('srcset')
+                if ss:
+                    for p in ss.split(','):
+                        m = re.search(r'^(?P<url>[^\s]+)', p.strip())
+                        if m:
+                            add(m.group('url'))
+
+        # anchors that may point to pic.twitter.com shortlinks
+        for a in soup.find_all('a'):
+            href = a.get('href')
+            if href and 'pic.twitter.com' in href:
+                add(href)
+
+    # Regex-based fallbacks to catch direct pbs.twimg links
+    matches = re.findall(r'https?://pbs\.twimg\.com/media/[^"\s<>]+', html)
+    for m in matches:
+        add(m)
+    matches = re.findall(r'https?://[^"\s<>]*twimg[^"\s<>]+', html)
+    for m in matches:
+        add(m)
+
+    # Also inspect inline <script> blocks for embedded JSON containing
+    # media URLs (keys like media_url, media_url_https, preview_image_url)
+    if BeautifulSoup:
+        for script in soup.find_all('script'):
+            try:
+                script_text = script.string or script.get_text() or ''
+            except Exception:
+                script_text = ''
+            if not script_text:
+                continue
+            # look for JSON-style keys that reference pbs.twimg.com
+            for m in re.findall(r'"media_url_https"\s*:\s*"(https?://pbs\.twimg\.com/[^"]+)"', script_text):
+                add(m)
+            for m in re.findall(r'"media_url"\s*:\s*"(https?://pbs\.twimg\.com/[^"]+)"', script_text):
+                add(m)
+            for m in re.findall(r'"preview_image_url"\s*:\s*"(https?://pbs\.twimg\.com/[^"]+)"', script_text):
+                add(m)
+            # generic pbs links inside scripts
+            for m in re.findall(r'https?://pbs\.twimg\.com/media/[^"\s<>\)]+', script_text):
+                add(m)
+
+    # Resolve pic.twitter.com shortlinks by following redirects (cheap HEAD/GET)
+    resolved = []
+    for u in list(results):
+        if 'pic.twitter.com' in u:
+            try:
+                r = requests.get(u, headers=headers, timeout=8, allow_redirects=True)
+                if r.status_code in (200, 301, 302) and r.url:
+                    final = r.url
+                    # If redirect ended on pbs.twimg.com or twimg host, include
+                    if 'pbs.twimg.com' in final or 'twimg' in final:
+                        add(final)
+            except Exception:
+                continue
+
     return results
 
 

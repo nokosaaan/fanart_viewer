@@ -98,6 +98,18 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Read client-selected fetch method early so we can honor it below
         force_method = data.get('force_method') if isinstance(data, dict) else None
+        # Allow clients to request the stored Twitter API JSON for debugging
+        # without requiring an env change: include when request data contains
+        # `debug: true` or the query param `?debug=1`/`?debug=true` is present.
+        debug_requested = False
+        try:
+            if isinstance(data, dict) and bool(data.get('debug')):
+                debug_requested = True
+        except Exception:
+            debug_requested = False
+        qd = request.query_params.get('debug') if hasattr(request, 'query_params') else None
+        if not debug_requested and qd is not None and str(qd).lower() in ('1', 'true', 'yes'):
+            debug_requested = True
 
         # Track which method produced the candidates for debugging/UI
         used_method = None
@@ -177,6 +189,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
             # Resolve relative URLs and attempt fetches for ALL hints (do not stop on first)
             seen = set()
+            # collect candidate source mapping for debug/UI
+            candidate_sources = {}
             for h in hints:
                 if not h:
                     continue
@@ -189,8 +203,36 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     if b and ct:
                         candidates.append((cand_url, b, ct))
                         used_method = 'html'
+                        # record where this candidate came from
+                        candidate_sources[cand_url] = 'html'
                 except Exception:
                     continue
+
+            # For Twitter/X targets, also call the unified twitter helper to
+            # aggregate additional HTML-derived candidates (scrape/nitter).
+            # This helps collect multi-photo tweets where the page-level
+            # meta tags only expose a single image.
+            try:
+                if (('twitter.com' in target_url) or ('x.com' in target_url)):
+                    tw_urls = fetch_twitter_media_urls_with_sources(target_url)
+                    for (tw_url, src) in tw_urls:
+                        # prefer non-api sources here (we're improving HTML path)
+                        if src == 'api':
+                            continue
+                        if tw_url in seen:
+                            continue
+                        try:
+                            b, ct = _internal_fetch(tw_url)
+                            if b and ct:
+                                candidates.append((tw_url, b, ct))
+                                used_method = used_method or 'html'
+                                candidate_sources[tw_url] = src or 'scrape'
+                                seen.add(tw_url)
+                        except Exception:
+                            continue
+            except Exception:
+                # don't fail the whole request if the helper errors
+                pass
 
             # If the client explicitly requested API mode for twitter/x, prefer
             # the API-based candidates (override HTML hints when API returns results).
@@ -219,7 +261,55 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         candidates = api_candidates
                         used_method = 'api'
                     else:
-                        return Response({'detail': 'API fetch returned no media for this tweet'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+                        # If API returned no usable candidates, check whether the
+                        # API response indicates rate limiting (429). If so, try a
+                        # safe fallback to HTML scraping/Nitter to recover media.
+                        api_debug = None
+                        try:
+                            api_debug = get_last_api_response(target_url)
+                        except Exception:
+                            api_debug = None
+
+                        # If rate-limited, attempt to gather non-API candidates
+                        # (scrape / nitter) and use them as a fallback. This keeps
+                        # the user workflow working when API limits are hit.
+                        tried_fallback = False
+                        if api_debug and isinstance(api_debug, dict) and api_debug.get('status') == 429:
+                            tried_fallback = True
+                            try:
+                                tw_urls = fetch_twitter_media_urls_with_sources(target_url)
+                                fallbacks = [u for (u, s) in tw_urls if s != 'api']
+                                fallback_candidates = []
+                                candidate_sources = {}
+                                for tw_url in fallbacks:
+                                    try:
+                                        b, ct = _internal_fetch(tw_url)
+                                        if b and ct:
+                                            fallback_candidates.append((tw_url, b, ct))
+                                            candidate_sources[tw_url] = 'scrape'
+                                    except Exception:
+                                        continue
+                                if fallback_candidates:
+                                    candidates = fallback_candidates
+                                    used_method = 'api_rate_limited_fallback'
+                                else:
+                                    # no fallback results available
+                                    pass
+                            except Exception:
+                                pass
+
+                        # If we have candidates from fallback, continue. Otherwise
+                        # return a 422 with the API response attached for debugging.
+                        if candidates:
+                            # continue on to preview/save path
+                            pass
+                        else:
+                            body = {'detail': 'API fetch returned no media for this tweet'}
+                            if api_debug is not None:
+                                body['api_response'] = api_debug
+                            if tried_fallback:
+                                body['note'] = 'API rate-limited; attempted scrape fallback.'
+                            return Response(body, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
                 except Exception:
                     # if API helper fails, continue with existing candidates
                     pass
@@ -253,10 +343,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             if used_method:
                 resp['method'] = used_method
             # If API debugging is enabled, include the raw API JSON (if available)
-            if os.environ.get('TW_API_DEBUG'):
-                api_debug = get_last_api_response(target_url)
-                if api_debug is not None:
-                    resp['api_response'] = api_debug
+            # include API debug output if requested either via env var or per-request
+            if os.environ.get('TW_API_DEBUG') or debug_requested:
+                try:
+                    api_debug = get_last_api_response(target_url)
+                    if api_debug is not None:
+                        resp['api_response'] = api_debug
+                except Exception:
+                    # be robust: don't fail the whole request if debug retrieval errors
+                    logging.exception('Failed to fetch last API response for debug')
             return Response(resp)
 
         # Persist ALL successful candidates as preview images (preserve order)

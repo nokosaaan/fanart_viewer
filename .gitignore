@@ -5,3 +5,4 @@
 /backend/.env.example
 /backend/backup/*.json
 /backend/data_filtered/*.json
+/log/*
