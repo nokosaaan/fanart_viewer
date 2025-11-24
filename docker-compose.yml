@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fanart}
+      POSTGRES_USER: ${POSTGRES_USER:-fanart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  web:
+    build: ./backend
+    command: /app/entrypoint.sh
+    volumes:
+      - ./backend:/app
+      - ./backend/backend/data:/app/data
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-fanart}
+      - POSTGRES_USER=${POSTGRES_USER:-fanart}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - TW_BEARER=${TW_BEARER}
+      - PIXIV_USER=${PIXIV_USER}
+      - PIXIV_PASS=${PIXIV_PASS}
+    depends_on:
+      - db
+
+  frontend:
+    build: ./frontend
+    volumes:
+    - ./frontend:/app
+    - frontend_node_modules:/app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - BACKEND_URL=http://web:8000
+
+volumes:
+  db_data:
+
+  frontend_node_modules:
+
+
