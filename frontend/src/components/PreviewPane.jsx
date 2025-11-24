@@ -16,8 +16,11 @@ export default function PreviewPane({open, onClose}){
     return ()=>{ mountedRef.current = false }
   }, [])
 
-  // load items with optional pagination; by default load first page only
-  async function loadItems(url='/api/items/?page_size=50', replace=true){
+  // load items with optional pagination; for the preview timeline request a
+  // large page so newly-saved previews (which may be far down the list)
+  // are included. This is a pragmatic client-side improvement; a server-side
+  // filter would be preferable for very large datasets.
+  async function loadItems(url='/api/items/?page_size=10000', replace=true){
     try{
       if(replace){ setLoading(true); setNextPageUrl(null) }
       else { setLoadingMore(true) }
@@ -54,7 +57,7 @@ export default function PreviewPane({open, onClose}){
 
   useEffect(()=>{
     if(!open) return
-    loadItems('/api/items/?page_size=50', true)
+    loadItems('/api/items/?page_size=10000', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
@@ -147,7 +150,7 @@ export default function PreviewPane({open, onClose}){
       // refresh the first page so thumbnails / has_preview flags are up-to-date
       if(open){
         const openedId = (selectedIndex !== null && items[selectedIndex]) ? items[selectedIndex].id : null
-        loadItems('/api/items/?page_size=50', true).then((loaded)=>{
+        loadItems('/api/items/?page_size=10000', true).then((loaded)=>{
           if(!mountedRef.current) return
           // if the modal was open on the updated item, reload its previews using the new index
           if(id!=null && openedId === id){

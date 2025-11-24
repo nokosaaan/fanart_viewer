@@ -1,4 +1,5 @@
 .env
+.*
 /backend/backend/data/*.json
 /backend/.env/
 /backend/.env.example

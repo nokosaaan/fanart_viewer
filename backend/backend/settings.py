@@ -76,6 +76,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Django REST Framework pagination defaults
 REST_FRAMEWORK = {
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    # use a pagination class that allows the frontend to request `page_size`
+    # (capped via `max_page_size` in the pagination class)
+    'DEFAULT_PAGINATION_CLASS': 'backend.pagination.LargePageNumberPagination',
     'PAGE_SIZE': 50,
 }

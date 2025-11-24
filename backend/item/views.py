@@ -17,6 +17,13 @@ from .serializers import ItemSerializer
 from django.conf import settings
 import logging
 import traceback
+import base64
+from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
+import os
+try:
+    from bs4 import BeautifulSoup
+except Exception:
+    BeautifulSoup = None
 
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
@@ -69,7 +76,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'])
     def fetch_and_save_preview(self, request, pk=None):
         item = self.get_object()
-        if not item.link:
+        # allow client to override the URL (useful when item.link is not the direct media page)
+        data = request.data if isinstance(request.data, dict) else {}
+        target_url = data.get('url') or item.link
+        preview_only = bool(data.get('preview_only'))
+
+        if not target_url:
             return Response({'detail': 'No link available on item'}, status=status.HTTP_400_BAD_REQUEST)
 
         def _internal_fetch(url):
@@ -84,55 +96,185 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 return None, None
             return None, None
 
-        # If the item.link itself points to an image, try that first
-        body, ctype = _internal_fetch(item.link)
+        # Read client-selected fetch method early so we can honor it below
+        force_method = data.get('force_method') if isinstance(data, dict) else None
+
+        # Track which method produced the candidates for debugging/UI
+        used_method = None
+
+        # If the target URL itself points to an image, try that first
+        body, ctype = _internal_fetch(target_url)
         candidates = []
         if body and ctype:
-            candidates.append((item.link, body, ctype))
+            used_method = 'direct'
+            candidates.append((target_url, body, ctype))
         else:
             # Fetch HTML and try to extract common image hints (og:image, twitter:image, img src)
             try:
                 import requests
-                r = requests.get(item.link, timeout=15, headers={'User-Agent': 'fanart-viewer-bot/1.0'})
+                r = requests.get(target_url, timeout=15, headers={'User-Agent': 'fanart-viewer-bot/1.0'})
                 html = r.text or ''
             except Exception:
                 html = ''
 
-            # Look for Open Graph / Twitter / link rel tags and <img>
+            # Use BeautifulSoup (if available) to walk the DOM and collect
+            # candidate image URLs. We aim to find images under the
+            # 'div.react-root -> main.main -> a -> img' pattern, but also
+            # fall back to common selectors (article img, figure img, og: tags).
             hints = []
-            m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
-            if m:
-                hints.append(m.group(1))
-            m = re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
-            if m:
-                hints.append(m.group(1))
-            m = re.search(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', html, re.I)
-            if m:
-                hints.append(m.group(1))
-            m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
-            if m:
-                hints.append(m.group(1))
+            try:
+                if 'BeautifulSoup' in globals() and BeautifulSoup is not None:
+                    soup = BeautifulSoup(html, 'html.parser')
+                    # Open Graph / twitter meta images first
+                    og = soup.find('meta', property='og:image')
+                    if og and og.get('content'):
+                        hints.append(og.get('content'))
+                    tw = soup.find('meta', attrs={'name': 'twitter:image'})
+                    if tw and tw.get('content'):
+                        hints.append(tw.get('content'))
 
-            # Resolve relative URLs and attempt fetches
+                    # Target the common react-root -> main -> a -> img chain
+                    root = soup.find('div', class_=lambda c: c and 'react-root' in c)
+                    mains = []
+                    if root:
+                        mains = root.find_all('main')
+                    if not mains:
+                        mains = soup.find_all('main')
+                    for mtag in mains:
+                        for a in mtag.find_all('a'):
+                            for im in a.find_all('img'):
+                                src = im.get('src')
+                                if src:
+                                    hints.append(src)
+
+                    # Generic fallbacks
+                    for im in soup.find_all('img'):
+                        s = im.get('src')
+                        if s:
+                            hints.append(s)
+                    for fig in soup.find_all('figure'):
+                        im = fig.find('img')
+                        if im and im.get('src'):
+                            hints.append(im.get('src'))
+            except Exception:
+                # parsing failed; fall back to regex below
+                pass
+
+            # If BeautifulSoup parsing didn't yield anything, fallback to regex
+            if not hints:
+                m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+                if m:
+                    hints.append(m.group(1))
+                m = re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+                if m:
+                    hints.append(m.group(1))
+                m = re.search(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', html, re.I)
+                if m:
+                    hints.append(m.group(1))
+                m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
+                if m:
+                    hints.append(m.group(1))
+
+            # Resolve relative URLs and attempt fetches for ALL hints (do not stop on first)
+            seen = set()
             for h in hints:
+                if not h:
+                    continue
                 try:
-                    cand_url = urljoin(item.link, h)
+                    cand_url = urljoin(target_url, h)
+                    if cand_url in seen:
+                        continue
+                    seen.add(cand_url)
                     b, ct = _internal_fetch(cand_url)
                     if b and ct:
                         candidates.append((cand_url, b, ct))
-                        break
+                        used_method = 'html'
                 except Exception:
                     continue
 
+            # If the client explicitly requested API mode for twitter/x, prefer
+            # the API-based candidates (override HTML hints when API returns results).
+            if force_method == 'api' and (('twitter.com' in target_url) or ('x.com' in target_url)):
+                # If the client explicitly requested API mode but the server has
+                # no TW_BEARER configured, return a helpful error so the UI
+                # can show a clear message rather than silently falling back.
+                if not os.environ.get('TW_BEARER'):
+                    return Response({'detail': 'TW_BEARER not configured on server; API fetch unavailable'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+                try:
+                    api_candidates = []
+                    candidate_sources = {}
+                    tw_urls = fetch_twitter_media_urls_with_sources(target_url)
+                    # prefer API-origin results only when user explicitly forced API
+                    api_only = [u for (u, s) in tw_urls if s == 'api']
+                    for tw_url in api_only:
+                        try:
+                            b, ct = _internal_fetch(tw_url)
+                            if b and ct:
+                                api_candidates.append((tw_url, b, ct))
+                                candidate_sources[tw_url] = 'api'
+                        except Exception:
+                            continue
+                    # If API returned usable candidates, use them; otherwise return clear error
+                    if api_candidates:
+                        candidates = api_candidates
+                        used_method = 'api'
+                    else:
+                        return Response({'detail': 'API fetch returned no media for this tweet'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+                except Exception:
+                    # if API helper fails, continue with existing candidates
+                    pass
+            else:
+                # If no candidates from HTML scraping and the client requested an API
+                # fallback, use the unified twitter helper which can return multiple
+                # candidate URLs. We only attempt API-based methods for twitter/x domains.
+                # Do not silently fallback to non-API candidates when client forced API.
+                # If we reach here and candidates are empty, above returned a 422.
+                pass
+
         if not candidates:
-            return Response({'detail': 'No image candidates found or failed to fetch'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+            return Response({'detail': 'No image candidates found or failed to fetch', 'hints': hints}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
-        # Persist the first successful candidate as the primary preview
+        # If preview_only is requested, return candidates (with data_uri) without persisting
+        if preview_only:
+            images = []
+            # candidate_sources may or may not be present depending on fetch path
+            candidate_sources = locals().get('candidate_sources', {}) or {}
+            for idx, (u, b, ct) in enumerate(candidates):
+                try:
+                    data_uri = f"data:{ct};base64,{base64.b64encode(b).decode('ascii')}"
+                except Exception:
+                    data_uri = None
+                img = {'index': idx, 'url': u, 'size': len(b) if b else 0, 'content_type': ct, 'data_uri': data_uri}
+                src = candidate_sources.get(u)
+                if src:
+                    img['source'] = src
+                images.append(img)
+            resp = {'preview_only': True, 'images': images}
+            if used_method:
+                resp['method'] = used_method
+            # If API debugging is enabled, include the raw API JSON (if available)
+            if os.environ.get('TW_API_DEBUG'):
+                api_debug = get_last_api_response(target_url)
+                if api_debug is not None:
+                    resp['api_response'] = api_debug
+            return Response(resp)
+
+        # Persist ALL successful candidates as preview images (preserve order)
         PreviewImage.objects.filter(item=item).delete()
-        url_f, body, ctype = candidates[0]
-        pi = PreviewImage.objects.create(item=item, order=0, data=body, content_type=ctype)
+        saved = []
+        for idx, (url_f, body, ctype) in enumerate(candidates):
+            try:
+                pi = PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
+                saved.append({'index': idx, 'url': url_f, 'size': len(body) if body else 0, 'content_type': ctype})
+            except Exception:
+                # skip individual failures but continue saving others
+                logging.exception('Failed to save preview candidate %s for item %s', url_f, item.id)
+                continue
 
-        return Response({'status': 'saved', 'count': 1, 'url': url_f, 'size': len(body), 'content_type': ctype})
+        if not saved:
+            return Response({'detail': 'Failed to save any preview images'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
 
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):

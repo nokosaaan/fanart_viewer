@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import EditFields from './EditFields'
 
-async function fetchAndSavePreview(id, url){
+async function fetchAndSavePreview(id, url, options = {}){
   try{
     const opts = {
       method: 'POST',
@@ -9,7 +9,9 @@ async function fetchAndSavePreview(id, url){
     }
     if(url){
       opts.headers['Content-Type'] = 'application/json'
-      opts.body = JSON.stringify({ url })
+      const body = { url }
+      if(options.force_method) body.force_method = options.force_method
+      opts.body = JSON.stringify(body)
     }
     const resp = await fetch(`/api/items/${id}/fetch_and_save_preview/`, opts)
     if(!resp.ok) {
@@ -21,11 +23,13 @@ async function fetchAndSavePreview(id, url){
   }catch(e){ console.error(e); return { ok: false, body: {error: e.message} } }
 }
 
-async function fetchPreviewCandidates(id, url){
+async function fetchPreviewCandidates(id, url, options = {}){
   try{
     const body = {}
     if(url) body.url = url
     body.preview_only = true
+    // only include force_method when explicitly requested by the UI
+    if(options.force_method) body.force_method = options.force_method
     const resp = await fetch(`/api/items/${id}/fetch_and_save_preview/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
     if(!resp.ok) {
       const j = await resp.json().catch(()=>({}));
@@ -46,6 +50,7 @@ function ItemRow({ it }){
   // Keep fetch debug objects available on `window.__fv_fetch_debug` and expose a helper to show them.
   const [candidates, setCandidates] = useState(null)
   const [showCandidates, setShowCandidates] = useState(false)
+  const [fetchMethod, setFetchMethod] = useState('html')
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [showEditor, setShowEditor] = useState(false)
   const [charsState, setCharsState] = useState(it.characters || [])
@@ -58,9 +63,37 @@ function ItemRow({ it }){
     if(!ok) return
     setLoading(true)
     // first fetch candidates (preview-only)
-    const candRes = await fetchPreviewCandidates(it.id, url)
+    const candRes = await fetchPreviewCandidates(it.id, url, { force_method: fetchMethod === 'api' ? 'api' : undefined })
     setLoading(false)
     if(!candRes.ok){
+      const detail = candRes.body && candRes.body.detail
+      // If HTML scraping found nothing and user didn't explicitly choose API,
+      // offer to retry using API to give the user control over which method to use.
+      if(detail && detail.toLowerCase().includes('no image candidates') && fetchMethod !== 'api'){
+        const tryApi = window.confirm('HTML scraping found no image candidates. Try API-based fetch?')
+        if(tryApi){
+          setLoading(true)
+          const apiRes = await fetchPreviewCandidates(it.id, url, {force_method: 'api'})
+          setLoading(false)
+          if(apiRes.ok){
+            const body2 = apiRes.body || {}
+            if(body2.status === 'saved'){
+              setHasPreviewLocal(true)
+              try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = body2 }catch(e){}
+              try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+              try{ window.alert('Preview saved via API.'); }catch(e){}
+              return
+            }
+            if(body2.preview_only && Array.isArray(body2.images) && body2.images.length>0){
+              setCandidates(body2.images)
+              setSelectedUrls(new Set())
+              setShowCandidates(true)
+              try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = body2 }catch(e){}
+              return
+            }
+          }
+        }
+      }
       alert('Preview fetch failed. See console for details.')
       return
     }
@@ -191,6 +224,10 @@ function ItemRow({ it }){
       <div className="actions-row">
         <form onSubmit={onFetch} style={{display:'inline-block'}}>
           <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)} />
+          <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
+            <option value="html">HTML scrape</option>
+            <option value="api">Use API</option>
+          </select>
           <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
         </form>
         {/* Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
