@@ -193,7 +193,9 @@ function ItemRow({ it }){
           <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)} />
           <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
         </form>
+        {/* Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
         <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
+        */}
         {/* fetch debug is stored internally; use `window.showFetchDebug(id)` in the console to inspect */}
       </div>
       
@@ -233,6 +235,9 @@ function ItemRow({ it }){
         </div>
       )}
 
+      {/* EditFields component is hidden by default. To restore inline editing,
+          uncomment the block below. Keep it commented to avoid showing edit UI on the page. */}
+      {/**
       {showEditor && (
         <EditFields item={it} onClose={()=>setShowEditor(false)} onSaved={(newItem)=>{
           // update local chars/tags state
@@ -242,6 +247,7 @@ function ItemRow({ it }){
           try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id } })) }catch(e){}
         }} />
       )}
+      */}
     </div>
   )
 }

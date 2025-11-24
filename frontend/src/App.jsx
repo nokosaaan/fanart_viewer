@@ -292,8 +292,11 @@ export default function App(){
 
   return (
     <div className="app">
-      <header>
+      <header className="app-header">
         <h1>Fanart Viewer</h1>
+        <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
+          Preview Timeline
+        </button>
       </header>
       <SearchBar
         query={query}

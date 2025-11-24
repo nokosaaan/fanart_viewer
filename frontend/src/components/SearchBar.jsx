@@ -32,9 +32,6 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
           placeholder="Search titles, characters, tags..."
         />
         <div className="controls-vertical">
-          <button type="button" className="preview-toggle btn" onClick={()=>setPreviewOpen(!previewOpen)}>
-            {previewOpen ? 'Hide Preview' : 'Preview Timeline'}
-          </button>
           <select className="situation-select" value={situationFilter} onChange={e=>setSituationFilter(e.target.value)}>
             <option value="ALL">All situations</option>
             <option value="SOLO">SOLO</option>

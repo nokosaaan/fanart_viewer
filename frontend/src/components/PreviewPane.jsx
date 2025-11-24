@@ -192,7 +192,7 @@ export default function PreviewPane({open, onClose}){
 
   return (
     <>
-      <div className="preview-pane">
+      <div className="preview-pane" ref={previewPaneRef}>
         <div className="preview-header">
           <strong>Preview Timeline</strong>
           <div className="preview-controls">

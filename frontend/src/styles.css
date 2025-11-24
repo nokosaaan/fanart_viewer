@@ -1,5 +1,8 @@
 body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:#fafafa; color:#222 }
 .app{ padding: 20px; max-width:1200px; margin:0 auto }
+.app-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px }
+.app-header h1{ margin:0; font-size:20px }
+.header-preview-btn{ font-size:18px; padding:8px 14px; border-radius:8px }
 .searchbar{ margin-bottom: 14px }
 .controls{ display:flex; gap:8px; align-items:center }
 .controls input{ flex:1; padding:10px; border-radius:8px; border:1px solid #e5e7eb }
