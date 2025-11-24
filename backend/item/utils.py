@@ -89,22 +89,17 @@ def _fetch_via_scrape(tweet_url: str) -> List[str]:
             seen.add(full)
             results.append(full)
 
-    # Try meta tags first (og:image / twitter:image)
+    # Only collect images under the app root `#react-root`.
+    # Per request, we avoid multi-layer heuristics and focus solely on
+    # <img> tags rendered inside the element with id="react-root". To
+    # avoid an uncontrolled infinite loop, this function will retry a few
+    # times (controlled by `TW_SCRAPE_MAX_RETRIES`) if no images are found
+    # immediately; this helps with transient rendering delays.
     if BeautifulSoup:
         soup = BeautifulSoup(html, 'html.parser')
-        og = soup.find('meta', property='og:image')
-        if og and og.get('content'):
-            add(og.get('content'))
-        tw = soup.find('meta', attrs={'name': 'twitter:image'})
-        if tw and tw.get('content'):
-            add(tw.get('content'))
-
-        # collect src/srcset/data-src/data-image-url/data-srcset attributes
-        # Prefer collecting images within the app root first: many Twitter assets
-        # (including gallery photos) are rendered under the element with id="react-root".
-        # Collect all <img> tags under that node (src, srcset, data-src, data-image-url).
         root = soup.find(id='react-root')
         if root:
+            # collect all <img> sources (src, srcset, data-src/data-image-url)
             for im in root.find_all('img'):
                 s = im.get('src')
                 if s:
@@ -120,44 +115,29 @@ def _fetch_via_scrape(tweet_url: str) -> List[str]:
                 if ds:
                     add(ds)
 
-        # Collect other <img> tags on the page as a fallback (legacy logic).
-        for im in soup.find_all('img'):
-            # src
-            s = im.get('src')
-            if s:
-                # prefer pbs.twimg.com and twimg images first
-                if 'pbs.twimg.com' in s or 'twimg' in s or 'pic.twitter.com' in s:
-                    add(s)
-            # srcset: pick all entries
-            ss = im.get('srcset') or im.get('data-srcset')
-            if ss:
-                parts = [p.strip() for p in ss.split(',') if p.strip()]
-                for p in parts:
-                    m = re.search(r'^(?P<url>[^\s]+)', p)
-                    if m:
-                        add(m.group('url'))
-            # data-src / data-image-url
-            ds = im.get('data-src') or im.get('data-image-url')
-            if ds:
-                add(ds)
+            # collect background-image URLs from style attributes inside #react-root
+            for el in root.find_all(True):
+                style = el.get('style')
+                if style and 'background-image' in style:
+                    for m in re.findall(r'background-image\s*:\s*url\((?:\"|\'\'|)?([^\)\"\']+)(?:\"|\'\')?\)', style):
+                        add(m)
 
-        # picture/figure fallback
-        for pic in soup.find_all('picture'):
-            for im in pic.find_all('img'):
-                if im.get('src'):
-                    add(im.get('src'))
-                ss = im.get('srcset')
-                if ss:
-                    for p in ss.split(','):
-                        m = re.search(r'^(?P<url>[^\s]+)', p.strip())
-                        if m:
-                            add(m.group('url'))
-
-        # anchors that may point to pic.twitter.com shortlinks
-        for a in soup.find_all('a'):
-            href = a.get('href')
-            if href and 'pic.twitter.com' in href:
-                add(href)
+            # also handle anchors that link to /photo/.. which may wrap images
+            for a in root.find_all('a', href=True):
+                href = a.get('href') or ''
+                if '/photo/' in href:
+                    # try to find img inside the anchor
+                    img = a.find('img')
+                    if img:
+                        s = img.get('src')
+                        if s:
+                            add(s)
+                    # sometimes the anchor itself contains a background-image div
+                    for div in a.find_all(True):
+                        style = div.get('style')
+                        if style and 'background-image' in style:
+                            for m in re.findall(r'background-image\s*:\s*url\((?:\"|\'\'|)?([^\)\"\']+)(?:\"|\'\')?\)', style):
+                                add(m)
 
     # Regex-based fallbacks to catch direct pbs.twimg links
     matches = re.findall(r'https?://pbs\.twimg\.com/media/[^"\s<>]+', html)

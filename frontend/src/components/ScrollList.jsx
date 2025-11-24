@@ -63,7 +63,7 @@ function ItemRow({ it }){
     if(!ok) return
     setLoading(true)
     // first fetch candidates (preview-only)
-    const candRes = await fetchPreviewCandidates(it.id, url, { force_method: fetchMethod === 'api' ? 'api' : undefined })
+    const candRes = await fetchPreviewCandidates(it.id, url, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
     setLoading(false)
     if(!candRes.ok){
       const detail = candRes.body && candRes.body.detail
@@ -227,12 +227,13 @@ function ItemRow({ it }){
           <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
             <option value="html">HTML scrape</option>
             <option value="api">Use API</option>
+            <option value="playwright">Use Browser (Playwright)</option>
           </select>
           <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
         </form>
-        {/* Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
+        {// Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
         <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
-        */}
+        }
         {/* fetch debug is stored internally; use `window.showFetchDebug(id)` in the console to inspect */}
       </div>
       
@@ -274,8 +275,8 @@ function ItemRow({ it }){
 
       {/* EditFields component is hidden by default. To restore inline editing,
           uncomment the block below. Keep it commented to avoid showing edit UI on the page. */}
-      {/**
-      {showEditor && (
+      {
+      showEditor && (
         <EditFields item={it} onClose={()=>setShowEditor(false)} onSaved={(newItem)=>{
           // update local chars/tags state
           setCharsState(newItem.characters || [])
@@ -284,7 +285,6 @@ function ItemRow({ it }){
           try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id } })) }catch(e){}
         }} />
       )}
-      */}
     </div>
   )
 }

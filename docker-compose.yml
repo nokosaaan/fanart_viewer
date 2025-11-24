@@ -28,6 +28,7 @@ services:
       - TW_BEARER=${TW_BEARER}
       - PIXIV_USER=${PIXIV_USER}
       - PIXIV_PASS=${PIXIV_PASS}
+      - HEADLESS_ALLOWED=1
     depends_on:
       - db
 

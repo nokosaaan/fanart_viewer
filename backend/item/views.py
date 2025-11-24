@@ -20,6 +20,12 @@ import traceback
 import base64
 from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
 import os
+from .headless_fetch import fetch_rendered_media
+try:
+    from .playwright_helper import fetch_images_with_playwright
+    HAVE_PIXIV_PLAYWRIGHT = True
+except Exception:
+    HAVE_PIXIV_PLAYWRIGHT = False
 try:
     from bs4 import BeautifulSoup
 except Exception:
@@ -84,14 +90,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not target_url:
             return Response({'detail': 'No link available on item'}, status=status.HTTP_400_BAD_REQUEST)
 
-        def _internal_fetch(url):
+        def _internal_fetch(url, min_size=None):
             headers = {'User-Agent': 'fanart-viewer-bot/1.0'}
             try:
                 import requests as _requests
                 r = _requests.get(url, timeout=15, headers=headers, allow_redirects=True)
                 ct = r.headers.get('content-type', '')
                 if r.status_code == 200 and ct and ct.split(';', 1)[0].startswith('image'):
-                    return r.content, ct.split(';', 1)[0]
+                    # Skip SVG images to reduce unnecessary fetch weight
+                    mime = ct.split(';', 1)[0].lower()
+                    if mime == 'image/svg+xml':
+                        return None, None
+                    # If caller requested a minimum size (e.g. Playwright mode),
+                    # skip assets smaller than that threshold (in bytes).
+                    content = r.content
+                    if min_size is not None:
+                        try:
+                            if len(content or b'') < int(min_size):
+                                return None, None
+                        except Exception:
+                            # if size check fails for any reason, fall back to returning
+                            # the content (don't break the overall flow)
+                            pass
+                    return content, mime
             except Exception:
                 return None, None
             return None, None
@@ -146,10 +167,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         hints.append(tw.get('content'))
 
                     # Target the common react-root -> main -> a -> img chain
-                    root = soup.find('div', class_=lambda c: c and 'react-root' in c)
+                    # Note: Twitter uses an element with id="react-root" so
+                    # prefer locating by id (not class) to match actual pages.
+                    root = soup.find(id='react-root')
                     mains = []
                     if root:
-                        mains = root.find_all('main')
+                        # search within the react-root subtree for anchor->img patterns
+                        mains = [root]
                     if not mains:
                         mains = soup.find_all('main')
                     for mtag in mains:
@@ -321,8 +345,113 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 # If we reach here and candidates are empty, above returned a 422.
                 pass
 
+            # Allow explicit Playwright-based fetch when requested (guarded by env)
+            if force_method == 'playwright':
+                if not os.environ.get('HEADLESS_ALLOWED'):
+                    return Response({'detail': 'Playwright/headless fetch is not allowed in this environment'}, status=status.HTTP_403_FORBIDDEN)
+                if not (('twitter.com' in target_url) or ('x.com' in target_url)):
+                    # still allow other targets if caller explicitly requests it, but normally we target twitter/x
+                    pass
+                # browser choice may be provided by client (chromium/firefox/webkit)
+                browser_choice = None
+                try:
+                    browser_choice = data.get('browser') if isinstance(data, dict) else None
+                except Exception:
+                    browser_choice = None
+                try:
+                    pw_headless = not bool(data.get('no_headless')) if isinstance(data, dict) else True
+                except Exception:
+                    pw_headless = True
+                # For Pixiv targets, prefer the Pixiv-specific Playwright helper
+                # which performs a logged-in fetch and returns image bytes. This
+                # avoids relying on raw HTTP requests to pixiv-hosted URLs which
+                # often require referer/cookies and can return placeholders.
+                pixiv_handled = False
+                try:
+                    if ('pixiv.net' in target_url or 'pximg.net' in target_url) and HAVE_PIXIV_PLAYWRIGHT:
+                        try:
+                            pix_res = fetch_images_with_playwright(target_url, headful=not pw_headless)
+                            if isinstance(pix_res, dict):
+                                pix_images = pix_res.get('images') or []
+                            else:
+                                pix_images = pix_res
+                            for entry in pix_images:
+                                try:
+                                    if isinstance(entry, (list, tuple)) and len(entry) >= 4:
+                                        _, body, ctype, cand_url = entry[0], entry[1], entry[2], entry[3]
+                                    elif isinstance(entry, (list, tuple)) and len(entry) == 3:
+                                        _, body, ctype = entry
+                                        cand_url = None
+                                    else:
+                                        continue
+                                    if not cand_url:
+                                        continue
+                                    # skip SVGs
+                                    if ctype and ctype.lower().split(';',1)[0] == 'image/svg+xml':
+                                        continue
+                                    # Skip very small images (icons/UI assets)
+                                    try:
+                                        if len(body or b'') < 10240:
+                                            continue
+                                    except Exception:
+                                        pass
+                                    candidates.append((cand_url, body, ctype.split(';',1)[0]))
+                                    used_method = used_method or 'playwright-pixiv'
+                                except Exception:
+                                    continue
+                            pixiv_handled = True
+                        except Exception as e:
+                            logging.exception('Pixiv Playwright helper failed')
+                            pixiv_handled = False
+                except Exception:
+                    pixiv_handled = False
+
+                # If the Pixiv helper returned nothing, fall back to the generic
+                # rendered-media extraction (which returns URLs). We then attempt
+                # to fetch those URLs, but note that direct requests to Pixiv
+                # hosts may fail; the helper above is preferred when available.
+                if not pixiv_handled:
+                    try:
+                        pw_urls = fetch_rendered_media(target_url, browser_name=(browser_choice or 'chromium'), headless=pw_headless)
+                    except Exception as e:
+                        return Response({'detail': 'Playwright fetch failed', 'error': str(e)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+                    # convert returned URLs into candidates by attempting to fetch them
+                    for h in pw_urls or []:
+                        try:
+                            if h:
+                                # When fetching Playwright-discovered URLs, skip very small
+                                # assets (icons/thumbnails). Require at least 10KB.
+                                b, ct = _internal_fetch(h, min_size=10240)
+                                if b and ct:
+                                    candidates.append((h, b, ct))
+                                    used_method = used_method or 'playwright'
+                        except Exception:
+                            continue
+
         if not candidates:
             return Response({'detail': 'No image candidates found or failed to fetch', 'hints': hints}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        # If Playwright was explicitly requested, enforce a global minimum
+        # size threshold to remove small icons/thumbnails that might have
+        # been collected earlier via HTML scraping. This ensures the
+        # Playwright path yields only substantial image candidates.
+        try:
+            if force_method == 'playwright':
+                min_bytes = 10240
+                filtered = []
+                for (u, b, ct) in candidates:
+                    try:
+                        if b and len(b) >= min_bytes:
+                            filtered.append((u, b, ct))
+                    except Exception:
+                        # if size check fails, conservatively keep the candidate
+                        filtered.append((u, b, ct))
+                candidates = filtered
+        except Exception:
+            # be robust: if filtering fails for any reason, continue with
+            # the unfiltered candidates rather than aborting the request
+            logging.exception('Playwright size filtering failed')
 
         # If preview_only is requested, return candidates (with data_uri) without persisting
         if preview_only:

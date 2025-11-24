@@ -5,4 +5,5 @@
 /backend/.env.example
 /backend/backup/*.json
 /backend/data_filtered/*.json
+/backend/item/__pycache__/*.pyc
 /log/*

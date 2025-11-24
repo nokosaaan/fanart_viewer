@@ -101,7 +101,7 @@ docker compose restart frontend
 python3 /home/noko/GitSandbox/fanart_viewer/scripts/convert_dump_to_manosaba.py /home/noko/GitSandbox/fanart_viewer/backend/backup/items-backup-2.json /home/noko/GitSandbox/fanart_viewer/backend/backend/data/manosaba_from_backup.json
 
 #データ削除＋バックアップ＋復帰
-docker compose run --rm --entrypoint "" web python manage.py dumpdata item > backend/items-backup-2.json
+docker compose run --rm --entrypoint "" web python manage.py dumpdata item > backend/backup/items-backup-2.json
 docker compose run --rm --entrypoint "" web python manage.py makemigrations
 docker compose run --rm --entrypoint "" web python manage.py migrate
 docker compose run --rm --entrypoint "" web python manage.py shell -c "from item.models import Item; cnt=Item.objects.count(); Item.objects.all().delete(); print('deleted', cnt)"
