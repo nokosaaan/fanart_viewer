@@ -9,6 +9,15 @@ if [ -n "${PORT:-}" ]; then
   (cd /tmp && python3 -m http.server "${PORT}" --bind 0.0.0.0) >/dev/null 2>&1 &
   TEMP_BIND_PID=$!
   echo "Temporary bind server PID=${TEMP_BIND_PID}"
+
+  # Ensure the temporary server is killed when this script exits for any reason.
+  _cleanup() {
+    if [ -n "${TEMP_BIND_PID:-}" ]; then
+      echo "Cleaning up temporary bind server PID=${TEMP_BIND_PID}"
+      kill "${TEMP_BIND_PID}" >/dev/null 2>&1 || true
+    fi
+  }
+  trap _cleanup EXIT INT TERM
 fi
 
 # Wait for Postgres to become available (simple loop)
@@ -41,10 +50,13 @@ if [ -n "$DATABASE_URL" ] || [ -n "$POSTGRES_DB" ]; then
   python manage.py makemigrations --noinput || true
 
   echo "Running migrations..."
-  python manage.py migrate --noinput
+  # Allow migrate to fail without leaving the temporary server running.
+  python manage.py migrate --noinput || {
+    echo "Warning: migrate failed. Continuing startup to allow inspection of container logs.";
+  }
 
   echo "Importing JSON data (idempotent)..."
-  python manage.py import_json_data || true
+  python manage.py import_json_data || echo "import_json_data failed (non-fatal)"
 else
   echo "No DATABASE_URL or POSTGRES_DB found — skipping migrations and import."
 fi
