@@ -17,10 +17,12 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'corsheaders',
     'item',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -81,3 +83,25 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'backend.pagination.LargePageNumberPagination',
     'PAGE_SIZE': 50,
 }
+
+# CORS configuration
+# Allow origins from environment variable `CORS_ALLOWED_ORIGINS`, comma-separated.
+# If not provided and DEBUG is True, allow localhost development origins.
+_cors_env = os.environ.get('CORS_ALLOWED_ORIGINS')
+if _cors_env:
+    # split by comma and strip whitespace
+    CORS_ALLOWED_ORIGINS = [u.strip() for u in _cors_env.split(',') if u.strip()]
+else:
+    if DEBUG:
+        CORS_ALLOWED_ORIGINS = [
+            'http://localhost:3000',
+            'http://127.0.0.1:3000',
+            'http://localhost:5173',
+            'http://127.0.0.1:5173',
+        ]
+    else:
+        CORS_ALLOWED_ORIGINS = []
+
+# Convenience: allow all origins when explicitly requested (only use for testing)
+if os.environ.get('CORS_ALLOW_ALL_ORIGINS', '') in ('1', 'true', 'True'):
+    CORS_ALLOW_ALL_ORIGINS = True

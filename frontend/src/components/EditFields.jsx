@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import apiFetch from '../api'
 
 function getCookie(name){
   const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -24,7 +25,7 @@ export default function EditFields({ item, onClose, onSaved }){
     }
     setLoading(true)
     try{
-      const resp = await fetch(`/api/items/${item.id}/update_fields/`, {
+      const resp = await apiFetch(`/api/items/${item.id}/update_fields/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

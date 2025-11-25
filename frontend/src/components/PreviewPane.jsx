@@ -1,4 +1,5 @@
 import React, {useEffect, useState, useRef} from 'react'
+import apiFetch, { apiUrl } from '../api'
 
 export default function PreviewPane({open, onClose}){
   const [items, setItems] = useState([])
@@ -24,7 +25,7 @@ export default function PreviewPane({open, onClose}){
     try{
       if(replace){ setLoading(true); setNextPageUrl(null) }
       else { setLoadingMore(true) }
-      const r = await fetch(url)
+      const r = await apiFetch(url)
       if(!r.ok) return []
       const data = await r.json()
       let list = []
@@ -126,7 +127,7 @@ export default function PreviewPane({open, onClose}){
     const it = items[idx]
     if(!it) return
     try{
-      const r = await fetch(`/api/items/${it.id}/previews/`)
+      const r = await apiFetch(`/api/items/${it.id}/previews/`)
       if(!r.ok) return
       const j = await r.json()
       if(Array.isArray(j)){
@@ -150,7 +151,7 @@ export default function PreviewPane({open, onClose}){
     const ok = window.confirm('このプレビューを削除しますか？ この操作は取り消せません。')
     if(!ok) return
     try{
-      const r = await fetch(`/api/items/${it.id}/previews/${idx}/`, { method: 'DELETE' })
+      const r = await apiFetch(`/api/items/${it.id}/previews/${idx}/`, { method: 'DELETE' })
       if(!r.ok){
         const j = await r.json().catch(()=>null)
         console.warn('delete preview failed', j)
@@ -170,7 +171,7 @@ export default function PreviewPane({open, onClose}){
     const ok = window.confirm('このアイテムをデータベースから完全に削除しますか？ この操作は取り消せません。')
     if(!ok) return
     try{
-      const r = await fetch(`/api/items/${it.id}/`, { method: 'DELETE' })
+      const r = await apiFetch(`/api/items/${it.id}/`, { method: 'DELETE' })
       if(!r.ok){
         const j = await r.json().catch(()=>null)
         console.warn('delete item failed', j)
@@ -253,7 +254,7 @@ export default function PreviewPane({open, onClose}){
             {items.map((it, idx) => (
               <div className="preview-item" key={it.id}>
                 <button className="preview-thumb-btn" onClick={()=>openLarge(idx)}>
-                  <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} />
+                  <img className="preview-thumb" src={apiUrl(`/api/items/${it.id}/preview/?index=0`)} alt={it.title||''} />
                 </button>
                 <div className="preview-meta">
                   <div className="preview-title">{(it.titles && it.titles[0]) || it.titles || it.title || ''}</div>
@@ -279,13 +280,13 @@ export default function PreviewPane({open, onClose}){
               <div className="modal-main">
                 <img className="preview-modal-img" src={
                   (previews && previews.length>0)
-                    ? `/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
-                    : `/api/items/${items[selectedIndex].id}/preview/`
+                    ? apiUrl(`/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`)
+                    : apiUrl(`/api/items/${items[selectedIndex].id}/preview/`)
                 } alt={(items[selectedIndex].titles && items[selectedIndex].titles[0])||items[selectedIndex].title||''} />
                 <div className="modal-timeline-wrap">
                   <div className="modal-timeline">
                     {previews && previews.length>0 ? previews.map(p=> (
-                      <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>setCurrentPreviewIdx(p.index)} />
+                      <img key={p.index} src={apiUrl(`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`)} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>setCurrentPreviewIdx(p.index)} />
                     )) : (
                       <div className="timeline-empty">No previews</div>
                     )}

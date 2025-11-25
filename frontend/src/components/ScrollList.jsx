@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import EditFields from './EditFields'
+import apiFetch, { apiUrl } from '../api'
 
 async function fetchAndSavePreview(id, url, options = {}){
   try{
@@ -13,7 +14,7 @@ async function fetchAndSavePreview(id, url, options = {}){
       if(options.force_method) body.force_method = options.force_method
       opts.body = JSON.stringify(body)
     }
-    const resp = await fetch(`/api/items/${id}/fetch_and_save_preview/`, opts)
+    const resp = await apiFetch(`/api/items/${id}/fetch_and_save_preview/`, opts)
     if(!resp.ok) {
       const j = await resp.json().catch(()=>({}));
       console.warn('Preview fetch failed', j)
@@ -30,7 +31,7 @@ async function fetchPreviewCandidates(id, url, options = {}){
     body.preview_only = true
     // only include force_method when explicitly requested by the UI
     if(options.force_method) body.force_method = options.force_method
-    const resp = await fetch(`/api/items/${id}/fetch_and_save_preview/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    const resp = await apiFetch(`/api/items/${id}/fetch_and_save_preview/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
     if(!resp.ok) {
       const j = await resp.json().catch(()=>({}));
       return { ok: false, body: j }
@@ -137,7 +138,7 @@ function ItemRow({ it }){
     try{
       // build images payload including data_uri when available to ensure saving
       const images = candidates.filter(c=> urls.includes(c.url)).map(c=> ({url: c.url, data_uri: c.data_uri}))
-      const resp = await fetch(`/api/items/${it.id}/save_previews/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({images})})
+      const resp = await apiFetch(`/api/items/${it.id}/save_previews/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({images})})
       const j = await resp.json().catch(()=>({}))
       setLoading(false)
       if(resp.ok){
@@ -217,8 +218,8 @@ function ItemRow({ it }){
         <div className="col preview-col">
           <div className="col-header">Preview</div>
           <div className="preview-wrap">
-            {hasPreviewLocal ? (
-              <img className="preview" src={`/api/items/${it.id}/preview/`} alt="preview" />
+              {hasPreviewLocal ? (
+              <img className="preview" src={apiUrl(`/api/items/${it.id}/preview/`)} alt="preview" />
             ) : (
               <a href={it.link} target="_blank" rel="noopener noreferrer" className="link-text">{it.link}</a>
             )}

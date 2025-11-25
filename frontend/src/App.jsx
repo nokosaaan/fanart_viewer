@@ -1,4 +1,5 @@
 import React, {useEffect, useState, useMemo} from 'react'
+import apiFetch from './api'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
@@ -30,7 +31,7 @@ export default function App(){
         fetchUrl = url
       }
 
-      const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
+      const r = await apiFetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
       if(!r.ok){
         let bodyText = null
         try{ bodyText = await r.text() }catch(_){ bodyText = null }
@@ -80,7 +81,7 @@ export default function App(){
           fetchUrl = url
         }
 
-        const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
+        const r = await apiFetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
         if(!r.ok){
           let bodyText = null
           try{ bodyText = await r.text() }catch(_){ bodyText = null }
@@ -143,7 +144,7 @@ export default function App(){
               }
             }catch(_){ fetchUrl = url }
 
-            const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
+            const r = await apiFetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
             if(!r.ok){
               let bodyText = null
               try{ bodyText = await r.text() }catch(_){ bodyText = null }
@@ -263,7 +264,7 @@ export default function App(){
         }
       }catch(_){ /* leave fetchUrl as-is */ }
 
-      const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
+      const r = await apiFetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
       if(!r.ok){
         let bodyText = null
         try{ bodyText = await r.text() }catch(_){ bodyText = null }
