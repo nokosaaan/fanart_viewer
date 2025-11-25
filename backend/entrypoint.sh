@@ -25,14 +25,19 @@ if [ -n "$DATABASE_HOST" ]; then
   done
 fi
 
-echo "Making migrations (if needed)..."
-python manage.py makemigrations --noinput || true
+# Only run migrations/import if we have DB connection info available.
+if [ -n "$DATABASE_URL" ] || [ -n "$POSTGRES_DB" ]; then
+  echo "Making migrations (if needed)..."
+  python manage.py makemigrations --noinput || true
 
-echo "Running migrations..."
-python manage.py migrate --noinput
+  echo "Running migrations..."
+  python manage.py migrate --noinput
 
-echo "Importing JSON data (idempotent)..."
-python manage.py import_json_data || true
+  echo "Importing JSON data (idempotent)..."
+  python manage.py import_json_data || true
+else
+  echo "No DATABASE_URL or POSTGRES_DB found — skipping migrations and import."
+fi
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput || true
@@ -41,8 +46,11 @@ echo "Starting Gunicorn..."
 # Use 1 worker per CPU core, capped to a sensible range. Fallback to 3 workers.
 WORKERS=${GUNICORN_WORKERS:-3}
 THREADS=${GUNICORN_THREADS:-4}
+# Bind to the port provided by the environment (Render provides $PORT).
+BIND_PORT=${PORT:-8000}
+echo "Binding to 0.0.0.0:${BIND_PORT} (PORT=${PORT:-not-set})"
 exec gunicorn backend.wsgi:application \
-  --bind 0.0.0.0:8000 \
+  --bind 0.0.0.0:${BIND_PORT} \
   --workers "$WORKERS" \
   --threads "$THREADS" \
   --log-level info
