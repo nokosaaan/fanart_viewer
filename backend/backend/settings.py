@@ -5,7 +5,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
 
-DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '0'
+# DJANGO_DEBUG is expected to be '1' (True) or '0' (False). Default to True for
+# local development unless explicitly set to '0'.
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
 ALLOWED_HOSTS = ['*']
 
@@ -52,17 +54,44 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-# Database (Postgres by env)
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
-        'USER': os.environ.get('POSTGRES_USER', 'fanart'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'sherry-hanna-is-forever'),
-        'HOST': os.environ.get('DATABASE_HOST', 'db'),
-        'PORT': os.environ.get('DATABASE_PORT', '5432'),
+# Database configuration
+# Prefer a full DATABASE_URL (as provided by Render managed DB). Fall back to
+# separate POSTGRES_* env vars for local docker-compose setups.
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    try:
+        import dj_database_url
+        DATABASES = {
+            'default': dj_database_url.parse(
+                DATABASE_URL,
+                conn_max_age=600,
+                ssl_require=True,
+            )
+        }
+    except Exception:
+        # If dj_database_url is not available for some reason, provide a minimal
+        # parsed fallback. This is unlikely since requirements include it.
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.postgresql',
+                'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
+                'USER': os.environ.get('POSTGRES_USER', 'fanart'),
+                'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+                'HOST': os.environ.get('DATABASE_HOST', 'db'),
+                'PORT': os.environ.get('DATABASE_PORT', '5432'),
+            }
+        }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
+            'USER': os.environ.get('POSTGRES_USER', 'fanart'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
+            'HOST': os.environ.get('DATABASE_HOST', 'db'),
+            'PORT': os.environ.get('DATABASE_PORT', '5432'),
+        }
     }
-}
 
 AUTH_PASSWORD_VALIDATORS = []
 
@@ -89,14 +118,12 @@ REST_FRAMEWORK = {
 # If not provided and DEBUG is True, allow localhost development origins.
 _cors_env = os.environ.get('CORS_ALLOWED_ORIGINS')
 if _cors_env:
-    # split by comma and strip whitespace
-    # strip whitespace and trailing slashes so origins match browser-origin format
-    # CORS_ALLOWED_ORIGINS = [u.strip().rstrip('/') for u in _cors_env.split(',') if u.strip()]
-    CORS_ALLOWED_ORIGINS = 'https://fanart-viewer-frontend.onrender.com'
+    # split by comma and strip whitespace and trailing slashes so origins match
+    # browser-origin format (scheme + host + optional :port), e.g. https://site.com
+    CORS_ALLOWED_ORIGINS = [u.strip().rstrip('/') for u in _cors_env.split(',') if u.strip()]
 else:
     if DEBUG:
         CORS_ALLOWED_ORIGINS = [
-            'https://fanart-viewer-frontend.onrender.com',
             'http://localhost:3000',
             'http://127.0.0.1:3000',
             'http://localhost:5173',
