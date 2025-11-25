@@ -82,9 +82,30 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                 if v:
                     imgs.append(v)
             for img in page.query_selector_all('img'):
-                src = img.get_attribute('src')
+                try:
+                    src = img.get_attribute('src')
+                except Exception:
+                    src = None
                 if src and src not in imgs:
                     imgs.append(src)
+                try:
+                    srcset = img.get_attribute('srcset') or img.get_attribute('data-srcset')
+                except Exception:
+                    srcset = None
+                if srcset:
+                    for part in (srcset or '').split(','):
+                        try:
+                            u = part.strip().split()[:1][0]
+                            if u and u not in imgs:
+                                imgs.append(u)
+                        except Exception:
+                            continue
+                try:
+                    ds = img.get_attribute('data-src') or img.get_attribute('data-original') or img.get_attribute('data-image-url')
+                except Exception:
+                    ds = None
+                if ds and ds not in imgs:
+                    imgs.append(ds)
         except Exception:
             pass
 
@@ -110,6 +131,10 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                 path = path.replace('/img-master/', '/img-original/')
                 path = re.sub(r'_master\d+(?=\.)', '', path)
                 path = re.sub(r'(_p\d+)_master\d+', r'\1', path)
+                # Ensure the common original path includes the extra 'img' segment
+                # e.g. /img-original/img/2024/... which Pixiv uses for originals.
+                if '/img-original/' in path and '/img-original/img/' not in path:
+                    path = path.replace('/img-original/', '/img-original/img/', 1)
                 return f"{p.scheme}://{p.netloc}{path}"
             except Exception:
                 return url
@@ -189,4 +214,5 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
 
         browser.close()
 
-    return {'logged_in': logged_in, 'images': results}
+    debug = {'found_count': len(imgs), 'pixiv_hosted_count': len(pixiv_imgs), 'returned_count': len(results), 'logged_in': logged_in}
+    return {'logged_in': logged_in, 'images': results, 'debug': debug}
