@@ -236,9 +236,11 @@ function ItemRow({ it }){
           </select>
           <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
         </form>
-        {// Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
+        {/* Edit fields UI is intentionally disabled to prevent web-side editing.
+          To re-enable, uncomment the button below. */}
+        { /*
         <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
-        }
+        */ }
         {/* fetch debug is stored internally; use `window.showFetchDebug(id)` in the console to inspect */}
       </div>
       

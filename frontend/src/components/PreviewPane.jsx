@@ -297,8 +297,14 @@ export default function PreviewPane({open, onClose}){
                 <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
                 <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
                 <div style={{marginTop:12, display:'flex', gap:8}}>
+                  {/* Delete actions are intentionally disabled to prevent destructive
+                      database operations from the public web UI. To re-enable,
+                      uncomment the buttons below. */}
+                  { 
                   <button className="btn" style={{background:'#ef4444'}} onClick={deleteCurrentPreview}>Delete preview</button>
+                  /*
                   <button className="btn" style={{background:'#b91c1c'}} onClick={deleteItem}>Delete item</button>
+                  */ }
                 </div>
               </div>
             </div>
