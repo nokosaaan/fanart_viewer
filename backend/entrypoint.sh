@@ -2,6 +2,22 @@
 set -e
 
 # Wait for Postgres to become available (simple loop)
+# If DATABASE_URL is provided (Render), parse host/port so the wait loop can use them.
+if [ -n "$DATABASE_URL" ] && [ -z "$DATABASE_HOST" ]; then
+  echo "Parsing DATABASE_URL to obtain host/port..."
+  HOST_PORT=$(python3 - <<'PY'
+import os
+from urllib.parse import urlparse
+u = urlparse(os.environ.get('DATABASE_URL',''))
+host = u.hostname or ''
+port = u.port or ''
+print(f"{host}:{port}")
+PY
+)
+  export DATABASE_HOST=$(echo "$HOST_PORT" | cut -d: -f1)
+  export DATABASE_PORT=$(echo "$HOST_PORT" | cut -d: -f2)
+fi
+
 if [ -n "$DATABASE_HOST" ]; then
   echo "Waiting for postgres at $DATABASE_HOST:$DATABASE_PORT..."
   until pg_isready -h "$DATABASE_HOST" -p "${DATABASE_PORT:-5432}" >/dev/null 2>&1; do
@@ -9,14 +25,14 @@ if [ -n "$DATABASE_HOST" ]; then
   done
 fi
 
-# echo "Making migrations (if needed)..."
-# python manage.py makemigrations --noinput || true
+echo "Making migrations (if needed)..."
+python manage.py makemigrations --noinput || true
 
-# echo "Running migrations..."
-# python manage.py migrate --noinput
+echo "Running migrations..."
+python manage.py migrate --noinput
 
-# echo "Importing JSON data (idempotent)..."
-# python manage.py import_json_data || true
+echo "Importing JSON data (idempotent)..."
+python manage.py import_json_data || true
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput || true

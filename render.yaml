@@ -8,7 +8,7 @@ services:
     # Build using the existing backend Dockerfile. Render will build the image
     # from the repository on each deploy when you connect GitHub.
     dockerfilePath: backend/Dockerfile
-    plan: starter
+    plan: free
     # The backend will expect a Postgres database and a few secrets.
     # Configure the following secrets in the Render dashboard for this service:
     # - DJANGO_SECRET_KEY (secret)
@@ -21,12 +21,12 @@ services:
     dockerfilePath: frontend/Dockerfile
     plan: free
     buildCommand: ''
-    startCommand: ''
+    startCommand: 'gunicorn myproject.wsgi:application'
 
 # Managed Postgres database for the backend
 databases:
   - name: fanart-viewer-db
-    plan: starter
+    plan: free
 
 # Notes:
 # - After you connect this repository in Render and apply this `render.yaml`,
