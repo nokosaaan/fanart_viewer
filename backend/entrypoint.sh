@@ -18,5 +18,15 @@ python manage.py migrate --noinput
 echo "Importing JSON data (idempotent)..."
 python manage.py import_json_data || true
 
-echo "Starting server..."
-exec python manage.py runserver 0.0.0.0:8000
+echo "Collecting static files..."
+python manage.py collectstatic --noinput || true
+
+echo "Starting Gunicorn..."
+# Use 1 worker per CPU core, capped to a sensible range. Fallback to 3 workers.
+WORKERS=${GUNICORN_WORKERS:-3}
+THREADS=${GUNICORN_THREADS:-4}
+exec gunicorn backend.wsgi:application \
+  --bind 0.0.0.0:8000 \
+  --workers "$WORKERS" \
+  --threads "$THREADS" \
+  --log-level info

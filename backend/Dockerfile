@@ -27,7 +27,7 @@ RUN apt-get update \
 
 # Copy backend requirements (build context is `./backend` when using docker-compose)
 # so `requirements.txt` is located at the root of the build context.
-COPY requirements.txt /app/requirements.txt
+COPY backend/requirements.txt /app/requirements.txt
 # The base Playwright image already includes a matching `playwright` package
 # and browsers. Avoid reinstalling/upgrading `playwright` from requirements to
 # prevent binary mismatch between the Python package and bundled browsers.
@@ -50,7 +50,7 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/* || true
 
 # Copy the project into the image
-COPY . /app
+COPY backend/ /app
 
 # Make the entrypoint executable (if present)
 RUN if [ -f /app/entrypoint.sh ]; then chmod +x /app/entrypoint.sh; fi

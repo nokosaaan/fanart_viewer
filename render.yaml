@@ -1,0 +1,36 @@
+# Render configuration for fanart_viewer
+# See: https://render.com/docs/render-yaml
+
+services:
+  - type: web
+    name: fanart-viewer-backend
+    env: docker
+    # Build using the existing backend Dockerfile. Render will build the image
+    # from the repository on each deploy when you connect GitHub.
+    dockerfilePath: backend/Dockerfile
+    plan: starter
+    # The backend will expect a Postgres database and a few secrets.
+    # Configure the following secrets in the Render dashboard for this service:
+    # - DJANGO_SECRET_KEY (secret)
+    # - DJANGO_DEBUG (set to "0")
+    # For the managed Postgres below, Render exposes a DATABASE_URL env var.
+
+  - type: web
+    name: fanart-viewer-frontend
+    env: docker
+    dockerfilePath: frontend/Dockerfile
+    plan: free
+    buildCommand: ''
+    startCommand: ''
+
+# Managed Postgres database for the backend
+databases:
+  - name: fanart-viewer-db
+    plan: starter
+
+# Notes:
+# - After you connect this repository in Render and apply this `render.yaml`,
+#   Render will create the two web services and the managed database.
+# - Set the secret `DJANGO_SECRET_KEY` and any other secrets in Render dashboard.
+# - Set an environment variable `VITE_BACKEND_URL` on the frontend service to
+#   point to the backend URL (e.g. https://fanart-viewer-backend.onrender.com).

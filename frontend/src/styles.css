@@ -24,6 +24,13 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .cp-chip{ border:0; padding:6px 10px; border-radius:999px; cursor:pointer; background:#f3f4f6; font-weight:700 }
 .cp-chip.enabled{ background: linear-gradient(90deg,#f472b6,#ec4899); color:#fff }
 .filters{ margin-bottom:8px }
+
+/* Fetch method segmented control */
+.method-options{ display:flex; gap:8px; align-items:center }
+.method-option{ background:transparent; border:1px solid rgba(15,23,42,0.06); padding:6px 10px; border-radius:999px; cursor:pointer; font-weight:600; font-size:13px; color:var(--muted); transition: all 140ms ease }
+.method-option.active{ background: linear-gradient(90deg,var(--accent-start),var(--accent-end)); color:#fff; box-shadow:0 8px 20px rgba(37,99,235,0.12); transform:translateY(-1px) }
+.method-option[disabled]{ opacity:0.5; cursor:default }
+.method-select{ margin-top:0; border-radius:8px; padding:6px 10px; border:1px solid rgba(15,23,42,0.06); background:#fff; color:var(--muted); font-weight:600 }
 .filter{ background:#f0f0f3; border:0; padding:6px 10px; margin-right:6px; border-radius:999px }
 .suggestions{ list-style:none; padding:8px; background:#fff; border:1px solid #ddd; max-width:600px }
 .suggestions li{ padding:6px; cursor:pointer }
@@ -41,6 +48,26 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 
 /* Slight inner shadow to create depth on scroll container */
 .scroll-list::before{ content:''; pointer-events:none; position:sticky; top:0; height:10px; display:block }
+
+/* Page / global scrollbar: match scroll-list styling for the whole page */
+html, body{
+	/* modern thin scrollbar in Firefox */
+	scrollbar-width: thin;
+	scrollbar-color: rgba(37,99,235,0.9) rgba(0,0,0,0.06);
+}
+
+/* WebKit-based browsers (Chrome, Edge, Safari) */
+html::-webkit-scrollbar, body::-webkit-scrollbar{ width:12px; height:12px }
+html::-webkit-scrollbar-track, body::-webkit-scrollbar-track{ background: transparent }
+html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb{
+	background: linear-gradient(180deg,var(--accent-start),var(--accent-end));
+	border-radius:999px;
+	box-shadow: inset 0 0 0 2px rgba(255,255,255,0.06);
+}
+html::-webkit-scrollbar-thumb:hover, body::-webkit-scrollbar-thumb:hover{ filter:brightness(0.95) }
+
+/* For better contrast on very light backgrounds, add a subtle track shadow */
+html::-webkit-scrollbar-track-piece, body::-webkit-scrollbar-track-piece{ background: rgba(0,0,0,0.02); }
 .item{ border:1px solid #e6e6e9; padding:12px; background:#fff; border-radius:10px }
 .meta-grid{ display:grid; grid-template-columns: 2fr 1fr 2fr 1fr; gap:12px; align-items:start }
 .col{ display:flex; flex-direction:column; gap:6px }

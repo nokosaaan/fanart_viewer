@@ -58,9 +58,14 @@ function ItemRow({ it }){
 
   async function onFetch(e){
     e && e.preventDefault()
-    // confirm that this action will use external APIs / network resources
-    const ok = window.confirm('This will fetch the provided URL and may consume external APIs or network resources. Continue?')
-    if(!ok) return
+    // Warn only for API or Playwright (browser) methods
+    if(fetchMethod === 'api'){
+      const ok = window.confirm('This will fetch the provided URL and may consume external APIs or network resources. Continue?')
+      if(!ok) return
+    } else if(fetchMethod === 'playwright'){
+      const ok = window.confirm('Browser fetch (Playwright) may take several minutes to complete. Continue?')
+      if(!ok) return
+    }
     setLoading(true)
     // first fetch candidates (preview-only)
     const candRes = await fetchPreviewCandidates(it.id, url, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
@@ -224,10 +229,10 @@ function ItemRow({ it }){
       <div className="actions-row">
         <form onSubmit={onFetch} style={{display:'inline-block'}}>
           <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)} />
-          <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
-            <option value="html">HTML scrape</option>
-            <option value="api">Use API</option>
-            <option value="playwright">Use Browser (Playwright)</option>
+          <select className="method-select" value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
+            <option value="html">HTML (Scrape)</option>
+            <option value="api">API</option>
+            <option value="playwright">Browser (Playwright)</option>
           </select>
           <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
         </form>

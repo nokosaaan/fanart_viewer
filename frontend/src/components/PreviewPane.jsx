@@ -143,6 +143,48 @@ export default function PreviewPane({open, onClose}){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndex, items])
 
+  async function deleteCurrentPreview(){
+    if(selectedIndex===null || !items[selectedIndex]) return
+    const it = items[selectedIndex]
+    const idx = currentPreviewIdx
+    const ok = window.confirm('このプレビューを削除しますか？ この操作は取り消せません。')
+    if(!ok) return
+    try{
+      const r = await fetch(`/api/items/${it.id}/previews/${idx}/`, { method: 'DELETE' })
+      if(!r.ok){
+        const j = await r.json().catch(()=>null)
+        console.warn('delete preview failed', j)
+        alert('削除に失敗しました。コンソールを確認してください。')
+        return
+      }
+      // refresh previews and the item list so thumbnails update
+      await loadPreviewsForIndex(selectedIndex)
+      await loadItems('/api/items/?page_size=1000', true)
+      alert('プレビューを削除しました。')
+    }catch(e){ console.error(e); alert('削除に失敗しました') }
+  }
+
+  async function deleteItem(){
+    if(selectedIndex===null || !items[selectedIndex]) return
+    const it = items[selectedIndex]
+    const ok = window.confirm('このアイテムをデータベースから完全に削除しますか？ この操作は取り消せません。')
+    if(!ok) return
+    try{
+      const r = await fetch(`/api/items/${it.id}/`, { method: 'DELETE' })
+      if(!r.ok){
+        const j = await r.json().catch(()=>null)
+        console.warn('delete item failed', j)
+        alert('削除に失敗しました。コンソールを確認してください。')
+        return
+      }
+      // refresh list and close modal
+      await loadItems('/api/items/?page_size=1000', true)
+      setSelectedIndex(null)
+      try{ window.dispatchEvent(new CustomEvent('item-deleted', { detail: { id: it.id } })) }catch(e){}
+      alert('Item deleted.')
+    }catch(e){ console.error(e); alert('削除に失敗しました') }
+  }
+
   // listen for external updates (e.g. when a preview is fetched elsewhere in the UI)
   useEffect(()=>{
     function onItemPreviewUpdated(e){
@@ -254,6 +296,10 @@ export default function PreviewPane({open, onClose}){
                 <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
                 <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
                 <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
+                <div style={{marginTop:12, display:'flex', gap:8}}>
+                  <button className="btn" style={{background:'#ef4444'}} onClick={deleteCurrentPreview}>Delete preview</button>
+                  <button className="btn" style={{background:'#b91c1c'}} onClick={deleteItem}>Delete item</button>
+                </div>
               </div>
             </div>
           </div>
