@@ -552,7 +552,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             data.append({'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': img.content_type})
         return Response(data)
 
-    @action(detail=True, methods=['get'], url_path='previews/(?P<idx>[^/]+)')
+    @action(detail=True, methods=['get', 'delete'], url_path='previews/(?P<idx>[^/]+)')
     def preview_index(self, request, pk=None, idx=None):
         item = self.get_object()
         try:
@@ -562,6 +562,24 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         imgs = list(item.preview_images.order_by('order'))
         if idxi < 0 or idxi >= len(imgs):
             return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
+        # DELETE: remove a single preview image at the given index
+        if request.method == 'DELETE':
+            try:
+                # delete the targeted preview image
+                target = imgs[idxi]
+                target.delete()
+                # re-order remaining preview images to keep contiguous order
+                remaining = list(item.preview_images.order_by('order'))
+                for new_idx, img in enumerate(remaining):
+                    if img.order != new_idx:
+                        img.order = new_idx
+                        img.save()
+                return Response({'status': 'deleted', 'index': idxi})
+            except Exception as e:
+                logging.exception('Failed to delete preview image')
+                return Response({'detail': 'Failed to delete preview', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # GET: return the image bytes for the requested index
         img = imgs[idxi]
         return HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
 

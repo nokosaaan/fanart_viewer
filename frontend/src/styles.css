@@ -1,4 +1,13 @@
-body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:#fafafa; color:#222 }
+:root{
+	--bg: #fafafa;
+	--muted: #6b7280;
+	--card: #fff;
+	--primary: #2563eb;
+	--accent-start: #60a5fa;
+	--accent-end: #2563eb;
+}
+
+body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:var(--bg); color:#222 }
 .app{ padding: 20px; max-width:1200px; margin:0 auto }
 .app-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px }
 .app-header h1{ margin:0; font-size:20px }
@@ -8,12 +17,30 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:#
 .controls input{ flex:1; padding:10px; border-radius:8px; border:1px solid #e5e7eb }
 .controls-vertical{ display:flex; flex-direction:column; gap:8px; align-items:flex-end }
 .preview-toggle{ background:#111827; color:#fff; padding:8px 10px; border-radius:8px }
-.situation-select{ margin-top:6px; border-radius:8px; padding:6px 8px; border:1px solid #e5e7eb; background:#fff; color:#111 }
+.options-panel{ margin-top:6px; border-radius:14px; padding:8px; border:1px solid rgba(15,23,42,0.06); background:linear-gradient(180deg, rgba(255,255,255,0.6), rgba(250,250,250,0.9)); display:flex; flex-direction:column; gap:8px; align-items:flex-end }
+.situation-options{ display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+.situation-option{ background:transparent; border:1px solid rgba(15,23,42,0.06); padding:6px 10px; border-radius:999px; cursor:pointer; font-weight:600; font-size:12px; color:var(--muted); transition: all 160ms ease }
+.situation-option.active{ background:linear-gradient(90deg,var(--accent-start),var(--accent-end)); color:#fff; box-shadow:0 6px 18px rgba(37,99,235,0.12); transform:translateY(-1px) }
+.cp-chip{ border:0; padding:6px 10px; border-radius:999px; cursor:pointer; background:#f3f4f6; font-weight:700 }
+.cp-chip.enabled{ background: linear-gradient(90deg,#f472b6,#ec4899); color:#fff }
 .filters{ margin-bottom:8px }
 .filter{ background:#f0f0f3; border:0; padding:6px 10px; margin-right:6px; border-radius:999px }
 .suggestions{ list-style:none; padding:8px; background:#fff; border:1px solid #ddd; max-width:600px }
 .suggestions li{ padding:6px; cursor:pointer }
-.scroll-list{ display:flex; flex-direction:column; gap:12px; max-height:72vh; overflow:auto }
+.scroll-list{ display:flex; flex-direction:column; gap:12px; max-height:72vh; overflow:auto; padding-right:6px }
+
+/* Fancy scrollbar for modern look */
+.scroll-list{
+	scrollbar-width: thin;
+	scrollbar-color: rgba(37,99,235,0.9) rgba(0,0,0,0.06);
+}
+.scroll-list::-webkit-scrollbar{ width:10px; height:10px }
+.scroll-list::-webkit-scrollbar-track{ background:transparent }
+.scroll-list::-webkit-scrollbar-thumb{ background: linear-gradient(180deg,var(--accent-start),var(--accent-end)); border-radius:999px; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.08) }
+.scroll-list::-webkit-scrollbar-thumb:hover{ filter:brightness(0.95) }
+
+/* Slight inner shadow to create depth on scroll container */
+.scroll-list::before{ content:''; pointer-events:none; position:sticky; top:0; height:10px; display:block }
 .item{ border:1px solid #e6e6e9; padding:12px; background:#fff; border-radius:10px }
 .meta-grid{ display:grid; grid-template-columns: 2fr 1fr 2fr 1fr; gap:12px; align-items:start }
 .col{ display:flex; flex-direction:column; gap:6px }

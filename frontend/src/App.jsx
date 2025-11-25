@@ -8,6 +8,7 @@ export default function App(){
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState([])
   const [includeCP, setIncludeCP] = useState(false)
+  const [includeR18, setIncludeR18] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [pageIndex, setPageIndex] = useState(0)
@@ -117,7 +118,7 @@ export default function App(){
     if(typeof window !== 'undefined'){
       window.fetchAllItems = fetchAll
     }
-
+    
     // fetch the first page by default (guarded to avoid crash if function not available)
     if(typeof fetchPage === 'function'){
       fetchPage('/api/items/')
@@ -215,6 +216,7 @@ export default function App(){
     const list = Array.isArray(items) ? items : (items && Array.isArray(items.results) ? items.results : [])
     return list.filter(it=>{
       if(!includeCP && (it.situation||'').toUpperCase()==='CP') return false
+      if(!includeR18 && (it.situation||'').toUpperCase()==='R18') return false
       if(situationFilter && situationFilter!=='ALL'){
         if(((it.situation||'').toUpperCase()) !== situationFilter) return false
       }
@@ -225,13 +227,14 @@ export default function App(){
       return matchesQuery && matchesFilters
     })
   }, [items, query, filters, includeCP, situationFilter])
+  
 
   // pagination over filtered results
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   useEffect(()=>{
     // reset to first page if filters change
     setPageIndex(0)
-  }, [query, filters, includeCP, situationFilter])
+  }, [query, filters, includeCP, includeR18, situationFilter])
 
   const paginatedItems = useMemo(()=>{
     const start = pageIndex * PAGE_SIZE
@@ -307,6 +310,8 @@ export default function App(){
         onRemoveFilter={removeFilter}
         includeCP={includeCP}
         setIncludeCP={setIncludeCP}
+        includeR18={includeR18}
+        setIncludeR18={setIncludeR18}
         previewOpen={previewOpen}
         setPreviewOpen={setPreviewOpen}
         situationFilter={situationFilter}
