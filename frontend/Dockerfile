@@ -3,7 +3,8 @@ WORKDIR /app
 
 # Install dependencies and build the static site
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci --silent
+# Use npm ci when a lockfile exists, otherwise fall back to npm install
+RUN if [ -f package-lock.json ]; then npm ci --silent; else npm install --silent; fi
 COPY frontend/ ./
 RUN npm run build
 
