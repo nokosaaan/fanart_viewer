@@ -5,7 +5,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
 
-DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '0'
 
 ALLOWED_HOSTS = ['*']
 
@@ -58,7 +58,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
         'USER': os.environ.get('POSTGRES_USER', 'fanart'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'sherry-hanna-is-forever'),
         'HOST': os.environ.get('DATABASE_HOST', 'db'),
         'PORT': os.environ.get('DATABASE_PORT', '5432'),
     }
