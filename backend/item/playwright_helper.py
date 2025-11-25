@@ -311,14 +311,41 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
             except Exception:
                 pass
 
-            # First try navigation via page (uses browser session)
-            try:
-                resp = page.goto(url, wait_until=wait_for, timeout=to_ms)
-            except Exception:
+                # Next, try Playwright's request API on the browser context.
+                # This uses the browser's cookies/session and does not suffer
+                # from fetch() CORS restrictions the page JS might hit.
                 try:
-                    resp = page.goto(url, timeout=to_ms)
+                    try:
+                        r = ctx.request.get(url, headers={'Referer': 'https://www.pixiv.net/', 'User-Agent': 'fanart-viewer-bot/1.0'}, timeout=to_ms)
+                    except Exception:
+                        r = None
+                    if r:
+                        try:
+                            st = r.status
+                        except Exception:
+                            st = None
+                        if st == 200:
+                            try:
+                                body = r.body()
+                            except Exception:
+                                body = None
+                            try:
+                                ct = r.headers.get('content-type') if hasattr(r, 'headers') else None
+                            except Exception:
+                                ct = None
+                            if body:
+                                return body, ct
                 except Exception:
-                    resp = None
+                    pass
+
+                # If request API didn't yield, try navigation via page (uses browser session)
+                try:
+                    resp = page.goto(url, wait_until=wait_for, timeout=to_ms)
+                except Exception:
+                    try:
+                        resp = page.goto(url, timeout=to_ms)
+                    except Exception:
+                        resp = None
             if resp:
                 try:
                     status = resp.status
