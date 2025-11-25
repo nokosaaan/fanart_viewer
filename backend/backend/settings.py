@@ -33,6 +33,9 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+# Fallback middleware to ensure CORS header on responses when corsheaders
+# didn't set it (safety net for some proxy or 404 cases).
+MIDDLEWARE.append('backend.middleware.EnsureCorsHeaderMiddleware')
 
 ROOT_URLCONF = 'backend.urls'
 
@@ -125,10 +128,6 @@ else:
     if DEBUG:
         CORS_ALLOWED_ORIGINS = [
             'https://fanart-viewer-frontend.onrender.com',
-            'http://localhost:3000',
-            'http://127.0.0.1:3000',
-            'http://localhost:5173',
-            'http://127.0.0.1:5173',
         ]
     else:
         CORS_ALLOWED_ORIGINS = []
