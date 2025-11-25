@@ -136,8 +136,8 @@ docker compose exec db psql -U fanart -d fanart -c "VACUUM FULL;"
 docker compose exec db psql -U fanart -d fanart -c "TRUNCATE item_item RESTART IDENTITY CASCADE;"
 
 # 特定のIDの画像が取得できるかテスト(api.jsonで確認)
-curl -s -X POST "http://localhost:8000/api/items/9324/fetch_and_save_preview/"   -H "Content-Type: application/json"   -d '{"preview_only": true, "force_method": "playwright"}' | jq . > log/api.json
-jq '[.images[] | {index: .index, url: .url, source: .source, content_type: .content_type}]' /home/noko/GitSandbox/fanart_viewer/log/api.json
+curl -s -X POST "http://localhost:8000/api/items/7413/fetch_and_save_preview/"   -H "Content-Type: application/json"   -d '{"preview_only": true, "force_method": "playwright"}' | jq . > log/pw3.json
+jq '[.images[] | {index: .index, url: .url, source: .source, content_type: .content_type}]' /home/noko/GitSandbox/fanart_viewer/log/pw3.json
 ```
 
 ## 最後に（推奨ワークフロー）
