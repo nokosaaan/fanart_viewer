@@ -6,12 +6,14 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Install minimal OS-level deps (libpq for psycopg2-binary is optional but safe)
+# Include postgresql-client so `pg_isready` is available for health/wait loops.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       build-essential \
-       libpq-dev \
-       curl \
-    && rm -rf /var/lib/apt/lists/*
+     && apt-get install -y --no-install-recommends \
+         build-essential \
+         libpq-dev \
+         postgresql-client \
+         curl \
+     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements (Playwright excluded) and install
 COPY backend/requirements.nopw.txt /app/requirements.txt
