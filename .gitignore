@@ -1,6 +1,7 @@
 .env
 .*
-/backend/backend/data/*.json
+/backend/data/*.json
+# /backend/backend/data/*.json
 /backend/.env/
 /backend/.env.example
 /backend/backup/*.json

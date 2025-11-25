@@ -370,6 +370,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 try:
                     if ('pixiv.net' in target_url or 'pximg.net' in target_url) and HAVE_PIXIV_PLAYWRIGHT:
                         try:
+                            # remember how many candidates we had before running the helper
+                            _before_len = len(candidates)
                             pix_res = fetch_images_with_playwright(target_url, headful=not pw_headless)
                             if isinstance(pix_res, dict):
                                 pix_images = pix_res.get('images') or []
@@ -399,7 +401,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                                     used_method = used_method or 'playwright-pixiv'
                                 except Exception:
                                     continue
-                            pixiv_handled = True
+                            # mark pixiv_handled only when the helper actually added candidates
+                            pixiv_handled = len(candidates) > _before_len
                         except Exception as e:
                             logging.exception('Pixiv Playwright helper failed')
                             pixiv_handled = False

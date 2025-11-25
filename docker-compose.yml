@@ -16,7 +16,7 @@ services:
     command: /app/entrypoint.sh
     volumes:
       - ./backend:/app
-      - ./backend/backend/data:/app/data
+      - ./backend/data:/app/data
     ports:
       - "8000:8000"
     environment:

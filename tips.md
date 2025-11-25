@@ -100,14 +100,20 @@ docker compose restart frontend
 #jsonバックアップ
 python3 /home/noko/GitSandbox/fanart_viewer/scripts/convert_dump_to_manosaba.py /home/noko/GitSandbox/fanart_viewer/backend/backup/items-backup-2.json /home/noko/GitSandbox/fanart_viewer/backend/backend/data/manosaba_from_backup.json
 
-#データ削除＋バックアップ＋復帰
+#バックアップ+データ削除＋復帰
+##バックアップファイル作成
 docker compose run --rm --entrypoint "" web python manage.py dumpdata item > backend/backup/items-backup-2.json
 docker compose run --rm --entrypoint "" web python manage.py makemigrations
 docker compose run --rm --entrypoint "" web python manage.py migrate
+##消去
 docker compose run --rm --entrypoint "" web python manage.py shell -c "from item.models import Item; cnt=Item.objects.count(); Item.objects.all().delete(); print('deleted', cnt)"
+##/backend/dataからjsonデータをインポート
 docker compose run --rm --entrypoint "" web python manage.py import_json_data -v 2
+##バックアップファイルであるitems-backup-x.jsonから復帰できるデータを検索
 docker compose run --rm --entrypoint "" web python manage.py restore_previews_from_fixture /app//backup/items-backup.json --dry-run
+##実際に復帰
 docker compose run --rm --entrypoint "" web python manage.py restore_previews_from_fixture /app/backup/items-backup.json
+##データ数カウント
 docker compose run --rm --entrypoint "" web python manage.py shell -c "from item.models import Item; print('total', Item.objects.count()); print('manosaba', Item.objects.filter(source='manosaba').count()); print('mygo', Item.objects.filter(source='mygo').count())"
 
 #画像の取得
@@ -130,7 +136,7 @@ docker compose exec db psql -U fanart -d fanart -c "VACUUM FULL;"
 docker compose exec db psql -U fanart -d fanart -c "TRUNCATE item_item RESTART IDENTITY CASCADE;"
 
 # 特定のIDの画像が取得できるかテスト(api.jsonで確認)
-curl -s -X POST "http://localhost:8000/api/items/9591/fetch_and_save_preview/"   -H "Content-Type: application/json"   -d '{"preview_only": true, "force_method": "api"}' | jq . > api.json
+curl -s -X POST "http://localhost:8000/api/items/9324/fetch_and_save_preview/"   -H "Content-Type: application/json"   -d '{"preview_only": true, "force_method": "playwright"}' | jq . > log/api.json
 jq '[.images[] | {index: .index, url: .url, source: .source, content_type: .content_type}]' /home/noko/GitSandbox/fanart_viewer/log/api.json
 ```
 
