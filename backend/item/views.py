@@ -32,6 +32,40 @@ except Exception:
     BeautifulSoup = None
 
 
+def _fetch_image_via_requests(url, min_size=None):
+    """Fetch a single URL via server-side requests.
+
+    Responsibilities:
+    - Perform a single HTTP GET with a conservative User-Agent.
+    - Validate response is an image and not SVG.
+    - Optionally enforce a minimum size (bytes) when provided.
+    - Return (content_bytes, mime) or (None, None) on any failure.
+    This function is small and deterministic — the view orchestrates when
+    and why to call it (HTML path, renderer path). Keeping it top-level
+    makes the network I/O boundary explicit.
+    """
+    headers = {'User-Agent': 'fanart-viewer-bot/1.0'}
+    try:
+        import requests as _requests
+        r = _requests.get(url, timeout=15, headers=headers, allow_redirects=True)
+        ct = r.headers.get('content-type', '')
+        if r.status_code == 200 and ct and ct.split(';', 1)[0].startswith('image'):
+            mime = ct.split(';', 1)[0].lower()
+            if mime == 'image/svg+xml':
+                return None, None
+            content = r.content
+            if min_size is not None:
+                try:
+                    if len(content or b'') < int(min_size):
+                        return None, None
+                except Exception:
+                    pass
+            return content, mime
+    except Exception:
+        return None, None
+    return None, None
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('external_id')
@@ -90,32 +124,10 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not target_url:
             return Response({'detail': 'No link available on item'}, status=status.HTTP_400_BAD_REQUEST)
 
-        def _internal_fetch(url, min_size=None):
-            headers = {'User-Agent': 'fanart-viewer-bot/1.0'}
-            try:
-                import requests as _requests
-                r = _requests.get(url, timeout=15, headers=headers, allow_redirects=True)
-                ct = r.headers.get('content-type', '')
-                if r.status_code == 200 and ct and ct.split(';', 1)[0].startswith('image'):
-                    # Skip SVG images to reduce unnecessary fetch weight
-                    mime = ct.split(';', 1)[0].lower()
-                    if mime == 'image/svg+xml':
-                        return None, None
-                    # If caller requested a minimum size (e.g. Playwright mode),
-                    # skip assets smaller than that threshold (in bytes).
-                    content = r.content
-                    if min_size is not None:
-                        try:
-                            if len(content or b'') < int(min_size):
-                                return None, None
-                        except Exception:
-                            # if size check fails for any reason, fall back to returning
-                            # the content (don't break the overall flow)
-                            pass
-                    return content, mime
-            except Exception:
-                return None, None
-            return None, None
+        # Use the module-level request-based fetch helper for deterministic
+        # server-side HTTP fetches. See `_fetch_image_via_requests` defined
+        # at module scope for details and responsibilities.
+        _internal_fetch = _fetch_image_via_requests
 
         # Read client-selected fetch method early so we can honor it below
         force_method = data.get('force_method') if isinstance(data, dict) else None
