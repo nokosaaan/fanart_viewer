@@ -4,9 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fanart Viewer</title>
+    <!-- Optional fallback: meta backend-url for build-time fallback -->
+    <meta name="backend-url" content="" />
   </head>
   <body>
     <div id="root"></div>
+    <!-- Load runtime env injector (written by container entrypoint) before app code -->
+    <script src="/env.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
