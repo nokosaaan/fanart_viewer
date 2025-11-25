@@ -1,11 +1,33 @@
-// Prefer Vite-style env `VITE_BACKEND_URL`. For compatibility, also check
-// `REACT_APP_API_URL` (some deploy UIs use that name) — Vite exposes it
-// via import.meta.env as well when provided at build time.
-const API_BASE = (import.meta && import.meta.env && (import.meta.env.VITE_BACKEND_URL || import.meta.env.REACT_APP_API_URL)) ? (import.meta.env.VITE_BACKEND_URL || import.meta.env.REACT_APP_API_URL) : ''
+// Determine backend base URL from multiple possible sources, in this order:
+// 1. runtime global `window.__ENV && window.__ENV.VITE_BACKEND_URL` (set by public/env.js)
+// 2. Vite build-time `import.meta.env.VITE_BACKEND_URL` or `import.meta.env.REACT_APP_API_URL`
+// 3. <meta name="backend-url" content="https://..."> in index.html
+// 4. empty (fall back to relative paths)
+function readMetaBackendUrl(){
+  try{
+    const m = document.querySelector('meta[name="backend-url"]')
+    return m && m.content ? m.content : ''
+  }catch(_){ return '' }
+}
+
+function getRuntimeEnv(){
+  try{
+    if(window && window.__ENV && window.__ENV.VITE_BACKEND_URL) return window.__ENV.VITE_BACKEND_URL
+  }catch(_){ }
+  return ''
+}
+
+let BUILD_ENV = ''
+try{
+  BUILD_ENV = (import.meta && import.meta.env) ? (import.meta.env.VITE_BACKEND_URL || import.meta.env.REACT_APP_API_URL || '') : ''
+}catch(_){ BUILD_ENV = '' }
+
+const API_BASE = getRuntimeEnv() || BUILD_ENV || readMetaBackendUrl() || ''
 
 function normalizeBase(b){
   if(!b) return ''
-  return b.endsWith('/') ? b.slice(0,-1) : b
+  // remove trailing slash
+  return b.replace(/\/+$/, '')
 }
 
 const BASE = normalizeBase(API_BASE)
@@ -15,7 +37,8 @@ export function apiUrl(path){
     return path
   }
   const p = (typeof path === 'string' && path.startsWith('/')) ? path : ('/' + (path||''))
-  return BASE ? BASE + p : p
+  if(!BASE) return p
+  return BASE + p
 }
 
 export default function apiFetch(path, opts){
