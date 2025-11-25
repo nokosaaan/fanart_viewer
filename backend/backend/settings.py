@@ -90,11 +90,12 @@ REST_FRAMEWORK = {
 _cors_env = os.environ.get('CORS_ALLOWED_ORIGINS')
 if _cors_env:
     # split by comma and strip whitespace
-    CORS_ALLOWED_ORIGINS = [u.strip() for u in _cors_env.split(',') if u.strip()]
+    # strip whitespace and trailing slashes so origins match browser-origin format
+    CORS_ALLOWED_ORIGINS = [u.strip().rstrip('/') for u in _cors_env.split(',') if u.strip()]
 else:
     if DEBUG:
         CORS_ALLOWED_ORIGINS = [
-            'https://fanart-viewer-frontend.onrender.com/'
+            'https://fanart-viewer-frontend.onrender.com',
             'http://localhost:3000',
             'http://127.0.0.1:3000',
             'http://localhost:5173',
