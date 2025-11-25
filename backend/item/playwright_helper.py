@@ -270,46 +270,57 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
             cookie_header = None
 
         def _fetch_via_page(url, wait_for='networkidle', to_ms=10000):
-            # First, attempt an in-page fetch via page.evaluate so the
-            # browser's credentials, cookies and headers are used and we
-            # can obtain the raw ArrayBuffer for the image. This often
-            # succeeds where direct navigation or server-side requests
-            # get 403s.
+            # Only run the Playwright-specific fetch attempts for Pixiv/pximg
+            # hosts. Running the in-page fetch or browser request APIs for
+            # other sites (e.g. Twitter) has caused regressions, so guard
+            # them by host to avoid side-effects.
+            host_is_pixiv = False
             try:
-                try:
-                    js = '''async (url, ref) => {
-                        try {
-                            const r = await fetch(url, { credentials: 'include', headers: { 'Referer': ref } });
-                            const status = r.status;
-                            const ct = r.headers.get('content-type');
-                            if (!r.ok) {
-                                return { ok: false, status, content_type: ct, b64: null };
-                            }
-                            const ab = await r.arrayBuffer();
-                            const bytes = new Uint8Array(ab);
-                            const chunk = 0x8000;
-                            let binary = '';
-                            for (let i = 0; i < bytes.length; i += chunk) {
-                                binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
-                            }
-                            const b64 = btoa(binary);
-                            return { ok: true, status, content_type: ct, b64 };
-                        } catch (e) {
-                            return { ok: false, status: 0, content_type: null, b64: null, err: String(e) };
-                        }
-                    }'''
-                    pv = page.evaluate(js, url, 'https://www.pixiv.net/')
-                except Exception:
-                    pv = None
-                if pv and isinstance(pv, dict) and pv.get('ok') and pv.get('b64'):
-                    try:
-                        b = base64.b64decode(pv.get('b64'))
-                        return b, pv.get('content_type') or pv.get('content-type')
-                    except Exception:
-                        # fall through to other methods if decode fails
-                        pass
+                host_is_pixiv = _is_pixiv_host(urlparse(url).netloc)
             except Exception:
-                pass
+                host_is_pixiv = False
+
+            if host_is_pixiv:
+                # First, attempt an in-page fetch via page.evaluate so the
+                # browser's credentials, cookies and headers are used and we
+                # can obtain the raw ArrayBuffer for the image. This often
+                # succeeds where direct navigation or server-side requests
+                # get 403s.
+                try:
+                    try:
+                        js = '''async (url, ref) => {
+                            try {
+                                const r = await fetch(url, { credentials: 'include', headers: { 'Referer': ref } });
+                                const status = r.status;
+                                const ct = r.headers.get('content-type');
+                                if (!r.ok) {
+                                    return { ok: false, status, content_type: ct, b64: null };
+                                }
+                                const ab = await r.arrayBuffer();
+                                const bytes = new Uint8Array(ab);
+                                const chunk = 0x8000;
+                                let binary = '';
+                                for (let i = 0; i < bytes.length; i += chunk) {
+                                    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+                                }
+                                const b64 = btoa(binary);
+                                return { ok: true, status, content_type: ct, b64 };
+                            } catch (e) {
+                                return { ok: false, status: 0, content_type: null, b64: null, err: String(e) };
+                            }
+                        }'''
+                        pv = page.evaluate(js, url, 'https://www.pixiv.net/')
+                    except Exception:
+                        pv = None
+                    if pv and isinstance(pv, dict) and pv.get('ok') and pv.get('b64'):
+                        try:
+                            b = base64.b64decode(pv.get('b64'))
+                            return b, pv.get('content_type') or pv.get('content-type')
+                        except Exception:
+                            # fall through to other methods if decode fails
+                            pass
+                except Exception:
+                    pass
 
                 # Next, try Playwright's request API on the browser context.
                 # This uses the browser's cookies/session and does not suffer
@@ -338,14 +349,15 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                 except Exception:
                     pass
 
-                # If request API didn't yield, try navigation via page (uses browser session)
+            # If the host isn't pixiv, or Playwright-specific attempts failed,
+            # fall back to navigation via page (uses browser session)
+            try:
+                resp = page.goto(url, wait_until=wait_for, timeout=to_ms)
+            except Exception:
                 try:
-                    resp = page.goto(url, wait_until=wait_for, timeout=to_ms)
+                    resp = page.goto(url, timeout=to_ms)
                 except Exception:
-                    try:
-                        resp = page.goto(url, timeout=to_ms)
-                    except Exception:
-                        resp = None
+                    resp = None
             if resp:
                 try:
                     status = resp.status
@@ -399,15 +411,33 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                     if candidate_i in seen_urls:
                         continue
                     seen_urls.add(candidate_i)
-                    # Prefer a response captured during initial page load
-                    if candidate_i in captured_map:
-                        body, content_type = captured_map.get(candidate_i, (None, None))
-                    else:
-                        try:
-                            body, content_type = _fetch_via_page(candidate_i)
-                        except Exception:
-                            body, content_type = None, None
-                    attempted_fetches.append({'url': candidate_i, 'size': len(body) if body else 0, 'content_type': content_type, 'phase': 'main'})
+                    # Try the candidate and also an alternate extension variant
+                    # (jpg <-> png). Some Pixiv pages serve master as JPG but
+                    # the original is PNG (or vice-versa), so try both.
+                    trials = [candidate_i]
+                    if candidate_i.endswith('.jpg'):
+                        alt = candidate_i[:-4] + '.png'
+                        if alt not in seen_urls:
+                            trials.append(alt)
+                    elif candidate_i.endswith('.png'):
+                        alt = candidate_i[:-4] + '.jpg'
+                        if alt not in seen_urls:
+                            trials.append(alt)
+
+                    body = None
+                    content_type = None
+                    for turl in trials:
+                        if turl in captured_map:
+                            b, ct = captured_map.get(turl, (None, None))
+                        else:
+                            try:
+                                b, ct = _fetch_via_page(turl)
+                            except Exception:
+                                b, ct = None, None
+                        attempted_fetches.append({'url': turl, 'size': len(b) if b else 0, 'content_type': ct, 'phase': 'main'})
+                        if b and len(b) >= 10240:
+                            body, content_type = b, ct
+                            break
                     # prefer substantial images; skip tiny assets
                     try:
                         if body and len(body) >= 10240:
@@ -421,17 +451,35 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                 if candidate_single in seen_urls:
                     continue
                 seen_urls.add(candidate_single)
-                if candidate_single in captured_map:
-                    body, content_type = captured_map.get(candidate_single, (None, None))
-                else:
-                    try:
-                        body, content_type = _fetch_via_page(candidate_single)
-                    except Exception:
-                        body, content_type = None, None
-                attempted_fetches.append({'url': candidate_single, 'size': len(body) if body else 0, 'content_type': content_type, 'phase': 'main'})
+
+                # Try alternate extension variants as above
+                trials = [candidate_single]
+                if candidate_single.endswith('.jpg'):
+                    alt = candidate_single[:-4] + '.png'
+                    if alt not in seen_urls:
+                        trials.append(alt)
+                elif candidate_single.endswith('.png'):
+                    alt = candidate_single[:-4] + '.jpg'
+                    if alt not in seen_urls:
+                        trials.append(alt)
+
+                body = None
+                content_type = None
+                for turl in trials:
+                    if turl in captured_map:
+                        b, ct = captured_map.get(turl, (None, None))
+                    else:
+                        try:
+                            b, ct = _fetch_via_page(turl)
+                        except Exception:
+                            b, ct = None, None
+                    attempted_fetches.append({'url': turl, 'size': len(b) if b else 0, 'content_type': ct, 'phase': 'main'})
+                    if b and len(b) >= 10240:
+                        body, content_type = b, ct
+                        break
                 try:
                     if body and len(body) >= 10240:
-                        results.append((0, body, content_type, candidate_single))
+                        results.append((0, body, content_type, turl))
                     else:
                         main_small_found.append((candidate_single, len(body) if body else 0, content_type))
                 except Exception:
