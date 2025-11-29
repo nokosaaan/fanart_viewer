@@ -2,6 +2,41 @@
 #!/bin/sh
 set -e
 
+# Diagnostic: print a masked DATABASE_URL and whether PGPASSWORD is set.
+# This is safe for logs because the password is replaced with '***'.
+echo "Diagnostic: masking DATABASE_URL for debug"
+python3 - <<'PY'
+import os
+from urllib.parse import urlparse, urlunparse
+u = os.environ.get('DATABASE_URL')
+if not u:
+  print('DATABASE_URL: <not-set>')
+else:
+  try:
+    p = urlparse(u)
+    if p.username:
+      # mask the password portion if present
+      user = p.username
+      netloc = p.hostname or ''
+      if p.port:
+        netloc = f"{netloc}:{p.port}"
+      if p.password:
+        userinfo = f"{user}:***@"
+      else:
+        userinfo = f"{user}@"
+      masked = urlunparse((p.scheme, userinfo + netloc, p.path or '', p.params or '', p.query or '', p.fragment or ''))
+      print(f'DATABASE_URL: {masked}')
+    else:
+      print('DATABASE_URL: <no-username-present>')
+  except Exception as e:
+    print('DATABASE_URL: <parse-error>', str(e))
+PY
+if [ -n "${PGPASSWORD:-}" ]; then
+  echo "PGPASSWORD: <set>"
+else
+  echo "PGPASSWORD: <not-set>"
+fi
+
 # If Render provided a PORT, start a lightweight temporary server early so
 # Render's port scanner sees an open port while migrations/import run.
 if [ -n "${PORT:-}" ]; then
