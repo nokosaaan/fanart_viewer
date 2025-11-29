@@ -77,7 +77,7 @@ if DATABASE_URL:
         DATABASES = {
             'default': {
                 'ENGINE': 'django.db.backends.postgresql',
-                'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
+                'NAME': os.environ.get('POSTGRES_DB', 'fanart_e7lt'),
                 'USER': os.environ.get('POSTGRES_USER', 'fanart'),
                 'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
                 'HOST': os.environ.get('DATABASE_HOST', 'db'),
@@ -88,7 +88,7 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
+            'NAME': os.environ.get('POSTGRES_DB', 'fanart_e7lt'),
             'USER': os.environ.get('POSTGRES_USER', 'fanart'),
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
             'HOST': os.environ.get('DATABASE_HOST', 'db'),
