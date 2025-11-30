@@ -23,7 +23,7 @@ export default function RestorePreviews(){
       if(dryRun) fd.append('dry_run', '1')
 
       const url = apiUrl('/api/admin/restore_previews/')
-      const r = await fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })
+      const r = await fetch(url, { method: 'POST', body: fd, mode: 'cors' })
       const text = await r.text()
       let body = null
       try{ body = JSON.parse(text) }catch(_){ body = {raw: text} }

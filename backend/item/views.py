@@ -22,7 +22,7 @@ from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sourc
 import os
 from .headless_fetch import fetch_rendered_media
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.conf import settings
 from django.core.management import call_command
 import io
 import tempfile
@@ -646,7 +646,6 @@ def items_from_db(request):
 
 
 @csrf_exempt
-@require_POST
 def restore_previews_upload(request):
     """Admin-only endpoint to upload a dumpdata JSON and run the
     `restore_previews_from_fixture` management command.
@@ -660,6 +659,35 @@ def restore_previews_upload(request):
     management command and returns the captured stdout/stderr as JSON.
     """
     try:
+        # Basic CORS handling for preflight and responses. Normally
+        # django-cors-headers handles this, but some proxies or setups
+        # can short-circuit OPTIONS. Handle preflight here to be safe.
+        origin = request.META.get('HTTP_ORIGIN')
+        def set_cors(resp):
+            try:
+                if origin:
+                    if getattr(settings, 'CORS_ALLOW_ALL_ORIGINS', False):
+                        resp['Access-Control-Allow-Origin'] = '*'
+                    else:
+                        allowed = getattr(settings, 'CORS_ALLOWED_ORIGINS', []) or []
+                        allowed_norm = [a.rstrip('/') for a in allowed]
+                        if origin.rstrip('/') in allowed_norm:
+                            resp['Access-Control-Allow-Origin'] = origin
+                # safe defaults for the admin endpoint
+                resp['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+                resp['Access-Control-Allow-Headers'] = 'Content-Type'
+                resp['Access-Control-Max-Age'] = '3600'
+            except Exception:
+                pass
+            return resp
+
+        # Preflight
+        if request.method == 'OPTIONS':
+            from django.http import HttpResponse
+            resp = HttpResponse(status=200)
+            resp = set_cors(resp)
+            return resp
+
         env_pw = os.environ.get('RESTORE_PREVIEWS_PASSWORD')
         provided = None
         try:
@@ -668,11 +696,13 @@ def restore_previews_upload(request):
             provided = None
 
         if not env_pw or (provided is None) or (provided != env_pw):
-            return JsonResponse({'detail': 'Forbidden'}, status=403)
+            resp = JsonResponse({'detail': 'Forbidden'}, status=403)
+            return set_cors(resp)
 
         uploaded = request.FILES.get('file')
         if not uploaded:
-            return JsonResponse({'detail': 'No file uploaded (field `file` required)'}, status=400)
+            resp = JsonResponse({'detail': 'No file uploaded (field `file` required)'}, status=400)
+            return set_cors(resp)
 
         dry = False
         try:
@@ -695,7 +725,8 @@ def restore_previews_upload(request):
             else:
                 call_command('restore_previews_from_fixture', tmp.name, stdout=buf, stderr=buf)
             out = buf.getvalue()
-            return JsonResponse({'ok': True, 'output': out})
+            resp = JsonResponse({'ok': True, 'output': out})
+            return set_cors(resp)
         finally:
             try:
                 os.unlink(tmp.name)
@@ -703,5 +734,9 @@ def restore_previews_upload(request):
                 pass
     except Exception as e:
         tb = traceback.format_exc()
-        return JsonResponse({'ok': False, 'error': str(e), 'trace': tb}, status=500)
+        resp = JsonResponse({'ok': False, 'error': str(e), 'trace': tb}, status=500)
+        try:
+            return set_cors(resp)
+        except Exception:
+            return resp
 
