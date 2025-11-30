@@ -6,6 +6,8 @@
 /backend/.env/
 /backend/.env.example
 /backend/backup/items-backup-*.json
+/backend/backup/*.7z
+/backend/backup/*.zip
 /backend/data_filtered/*.json
 /backend/item/__pycache__/*.pyc
 /log/*

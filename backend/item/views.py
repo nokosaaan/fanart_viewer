@@ -712,13 +712,85 @@ def restore_previews_upload(request):
         except Exception:
             dry = False
 
+        # Accept raw JSON or compressed archives (.zip, .gz). For .zip, we
+        # extract the first .json file found. We avoid loading the whole
+        # content into memory by streaming where possible and writing to a
+        # temporary file which is passed to the management command.
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
         try:
-            for chunk in uploaded.chunks():
-                tmp.write(chunk)
-            tmp.flush()
-            tmp.close()
+            name = (uploaded.name or '').lower()
+            # If ZIP archive
+            if name.endswith('.zip'):
+                import zipfile
+                # zipfile accepts a file-like object
+                try:
+                    z = zipfile.ZipFile(uploaded.file)
+                except Exception:
+                    # fallback: read bytes from uploaded and open from bytes
+                    uploaded.file.seek(0)
+                    data = uploaded.file.read()
+                    z = zipfile.ZipFile(io.BytesIO(data))
 
+                # Find first candidate JSON file
+                member = None
+                for m in z.namelist():
+                    if m.lower().endswith('.json'):
+                        member = m
+                        break
+                if not member:
+                    resp = JsonResponse({'detail': 'ZIP archive contains no .json file'}, status=400)
+                    return set_cors(resp)
+
+                # Protect against zip-slip by not using member paths directly
+                try:
+                    raw = z.read(member)
+                except Exception as e:
+                    resp = JsonResponse({'detail': f'Failed to read zip member: {e}'}, status=400)
+                    return set_cors(resp)
+
+                tmp.write(raw)
+                tmp.flush()
+                tmp.close()
+
+            # If gzip (.gz)
+            elif name.endswith('.gz') or name.endswith('.tgz'):
+                import gzip
+                try:
+                    # uploaded.file is a file-like object; ensure at start
+                    uploaded.file.seek(0)
+                except Exception:
+                    pass
+                try:
+                    with gzip.GzipFile(fileobj=uploaded.file, mode='rb') as g:
+                        # stream read/write
+                        while True:
+                            chunk = g.read(1024 * 64)
+                            if not chunk:
+                                break
+                            tmp.write(chunk)
+                except Exception as e:
+                    resp = JsonResponse({'detail': f'Failed to decompress gzip: {e}'}, status=400)
+                    return set_cors(resp)
+                tmp.flush()
+                tmp.close()
+
+            # Not compressed; assume raw JSON
+            else:
+                # Write uploaded file chunks to tmp
+                try:
+                    for chunk in uploaded.chunks():
+                        tmp.write(chunk)
+                except Exception:
+                    # Fallback to reading fileobj
+                    try:
+                        uploaded.file.seek(0)
+                        tmp.write(uploaded.file.read())
+                    except Exception:
+                        pass
+                tmp.flush()
+                tmp.close()
+
+            # Call management command and capture output
             buf = io.StringIO()
             if dry:
                 call_command('restore_previews_from_fixture', tmp.name, '--dry-run', stdout=buf, stderr=buf)
