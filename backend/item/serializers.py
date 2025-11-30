@@ -19,10 +19,14 @@ class ItemSerializer(serializers.ModelSerializer):
             # use hasattr to avoid accidental DB hits if relation broken
             if hasattr(obj, 'preview_images'):
                 try:
-                    return obj.preview_images.exists()
+                    # If any PreviewImage rows exist, report True.
+                    if obj.preview_images.exists():
+                        return True
+                    # If none exist, fall back to legacy preview_data below
                 except Exception:
-                    # if relation access fails, fall back
+                    # if relation access fails, fall back to legacy preview_data
                     pass
+            # Fallback: return True if legacy preview_data is present
             return bool(obj.preview_data)
         except Exception:
             return False
