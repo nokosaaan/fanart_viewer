@@ -21,6 +21,12 @@ import base64
 from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
 import os
 from .headless_fetch import fetch_rendered_media
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+from django.core.management import call_command
+import io
+import tempfile
+import traceback
 try:
     from .playwright_helper import fetch_images_with_playwright
     HAVE_PIXIV_PLAYWRIGHT = True
@@ -637,4 +643,65 @@ def items_from_db(request):
     qs = Item.objects.all().order_by('external_id')
     serializer = ItemSerializer(qs, many=True, context={'request': request})
     return JsonResponse(serializer.data, safe=False)
+
+
+@csrf_exempt
+@require_POST
+def restore_previews_upload(request):
+    """Admin-only endpoint to upload a dumpdata JSON and run the
+    `restore_previews_from_fixture` management command.
+
+    Expects multipart/form-data with fields:
+    - `file`: the JSON fixture file (required)
+    - `password`: plain password to match env `RESTORE_PREVIEWS_PASSWORD` (required)
+    - `dry_run`: optional; '1'/'true' to run in dry-run mode
+
+    The function writes the uploaded file to a temporary path, calls the
+    management command and returns the captured stdout/stderr as JSON.
+    """
+    try:
+        env_pw = os.environ.get('RESTORE_PREVIEWS_PASSWORD')
+        provided = None
+        try:
+            provided = request.POST.get('password')
+        except Exception:
+            provided = None
+
+        if not env_pw or (provided is None) or (provided != env_pw):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        uploaded = request.FILES.get('file')
+        if not uploaded:
+            return JsonResponse({'detail': 'No file uploaded (field `file` required)'}, status=400)
+
+        dry = False
+        try:
+            dr = request.POST.get('dry_run')
+            if dr and str(dr).lower() in ('1', 'true', 'on'):
+                dry = True
+        except Exception:
+            dry = False
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+        try:
+            for chunk in uploaded.chunks():
+                tmp.write(chunk)
+            tmp.flush()
+            tmp.close()
+
+            buf = io.StringIO()
+            if dry:
+                call_command('restore_previews_from_fixture', tmp.name, '--dry-run', stdout=buf, stderr=buf)
+            else:
+                call_command('restore_previews_from_fixture', tmp.name, stdout=buf, stderr=buf)
+            out = buf.getvalue()
+            return JsonResponse({'ok': True, 'output': out})
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+    except Exception as e:
+        tb = traceback.format_exc()
+        return JsonResponse({'ok': False, 'error': str(e), 'trace': tb}, status=500)
 

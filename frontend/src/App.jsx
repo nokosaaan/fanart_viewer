@@ -3,6 +3,7 @@ import apiFetch from './api'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
+import RestorePreviews from './components/RestorePreviews'
 
 export default function App(){
   const [items, setItems] = useState([])
@@ -301,6 +302,8 @@ export default function App(){
         <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
           Preview Timeline
         </button>
+        <RestorePreviews />
+      
       </header>
       <SearchBar
         query={query}
