@@ -37,32 +37,6 @@ else
   echo "PGPASSWORD: <not-set>"
 fi
 
-# Optional: restore previews from fixture after migrations
-# Control with env vars: RESTORE_PREVIEWS=1 to enable dry-run; set RESTORE_PREVIEWS_FORCE=1 to apply.
-RESTORE_FIXTURE_PATH=${RESTORE_FIXTURE_PATH:-/app/backup/items-backup.json}
-if [ "${RESTORE_PREVIEWS:-0}" = "1" ]; then
-  echo "RESTORE_PREVIEWS enabled. Fixture path: ${RESTORE_FIXTURE_PATH}"
-  # marker prevents repeated application within same container lifecycle
-  MARKER=/tmp/.previews_restored
-  if [ -f "$MARKER" ]; then
-    echo "Preview restore already applied (marker exists: $MARKER). Skipping."
-  else
-    echo "Running preview restore dry-run (no DB writes) to show what would be done..."
-    python manage.py restore_previews_from_fixture "$RESTORE_FIXTURE_PATH" --dry-run -v 2 || true
-    if [ "${RESTORE_PREVIEWS_FORCE:-0}" = "1" ]; then
-      echo "RESTORE_PREVIEWS_FORCE=1 set — applying preview restore now..."
-      if python manage.py restore_previews_from_fixture "$RESTORE_FIXTURE_PATH" -v 2; then
-        echo "Preview restore applied successfully. Creating marker $MARKER"
-        touch "$MARKER"
-      else
-        echo "ERROR: Preview restore failed during apply. Check logs above." >&2
-      fi
-    else
-      echo "Dry-run finished. Set RESTORE_PREVIEWS_FORCE=1 to actually apply the restore."
-    fi
-  fi
-fi
-
 # If Render provided a PORT, start a lightweight temporary server early so
 # Render's port scanner sees an open port while migrations/import run.
 if [ -n "${PORT:-}" ]; then
@@ -124,6 +98,32 @@ fi
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput || true
+
+# Optional: restore previews from fixture after migrations
+# Control with env vars: RESTORE_PREVIEWS=1 to enable dry-run; set RESTORE_PREVIEWS_FORCE=1 to apply.
+RESTORE_FIXTURE_PATH=${RESTORE_FIXTURE_PATH:-/app/backup/items-backup.json}
+if [ "${RESTORE_PREVIEWS:-0}" = "1" ]; then
+  echo "RESTORE_PREVIEWS enabled. Fixture path: ${RESTORE_FIXTURE_PATH}"
+  # marker prevents repeated application within same container lifecycle
+  MARKER=/tmp/.previews_restored
+  if [ -f "$MARKER" ]; then
+    echo "Preview restore already applied (marker exists: $MARKER). Skipping."
+  else
+    echo "Running preview restore dry-run (no DB writes) to show what would be done..."
+    python manage.py restore_previews_from_fixture "$RESTORE_FIXTURE_PATH" --dry-run -v 2 || true
+    if [ "${RESTORE_PREVIEWS_FORCE:-0}" = "1" ]; then
+      echo "RESTORE_PREVIEWS_FORCE=1 set — applying preview restore now..."
+      if python manage.py restore_previews_from_fixture "$RESTORE_FIXTURE_PATH" -v 2; then
+        echo "Preview restore applied successfully. Creating marker $MARKER"
+        touch "$MARKER"
+      else
+        echo "ERROR: Preview restore failed during apply. Check logs above." >&2
+      fi
+    else
+      echo "Dry-run finished. Set RESTORE_PREVIEWS_FORCE=1 to actually apply the restore."
+    fi
+  fi
+fi
 
 echo "Starting Gunicorn..."
 # Use 1 worker per CPU core, capped to a sensible range. Fallback to 3 workers.
