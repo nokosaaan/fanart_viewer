@@ -98,7 +98,7 @@ docker compose restart web
 docker compose restart frontend
 
 #jsonバックアップ
-python3 /home/noko/GitSandbox/fanart_viewer/scripts/convert_dump_to_manosaba.py /home/noko/GitSandbox/fanart_viewer/backend/backup/items-backup-2.json /home/noko/GitSandbox/fanart_viewer/backend/backend/data/manosaba_from_backup.json
+python3 /home/noko/GitSandbox/fanart_viewer/scripts/convert_dump_to_manosaba.py /home/noko/GitSandbox/fanart_viewer/backend/backup/items-backup-10.json /home/noko/GitSandbox/fanart_viewer/backend/data_filtered/
 
 #バックアップ+データ削除＋復帰
 ##バックアップファイル作成

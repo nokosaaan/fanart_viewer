@@ -3,9 +3,12 @@
 Convert a Django `dumpdata` JSON (list of objects) into a manosaba-style JSON.
 
 Usage:
-  python3 scripts/convert_dump_to_manosaba.py /path/to/items-backup-2.json [out.json]
+    python3 scripts/convert_dump_to_manosaba.py /path/to/items-backup-2.json [out_dir]
 
-If `out.json` is omitted the script writes to stdout.
+If `out_dir` is omitted the script writes per-source JSON files into
+`<input_stem>_by_source/` next to the input file. If `out_dir` is a path
+to an existing directory it will be used. If `out_dir` is a path that does
+not exist it will be created and used as the output directory.
 
 Mapping (defaults):
   key: `external_id` (string)
@@ -13,8 +16,8 @@ Mapping (defaults):
     "LINK": fields.link,
     "ARTIST": fields.artist,
     "TAGS": fields.tags (list),
-    "CHARACTERS": fields.characters (list),
-    "TITLES": fields.titles (list),
+    "CHARACTER": fields.characters (list),
+    "TITLE": fields.titles (list),
     "SOURCE": fields.source (if present),
     "SITUATION": fields.situation (if present)
   }
@@ -52,7 +55,8 @@ def ensure_list(v):
 
 
 def convert(dump_objs):
-    out = {}
+    # Group output by source value. Return a dict: source_name -> {key: item}
+    grouped = {}
     for obj in dump_objs:
         model = obj.get('model', '')
         if model.endswith('item') or model.endswith('item.item'):
@@ -73,17 +77,23 @@ def convert(dump_objs):
             if 'tags' in fields:
                 item['TAGS'] = ensure_list(fields.get('tags'))
             if 'characters' in fields:
-                item['CHARACTERS'] = ensure_list(fields.get('characters'))
+                item['CHARACTER'] = ensure_list(fields.get('characters'))
             if 'titles' in fields:
-                item['TITLES'] = ensure_list(fields.get('titles'))
+                item['TITLE'] = ensure_list(fields.get('titles'))
             # optional fields
+            src = None
             if 'source' in fields and fields.get('source'):
-                item['SOURCE'] = fields.get('source')
+                src = fields.get('source')
+                item['SOURCE'] = src
             if 'situation' in fields and fields.get('situation'):
                 item['SITUATION'] = fields.get('situation')
 
-            out[key] = item
-    return out
+            if not src:
+                src = 'unknown'
+
+            grouped.setdefault(str(src), {})[key] = item
+
+    return grouped
 
 
 def main(argv):
@@ -96,14 +106,48 @@ def main(argv):
         outp = Path(argv[2])
 
     data = json.loads(inp.read_text(encoding='utf-8'))
-    converted = convert(data)
+    grouped = convert(data)
 
-    if outp:
-        outp.parent.mkdir(parents=True, exist_ok=True)
-        outp.write_text(json.dumps(converted, ensure_ascii=False, indent=2), encoding='utf-8')
-        print(f'Wrote {outp}', file=sys.stderr)
+    # determine output directory
+    if outp is None:
+        out_dir = inp.parent / (inp.stem + '_by_source')
     else:
-        sys.stdout.write(json.dumps(converted, ensure_ascii=False, indent=2))
+        # If path exists and is dir, use it. If it has no suffix assume dir. Otherwise use parent dir.
+        if outp.exists() and outp.is_dir():
+            out_dir = outp
+        elif outp.suffix == '':
+            out_dir = outp
+        else:
+            out_dir = outp.parent
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # safe filename helper
+    import re
+
+    def safe_name(s):
+        # convert to str, replace unsafe chars with underscore, limit length
+        n = str(s)
+        n = n.strip()
+        if not n:
+            n = 'unknown'
+        # replace path separators and control chars
+        n = re.sub(r'[\s/\\]+', '_', n)
+        # allow only a limited charset
+        n = re.sub(r'[^0-9A-Za-z._-]', '_', n)
+        if len(n) > 100:
+            n = n[:100]
+        return n
+
+    written = []
+    for src, mapping in grouped.items():
+        fname = safe_name(src) + '.json'
+        target = out_dir / fname
+        target.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding='utf-8')
+        written.append(target)
+
+    for p in written:
+        print(f'Wrote {p}', file=sys.stderr)
     return 0
 
 
