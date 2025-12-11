@@ -21,11 +21,17 @@ import base64
 from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
 import os
 from .headless_fetch import fetch_rendered_media
+from .ai_tagger import tag_image_bytes
 try:
     from .playwright_helper import fetch_images_with_playwright
     HAVE_PIXIV_PLAYWRIGHT = True
 except Exception:
     HAVE_PIXIV_PLAYWRIGHT = False
+try:
+    from .playwright_helper import fetch_twitter_thread_images_with_playwright
+    HAVE_TW_PLAYWRIGHT = True
+except Exception:
+    HAVE_TW_PLAYWRIGHT = False
 try:
     from bs4 import BeautifulSoup
 except Exception:
@@ -379,6 +385,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 # avoids relying on raw HTTP requests to pixiv-hosted URLs which
                 # often require referer/cookies and can return placeholders.
                 pixiv_handled = False
+                twitter_thread_handled = False
                 try:
                     if ('pixiv.net' in target_url or 'pximg.net' in target_url) and HAVE_PIXIV_PLAYWRIGHT:
                         try:
@@ -420,6 +427,25 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                             pixiv_handled = False
                 except Exception:
                     pixiv_handled = False
+
+                # For Twitter/X targets: optionally scrape replies (same user) via Playwright thread helper
+                if not pixiv_handled and (('twitter.com' in target_url) or ('x.com' in target_url)) and HAVE_TW_PLAYWRIGHT:
+                    try:
+                        thread_urls = fetch_twitter_thread_images_with_playwright(target_url, headful=not pw_headless)
+                        if thread_urls:
+                            # fetch the discovered URLs via server-side requests to get bytes
+                            for h in thread_urls:
+                                try:
+                                    b, ct = _internal_fetch(h, min_size=10240)
+                                    if b and ct:
+                                        candidates.append((h, b, ct))
+                                        candidate_sources[h] = 'playwright-thread'
+                                        used_method = used_method or 'playwright-thread'
+                                except Exception:
+                                    continue
+                            twitter_thread_handled = len(candidates) > 0
+                    except Exception:
+                        twitter_thread_handled = False
 
                 # If the Pixiv helper returned nothing, fall back to the generic
                 # rendered-media extraction (which returns URLs). We then attempt
@@ -499,6 +525,23 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return Response(resp)
 
         # Persist ALL successful candidates as preview images (preserve order)
+        # Allow client to reorder candidates before saving via 'reorder' param (list of indices)
+        reorder_indices = data.get('reorder') if isinstance(data, dict) else None
+        if reorder_indices and isinstance(reorder_indices, list):
+            try:
+                reordered = []
+                for i in reorder_indices:
+                    if isinstance(i, int) and 0 <= i < len(candidates):
+                        reordered.append(candidates[i])
+                # append any candidates not in reorder list (to avoid losing images)
+                for idx, c in enumerate(candidates):
+                    if idx not in reorder_indices:
+                        reordered.append(c)
+                candidates = reordered
+            except Exception:
+                # if reorder fails, keep original order
+                logging.exception('Failed to apply reorder; using original candidate order')
+        
         PreviewImage.objects.filter(item=item).delete()
         saved = []
         for idx, (url_f, body, ctype) in enumerate(candidates):
@@ -513,7 +556,28 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not saved:
             return Response({'detail': 'Failed to save any preview images'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
+        # PoC: call AI tagger on the first saved preview (largest would be better)
+        ai_suggestions = None
+        try:
+            # pick the largest saved image (most bytes)
+            largest = None
+            largest_idx = None
+            for s in saved:
+                if largest is None or (s.get('size') or 0) > (largest.get('size') or 0):
+                    largest = s
+                    largest_idx = s.get('index')
+            if largest is not None:
+                # load preview bytes from DB
+                pi = item.preview_images.filter(order=largest_idx).first()
+                if pi and pi.data:
+                    ai_suggestions = tag_image_bytes(pi.data)
+        except Exception:
+            logging.exception('AI tagging failed')
+
+        resp = {'status': 'saved', 'count': len(saved), 'saved': saved}
+        if ai_suggestions:
+            resp['ai_suggestions'] = ai_suggestions
+        return Response(resp)
 
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):

@@ -55,6 +55,7 @@ function ItemRow({ it }){
   const [showEditor, setShowEditor] = useState(false)
   const [charsState, setCharsState] = useState(it.characters || [])
   const [tagsState, setTagsState] = useState(it.tags || [])
+  const [draggedIndex, setDraggedIndex] = useState(null)
 
   async function onFetch(e){
     e && e.preventDefault()
@@ -132,7 +133,9 @@ function ItemRow({ it }){
     try{
       // build images payload including data_uri when available to ensure saving
       const images = candidates.filter(c=> urls.includes(c.url)).map(c=> ({url: c.url, data_uri: c.data_uri}))
-      const resp = await fetch(`/api/items/${it.id}/save_previews/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({images})})
+      // build reorder array: map current candidate indices to their position in the reordered list
+      const reorder = candidates.map((c, i) => i)
+      const resp = await fetch(`/api/items/${it.id}/save_previews/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({images, reorder})})
       const j = await resp.json().catch(()=>({}))
       setLoading(false)
       if(resp.ok){
@@ -145,6 +148,25 @@ function ItemRow({ it }){
         alert('Save failed. See console.')
       }
     }catch(e){ setLoading(false); console.error(e); alert('Save failed') }
+  }
+
+  function handleDragStart(e, index){
+    setDraggedIndex(index)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleDragOver(e, index){
+    e.preventDefault()
+    if(draggedIndex === null || draggedIndex === index) return
+    const newCandidates = [...candidates]
+    const [removed] = newCandidates.splice(draggedIndex, 1)
+    newCandidates.splice(index, 0, removed)
+    setCandidates(newCandidates)
+    setDraggedIndex(index)
+  }
+
+  function handleDragEnd(){
+    setDraggedIndex(null)
   }
 
   return (
@@ -238,23 +260,38 @@ function ItemRow({ it }){
       </div>
       
 
-      {/* Candidate selection modal */}
+      {/* Candidate selection modal with drag-and-drop reordering */}
       {showCandidates && candidates && (
         <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:1200}} onClick={()=>setShowCandidates(false)}>
           <div style={{width:'80%', maxWidth:900, margin:'5% auto', background:'#fff', padding:16}} onClick={e=>e.stopPropagation()}>
-            <h3>Select images to save</h3>
+            <h3>Select images to save (drag to reorder)</h3>
             <div style={{display:'flex', gap:12, flexWrap:'wrap', maxHeight:400, overflow:'auto'}}>
               {candidates.map((img, i)=> (
-                <label key={i} style={{width:160, border:'1px solid #ddd', padding:8}}>
-                  <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#f6f6f6'}}>
-                    {img.data_uri ? (
-                      <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%'}} />
-                    ) : (
-                      <div style={{fontSize:12, color:'#666'}}>No preview</div>
-                    )}
+                <label 
+                  key={`${img.url}-${i}`} 
+                  draggable 
+                  onDragStart={(e)=>handleDragStart(e, i)}
+                  onDragOver={(e)=>handleDragOver(e, i)}
+                  onDragEnd={handleDragEnd}
+                  style={{
+                    width:160, 
+                    border: draggedIndex === i ? '2px solid #4CAF50' : '1px solid #ddd', 
+                    padding:8,
+                    cursor:'move',
+                    opacity: draggedIndex === i ? 0.5 : 1
+                  }}>
+                  <div style={{position:'relative'}}>
+                    <div style={{position:'absolute', top:0, left:0, background:'#4CAF50', color:'#fff', padding:'2px 6px', fontSize:12, borderRadius:3}}>{i+1}</div>
+                    <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#f6f6f6'}}>
+                      {img.data_uri ? (
+                        <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%'}} />
+                      ) : (
+                        <div style={{fontSize:12, color:'#666'}}>No preview</div>
+                      )}
+                    </div>
                   </div>
                   <div style={{marginTop:6}}>
-                    <input type="checkbox" onChange={e=>{
+                    <input type="checkbox" checked={selectedUrls.has(img.url)} onChange={e=>{
                       const s = new Set(selectedUrls)
                       if(e.target.checked) s.add(img.url)
                       else s.delete(img.url)

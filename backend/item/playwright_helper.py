@@ -16,6 +16,94 @@ except Exception:
     HAVE_RENDERER = False
 
 
+def fetch_twitter_thread_images_with_playwright(target_url, headful=False, timeout_ms=12000, max_scrolls=6):
+    """Collect image URLs from a tweet page (x.com/twitter.com) including replies by the same author.
+
+    - Does not require login (best-effort; private/hidden repliesは不可)
+    - Filters to the same user as the original tweet (URL の /<user>/status から取得)
+    - Returns list of absolute image URLs (pbs.twimg.com など)
+    """
+    if not HAVE_PLAYWRIGHT:
+        raise RuntimeError('playwright not available')
+
+    from urllib.parse import urlparse
+    parsed = urlparse(target_url)
+    parts = parsed.path.split('/')
+    if len(parts) < 3:
+        return []
+    user = parts[1]
+
+    image_urls = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=not headful)
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(target_url)
+        try:
+            page.wait_for_load_state('networkidle', timeout=timeout_ms)
+        except Exception:
+            pass
+
+        def collect_once():
+            try:
+                return page.evaluate(
+                    "(user)=>{\n"
+                    "  const out=new Set();\n"
+                    "  document.querySelectorAll('article').forEach(a=>{\n"
+                    "    const profile=a.querySelector(`a[href^="/${user}"]`);\n"
+                    "    if(!profile) return;\n"
+                    "    a.querySelectorAll('img').forEach(img=>{\n"
+                    "      const src=img.src||'';\n"
+                    "      if(src.includes('twimg')) out.add(src);\n"
+                    "    });\n"
+                    "  });\n"
+                    "  return Array.from(out);\n"
+                    "}",
+                    user
+                ) or []
+            except Exception:
+                return []
+
+        image_urls.extend(collect_once())
+
+        # scroll to load replies
+        for _ in range(max_scrolls):
+            try:
+                page.mouse.wheel(0, 1200)
+                page.wait_for_timeout(800)
+            except Exception:
+                break
+            # attempt to click "Show more replies" / "Show replies" buttons if present
+            try:
+                buttons = page.query_selector_all('button')
+                for b in buttons:
+                    try:
+                        text = (b.inner_text() or '').lower()
+                    except Exception:
+                        text = ''
+                    if 'show replies' in text or 'show more replies' in text or '返信をさらに表示' in text:
+                        try:
+                            b.click()
+                            page.wait_for_timeout(500)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+            image_urls.extend(collect_once())
+
+        browser.close()
+
+    # uniq preserving order
+    seen = set()
+    uniq = []
+    for u in image_urls:
+        if u and u not in seen:
+            uniq.append(u)
+            seen.add(u)
+    return uniq
+
+
 def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
     """Return list of (idx, bytes, content_type) fetched from target_url using Playwright login to Pixiv.
     Requires PIXIV_USER and PIXIV_PASS in env.

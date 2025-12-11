@@ -13,6 +13,13 @@ except Exception:
 LAST_TW_API_RESP = {}
 
 
+def _twitter_api_get(url: str, params: dict, bearer: str):
+    headers = {'Authorization': f'Bearer {bearer}'}
+    r = requests.get(url, headers=headers, params=params, timeout=8)
+    r.raise_for_status()
+    return r.json()
+
+
 def _fetch_via_api(tweet_url: str) -> List[str]:
     """Use Twitter v2 API to return a list of media URLs (may be empty).
 
@@ -31,11 +38,8 @@ def _fetch_via_api(tweet_url: str) -> List[str]:
         # request a broad set of media fields; some fields may be absent depending on account/tweet
         'media.fields': 'media_key,type,url,preview_image_url,variants,alt_text,media_key'
     }
-    headers = {'Authorization': f'Bearer {bearer}'}
     try:
-        r = requests.get(api, headers=headers, params=params, timeout=8)
-        r.raise_for_status()
-        j = r.json()
+        j = _twitter_api_get(api, params, bearer)
         # store raw response and status for debugging
         try:
             LAST_TW_API_RESP[tweet_id] = {'json': j, 'status': r.status_code}
@@ -61,6 +65,54 @@ def _fetch_via_api(tweet_url: str) -> List[str]:
                 if v and v not in urls:
                     urls.append(v)
     return urls
+
+
+def _fetch_thread_media(tweet_url: str) -> List[str]:
+    """Fetch media from replies in the same conversation.
+
+    Requires `TW_BEARER`. Flow:
+    1) lookup tweet -> conversation_id
+    2) recent search `conversation_id:<id> has:images` with expansions to collect media
+    Note: recent search only covers ~7日以内/最近分。利用量に応じて rate limit に注意。
+    Controlled by env `TW_FETCH_THREAD=1`.
+    """
+    bearer = os.environ.get('TW_BEARER')
+    if not bearer:
+        return []
+
+    parts = tweet_url.rstrip('/').split('/')
+    tweet_id = parts[-1]
+
+    try:
+        # 1) get conversation_id
+        lookup = _twitter_api_get(
+            f'https://api.twitter.com/2/tweets/{tweet_id}',
+            {'tweet.fields': 'conversation_id'},
+            bearer,
+        )
+        conv_id = lookup.get('data', {}).get('conversation_id')
+        if not conv_id:
+            return []
+
+        # 2) search recent tweets in the same conversation that have images
+        search_params = {
+            'query': f'conversation_id:{conv_id} has:images',
+            'max_results': 50,
+            'expansions': 'attachments.media_keys',
+            'media.fields': 'media_key,type,url,preview_image_url,variants,alt_text',
+        }
+        search = _twitter_api_get('https://api.twitter.com/2/tweets/search/recent', search_params, bearer)
+        media = search.get('includes', {}).get('media', [])
+        urls = []
+        for m in media:
+            if m.get('type') == 'photo':
+                for key in ('url', 'media_url_https', 'preview_image_url'):
+                    v = m.get(key)
+                    if v and v not in urls:
+                        urls.append(v)
+        return urls
+    except Exception:
+        return []
 
 
 def _fetch_via_scrape(tweet_url: str) -> List[str]:
@@ -233,6 +285,7 @@ def fetch_twitter_media_urls(tweet_url: str) -> List[str]:
     method = os.environ.get('TW_FETCH_METHOD', 'api').lower()
 
     # build try order
+    thread_enabled = os.environ.get('TW_FETCH_THREAD') == '1'
     if method == 'api':
         try_order = ['api', 'scrape', 'nitter']
     elif method == 'scrape':
@@ -242,11 +295,17 @@ def fetch_twitter_media_urls(tweet_url: str) -> List[str]:
     else:
         try_order = [method, 'api', 'scrape', 'nitter']
 
+    if thread_enabled:
+        # Prefer thread aggregation after primary API call succeeds; add to front to ensure it runs early
+        try_order = ['thread'] + try_order
+
     collected: List[str] = []
     for m in try_order:
         try:
             if m == 'api':
                 urls = _fetch_via_api(tweet_url)
+            elif m == 'thread':
+                urls = _fetch_thread_media(tweet_url)
             elif m == 'scrape':
                 urls = _fetch_via_scrape(tweet_url)
             elif m == 'nitter':
@@ -283,6 +342,7 @@ def fetch_twitter_media_urls_with_sources(tweet_url: str) -> List[tuple]:
     tuples so callers can know which backend produced each candidate.
     """
     method = os.environ.get('TW_FETCH_METHOD', 'api').lower()
+    thread_enabled = os.environ.get('TW_FETCH_THREAD') == '1'
     if method == 'api':
         try_order = ['api', 'scrape', 'nitter']
     elif method == 'scrape':
@@ -292,12 +352,17 @@ def fetch_twitter_media_urls_with_sources(tweet_url: str) -> List[tuple]:
     else:
         try_order = [method, 'api', 'scrape', 'nitter']
 
+    if thread_enabled:
+        try_order = ['thread'] + try_order
+
     collected = []
     seen = set()
     for m in try_order:
         try:
             if m == 'api':
                 urls = _fetch_via_api(tweet_url)
+            elif m == 'thread':
+                urls = _fetch_thread_media(tweet_url)
             elif m == 'scrape':
                 urls = _fetch_via_scrape(tweet_url)
             elif m == 'nitter':
