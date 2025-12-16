@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 15px;
+        background-color: #f8f8f8;
+      }
+      textarea {
+        width: 100%;
+        height: 150px;
+        box-sizing: border-box;
+        padding: 10px;
+        margin-top: 5px;
+        border: 1px solid #ccc;
+        resize: vertical;
+        font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+        font-size: 12px;
+      }
+      button {
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        cursor: pointer;
+        border-radius: 4px;
+        margin-top: 10px;
+      }
+      #status {
+        margin-top: 15px;
+        font-weight: bold;
+        color: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <p>追記したいリンクを1行に1つずつ貼り付けてください。</p>
+    <textarea id="linkContent" placeholder="https://example.com/link1&#10;https://example.com/link2&#10;..."></textarea>
+    <button onclick="inputLinks()">F列に追記実行</button>
+    <div id="status"></div>
+
+    <script>
+      function inputLinks() {
+        const linkText = document.getElementById('linkContent').value;
+        const statusDiv = document.getElementById('status');
+        
+        if (linkText.trim() === '') {
+          statusDiv.innerHTML = '<span style="color:red;">エラー: データを貼り付けてください。</span>';
+          return;
+        }
+
+        statusDiv.innerHTML = '処理中...';
+        
+        // GASのhandleLinkInput関数を非同期で呼び出す
+        google.script.run
+          .withSuccessHandler(function(result) {
+            // 結果メッセージをダイアログに表示
+            statusDiv.innerHTML = result.includes('✅') 
+              ? `<span style="color:green;">${result}</span>`
+              : `<span style="color:red;">${result}</span>`;
+          })
+          .withFailureHandler(function(error) {
+            statusDiv.innerHTML = `<span style="color:red;">GAS実行エラー: ${error.message}</span>`;
+          })
+          .handleLinkInput(linkText);
+      }
+    </script>
+  </body>
+</html>

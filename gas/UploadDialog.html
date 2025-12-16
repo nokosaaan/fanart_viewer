@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+        background-color: #f8f8f8;
+      }
+      textarea {
+        width: 100%;
+        height: 250px;
+        box-sizing: border-box;
+        padding: 10px;
+        margin-top: 10px;
+        border: 1px solid #ccc;
+        resize: none;
+        font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
+        font-size: 12px;
+      }
+      button {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        cursor: pointer;
+        border-radius: 4px;
+        margin-top: 10px;
+      }
+      #status {
+        margin-top: 15px;
+        font-weight: bold;
+        color: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <p>ダウンロードした **JSON ファイルの内容をすべてコピー**し、以下のテキストエリアに貼り付けてから、「読み込み実行」ボタンを押してください。データは**1ページ目**に書き込まれます。</p>
+    <textarea id="jsonContent" placeholder="JSONデータ (例: {'ID_1': {...}}) をここに貼り付けてください..."></textarea>
+    <button onclick="uploadJson()">読み込み実行</button>
+    <div id="status"></div>
+
+    <script>
+      function uploadJson() {
+        const jsonText = document.getElementById('jsonContent').value;
+        const statusDiv = document.getElementById('status');
+        
+        if (jsonText.trim() === '') {
+          statusDiv.innerHTML = '<span style="color:red;">エラー: データを貼り付けてください。</span>';
+          return;
+        }
+
+        statusDiv.innerHTML = '処理中...しばらくお待ちください。';
+        
+        // GASのhandleFileUpload関数を非同期で呼び出す
+        google.script.run
+          .withSuccessHandler(function(result) {
+            // 結果メッセージに応じて色を変化させる
+            statusDiv.innerHTML = result.includes('✅') 
+              ? `<span style="color:green;">${result}</span>`
+              : `<span style="color:red;">${result}</span>`;
+          })
+          .withFailureHandler(function(error) {
+            statusDiv.innerHTML = `<span style="color:red;">GAS実行エラー: ${error.message}</span>`;
+          })
+          .handleFileUpload(jsonText);
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+      }
+      #download {
+        display: inline-block;
+        padding: 10px 20px;
+        background-color: #4CAF50; /* Green */
+        color: white;
+        text-align: center;
+        text-decoration: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: background-color 0.3s;
+      }
+      #download:hover {
+        background-color: #45a049;
+      }
+    </style>
+    <script type='text/javascript'>
+      
+      /**
+       * Base64エンコードされた文字列をデコードし、元の文字列に戻します。
+       * (整形されたJSON文字列を復元)
+       */
+      function decodeBase64(s) {
+        // atob() でBase64デコード
+        var decoded = atob(s);
+        var len = decoded.length;
+        var bytes = new Uint8Array(len);
+        
+        // 文字列をバイト配列に変換
+        for (var i = 0; i < len; i++) {
+          bytes[i] = decoded.charCodeAt(i);
+        }
+        // バイト配列をUTF-8で文字列に変換
+        // (TextDecoderは一部古いブラウザで非対応の場合があるが、現代の環境では標準的)
+        return new TextDecoder("utf-8").decode(bytes);
+      }
+      
+      // ページ読み込み時にダウンロード設定を初期化
+      window.onload = function() {
+        handleDownload();
+      }
+
+      function handleDownload() {
+        // Base64エンコードされた文字列をGASから取得
+        var encodedContent = '<?!= getEncodedData(); ?>'; 
+        
+        // Base64文字列が空か、空オブジェクト '{}' のBase64 ('e30=') の場合は処理を中断
+        if (encodedContent === '' || encodedContent.trim() === 'e30=') {
+            alert('スプレッドシートにデータがありません。');
+            document.getElementById("download").style.backgroundColor = 'gray';
+            document.getElementById("download").innerText = 'データなし';
+            document.getElementById("download").onclick = function(){ return false; };
+            return;
+        }
+
+        // Base64デコードして、改行・インデントを含む整形済みJSON文字列に戻す
+        var content = decodeBase64(encodedContent);
+
+        // ダウンロード用URL生成 (Blobを作成)
+        var blob = new Blob([ content ], { "type" : "application/json;charset=utf-8"});
+        
+        // ダウンロードリンク要素にURLをセット
+        document.getElementById("download").href = window.URL.createObjectURL(blob);
+        
+        // ファイル名をGASから受け取って設定
+        document.getElementById("download").download = '<?!= fileName ?>';
+      }
+    </script>
+  </head>
+  <body>
+    <p style="text-align: center;">👇 クリックしてダウンロード</p>
+    <a id="download" href="#" download="data.json">JSONファイルをダウンロード</a> 
+  </body>
+</html>
