@@ -1,10 +1,11 @@
 .env
-.*
+.renderignore
+.venv
+.github
 /scripts/*
 # /backend/data/*.json
 # /backend/backend/data/*.json
 /backend/.env/
-/backend/.env.example
 /backend/backup/items-backup-*.json
 /backend/backup/*.7z
 /backend/backup/*.zip

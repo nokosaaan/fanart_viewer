@@ -149,13 +149,9 @@ Run a shell in the web container:
 docker compose exec web /bin/bash
 ```
 
-Help and next steps
-- If you want, I can also:
-  - Add `docker-compose.prod.yml` for an opinionated production setup
-  - Add a small `RELEASE` script to automate migration + createsuperuser + sample data import
-  - Add a GitHub Actions workflow to build and push Docker images automatically
+# Usage
+If you don't have any idea for using fanart viewer, please reference `tips.md`.
 
-If you'd like any of those, tell me which and I will prepare the files.
 
 ---
 Last updated: 2025-12-03
