@@ -2,7 +2,7 @@ from django.db import models
 
 
 class Item(models.Model):
-    external_id = models.IntegerField()
+    external_id = models.BigIntegerField()
     # source identifies which JSON/data source this record came from (e.g. 'manosaba', 'mygo')
     source = models.CharField(max_length=64, blank=True, default='')
     situation = models.CharField(max_length=64, blank=True)

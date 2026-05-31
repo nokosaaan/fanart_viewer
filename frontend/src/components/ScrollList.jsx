@@ -124,6 +124,28 @@ function ItemRow({ it }){
     alert('No preview candidates found.')
   }
 
+  async function onAddToPreview(e){
+    e && e.preventDefault()
+    const ok = window.confirm('This will fetch and add preview images to the timeline. Continue?')
+    if(!ok) return
+    setLoading(true)
+    try{
+      const res = await fetchAndSavePreview(it.id, url || it.link, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
+      setLoading(false)
+      if(!res.ok){
+        const detail = res.body && (res.body.detail || res.body.error)
+        alert('Add to preview failed' + (detail ? (': '+detail) : '.'))
+        console.warn('addToPreview failed', res.body)
+        return
+      }
+      setHasPreviewLocal(true)
+      setDebugInfo(res.body)
+      try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = res.body }catch(e){}
+      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+      try{ window.alert('Preview added.'); }catch(e){}
+    }catch(e){ setLoading(false); console.error(e); alert('Add to preview failed: '+(e && e.message? e.message : String(e))) }
+  }
+
   async function saveSelected(){
     if(!candidates) return
     const urls = Array.from(selectedUrls)
@@ -231,6 +253,28 @@ function ItemRow({ it }){
           </select>
           <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
         </form>
+        <button className="btn" style={{marginLeft:8}} onClick={onAddToPreview} disabled={loading}>{loading? 'Adding...' : 'Add to Preview'}</button>
+        <button className="btn" style={{marginLeft:8}} onClick={async ()=>{
+          const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
+          if(!ok) return
+          try{
+            const resp = await fetch(`/api/items/${it.id}/previews/`, {method:'DELETE'})
+            if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to clear previews: '+(j.detail||j.error||resp.status)); return }
+            setHasPreviewLocal(false)
+            try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+            alert('Previews cleared.')
+          }catch(e){ console.error(e); alert('Failed to clear previews') }
+        }}>Clear Previews</button>
+        <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff'}} onClick={async ()=>{
+          const ok = window.confirm('Delete this item from the database? This will remove its previews too.')
+          if(!ok) return
+          try{
+            const resp = await fetch(`/api/items/${it.id}/delete_item/`, {method:'DELETE'})
+            if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to delete item: '+(j.detail||j.error||resp.status)); return }
+            try{ window.dispatchEvent(new CustomEvent('item-deleted', { detail: { id: it.id } })) }catch(e){}
+            alert('Item deleted.')
+          }catch(e){ console.error(e); alert('Failed to delete item') }
+        }}>Delete Item</button>
         {// Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
         <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
         }

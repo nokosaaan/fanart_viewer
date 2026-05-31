@@ -14,13 +14,15 @@ from urllib.parse import urljoin, urlparse
 
 from .models import Item, PreviewImage
 from .serializers import ItemSerializer
-from django.conf import settings
 import logging
 import traceback
 import base64
 from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
 import os
 from .headless_fetch import fetch_rendered_media
+from django.views.decorators.csrf import csrf_exempt
+import threading
+from types import SimpleNamespace
 try:
     from .playwright_helper import fetch_images_with_playwright
     HAVE_PIXIV_PLAYWRIGHT = True
@@ -64,6 +66,75 @@ def _fetch_image_via_requests(url, min_size=None):
     except Exception:
         return None, None
     return None, None
+
+
+def _normalize_lookup_url(url):
+    try:
+        parsed = urlparse(url or '')
+        host = (parsed.netloc or '').lower()
+        host = host[4:] if host.startswith('www.') else host
+        if host == 'mobile.twitter.com':
+            host = 'twitter.com'
+        if host == 'mobile.x.com':
+            host = 'x.com'
+        path = (parsed.path or '').rstrip('/')
+        return f'{parsed.scheme or "https"}://{host}{path}'
+    except Exception:
+        return (url or '').strip().rstrip('/')
+
+
+def _find_item_by_url(url):
+    normalized = _normalize_lookup_url(url)
+    tweet_id = None
+    try:
+        match = re.search(r'/status/(\d+)', normalized)
+        if match:
+            tweet_id = match.group(1)
+    except Exception:
+        tweet_id = None
+
+    if tweet_id:
+        try:
+            qs = Item.objects.filter(external_id=int(tweet_id))
+            if qs.exists():
+                return qs.order_by('id').first()
+        except Exception:
+            pass
+
+        qs = Item.objects.filter(link__icontains=f'/status/{tweet_id}')
+        if qs.exists():
+            return qs.first()
+
+    candidates = {normalized}
+    try:
+        parsed = urlparse(normalized)
+        path = (parsed.path or '').rstrip('/')
+        for host in ('twitter.com', 'x.com', 'www.twitter.com', 'www.x.com'):
+            candidates.add(f'https://{host}{path}')
+    except Exception:
+        pass
+
+    qs = Item.objects.filter(link__in=list(candidates))
+    if qs.exists():
+        return qs.first()
+
+    if tweet_id:
+        qs = Item.objects.filter(link__icontains=tweet_id)
+        if qs.exists():
+            return qs.first()
+
+    return None
+
+
+def _run_bookmark_fetch_job(item_id, target_url, data=None):
+    """Run the slow bookmark fetch/save flow outside the request thread."""
+    try:
+        request = SimpleNamespace(data=data or {}, query_params={})
+        view = ItemViewSet()
+        view.kwargs = {'pk': str(item_id)}
+        view.fetch_and_save_preview(request, pk=item_id)
+    except Exception:
+        logging.exception('Background bookmark fetch failed for item %s url=%s', item_id, target_url)
 
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
@@ -515,6 +586,66 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
 
+    @csrf_exempt
+    @action(detail=False, methods=['post'], url_path='bookmark_fetch')
+    def bookmark_fetch(self, request):
+        """Resolve an Item from a Twitter/X URL and reuse the normal fetch flow.
+
+        This is the entry point a browser extension or other client-side bridge
+        can call after the bookmark action is detected in the browser. It
+        accepts the current page URL as `url` and saves the fetched bytes to
+        the database.
+        """
+        data = request.data if isinstance(request.data, dict) else {}
+        target_url = data.get('url') or request.query_params.get('url')
+        if not target_url:
+            return Response({'detail': 'No URL provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        item = _find_item_by_url(target_url)
+        if not item:
+            tweet_id = None
+            try:
+                match = re.search(r'/status/(\d+)', _normalize_lookup_url(target_url))
+                if match:
+                    tweet_id = int(match.group(1))
+            except Exception:
+                tweet_id = None
+
+            if not tweet_id:
+                return Response({'detail': 'No matching item found for URL', 'url': target_url}, status=status.HTTP_404_NOT_FOUND)
+
+            item = Item.objects.create(
+                external_id=tweet_id,
+                source='twitter_bookmark',
+                situation='',
+                titles=[],
+                characters=[],
+                artist='',
+                link=_normalize_lookup_url(target_url),
+                tags=None,
+            )
+
+        # Run the expensive preview fetch/save flow after returning the HTTP response
+        # so browser-side callers do not sit in a long pending state.
+        try:
+            threading.Thread(
+                target=_run_bookmark_fetch_job,
+                args=(item.pk, target_url, {'url': target_url}),
+                daemon=True,
+            ).start()
+        except Exception:
+            logging.exception('Failed to start background bookmark fetch job for item %s', item.pk)
+            return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(
+            {
+                'status': 'processing',
+                'item_id': item.id,
+                'item_created': True if item.source == 'twitter_bookmark' else False,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):
         """Accepts client-provided images (data_uri) and persists them as PreviewImage."""
@@ -525,6 +656,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'detail': 'No images provided'}, status=status.HTTP_400_BAD_REQUEST)
         PreviewImage.objects.filter(item=item).delete()
         saved = []
+        local_entries = []
         for idx, img in enumerate(images):
             data_uri = img.get('data_uri') if isinstance(img, dict) else None
             url = img.get('url') if isinstance(img, dict) else None
@@ -537,15 +669,32 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     ctype = m.group(1) if m else 'application/octet-stream'
                     PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
                     saved.append({'index': idx, 'url': url, 'size': len(body), 'content_type': ctype})
+                    local_entries.append((url, body, ctype))
                 except Exception:
                     continue
         if not saved:
             return Response({'detail': 'No images saved'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
         return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
 
-    @action(detail=True, methods=['get'], url_path='previews')
+    @action(detail=True, methods=['get', 'delete'], url_path='previews')
     def previews(self, request, pk=None):
         item = self.get_object()
+        # DELETE on this collection endpoint removes all preview images for the item
+        if request.method == 'DELETE':
+            try:
+                PreviewImage.objects.filter(item=item).delete()
+                # clear any inline preview_data stored on the Item
+                try:
+                    item.preview_data = None
+                    item.preview_content_type = None
+                    item.save(update_fields=['preview_data', 'preview_content_type'])
+                except Exception:
+                    logging.exception('Failed to clear item.preview_data')
+                return Response({'status': 'deleted', 'count': 0})
+            except Exception as e:
+                logging.exception('Failed to delete all previews')
+                return Response({'detail': 'Failed to delete previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         imgs = item.preview_images.order_by('order')
         data = []
         for idx, img in enumerate(imgs):
@@ -582,6 +731,18 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         # GET: return the image bytes for the requested index
         img = imgs[idxi]
         return HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+
+    @action(detail=True, methods=['delete'], url_path='delete_item')
+    def delete_item(self, request, pk=None):
+        """Delete the Item and all associated preview images from the database."""
+        item = self.get_object()
+        try:
+            item_id = item.id
+            item.delete()
+            return Response({'status': 'deleted', 'id': item_id})
+        except Exception as e:
+            logging.exception('Failed to delete Item %s', pk)
+            return Response({'detail': 'Failed to delete item', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
     @action(detail=True, methods=['post'], url_path='update_fields')

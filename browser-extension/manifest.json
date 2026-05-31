@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "fanart_viewer Twitter Bookmark Bridge",
+  "version": "0.1.0",
+  "description": "Detects X/Twitter bookmark clicks and sends the tweet URL to local fanart_viewer.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "https://x.com/*",
+    "https://twitter.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

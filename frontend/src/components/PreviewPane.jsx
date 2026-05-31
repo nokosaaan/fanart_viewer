@@ -35,6 +35,16 @@ export default function PreviewPane({open, onClose}){
       } else if(Array.isArray(data.results)){
         list = data.results
         next = data.next || null
+        // normalize `next` when backend returns an absolute URL that may
+        // reference an internal container hostname (e.g. http://web:8000)
+        try{
+          if(next){
+            const u = new URL(next)
+            next = u.pathname + (u.search || '')
+          }
+        }catch(e){
+          // if parsing fails, leave `next` as-is
+        }
       }
       const have = list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
       if(!mountedRef.current) return have
@@ -142,6 +152,51 @@ export default function PreviewPane({open, onClose}){
     loadPreviewsForIndex(selectedIndex)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndex, items])
+
+  const [deleting, setDeleting] = useState(false)
+
+  async function deleteCurrentPreview(){
+    if(selectedIndex===null) return
+    const it = items[selectedIndex]
+    if(!it) return
+    const idx = currentPreviewIdx
+    const ok = window.confirm('Delete this preview image? This cannot be undone.')
+    if(!ok) return
+    setDeleting(true)
+    try{
+      const resp = await fetch(`/api/items/${it.id}/previews/${idx}/`, {method: 'DELETE'})
+      if(!resp.ok){
+        const j = await resp.json().catch(()=>({}));
+        alert('Failed to delete preview: '+(j.detail||j.error||resp.status))
+        return
+      }
+      // reload previews for this item and refresh items list
+      await loadPreviewsForIndex(selectedIndex)
+      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+      alert('Preview deleted.')
+    }catch(e){ console.error(e); alert('Failed to delete preview') }
+    finally{ setDeleting(false) }
+  }
+
+  async function clearAllPreviews(){
+    if(selectedIndex===null) return
+    const it = items[selectedIndex]
+    if(!it) return
+    const ok = window.confirm('Clear all previews for this item? This will remove all preview images.')
+    if(!ok) return
+    setDeleting(true)
+    try{
+      const resp = await fetch(`/api/items/${it.id}/previews/`, {method: 'DELETE'})
+      if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to clear previews: '+(j.detail||j.error||resp.status)); return }
+      // refresh items and previews
+      await loadItems('/api/items/?page_size=1000', true)
+      setPreviews([])
+      setCurrentPreviewIdx(0)
+      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+      alert('All previews cleared.')
+    }catch(e){ console.error(e); alert('Failed to clear previews') }
+    finally{ setDeleting(false) }
+  }
 
   // listen for external updates (e.g. when a preview is fetched elsewhere in the UI)
   useEffect(()=>{
@@ -254,6 +309,10 @@ export default function PreviewPane({open, onClose}){
                 <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
                 <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
                 <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
+                <div style={{marginTop:12}}>
+                  <button className="btn" onClick={deleteCurrentPreview} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete This Preview'}</button>
+                  <button className="btn" style={{marginLeft:8}} onClick={clearAllPreviews} disabled={deleting}>{deleting ? 'Processing...' : 'Clear All Previews'}</button>
+                </div>
               </div>
             </div>
           </div>

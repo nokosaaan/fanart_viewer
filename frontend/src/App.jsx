@@ -50,11 +50,11 @@ export default function App(){
 
       if(Array.isArray(data)){
         // not paginated: whole dataset returned
-        setItems(data)
+        setItems(uniqueById(data))
         setNextPageUrl(null)
       } else {
         const results = Array.isArray(data.results) ? data.results : []
-        setItems(results)
+        setItems(uniqueById(results))
         setNextPageUrl(data.next || null)
       }
     }catch(err){
@@ -104,7 +104,7 @@ export default function App(){
         all.push(...results)
         url = data.next || null
       }
-      setItems(all)
+      setItems(uniqueById(all))
       setNextPageUrl(null)
     }catch(err){
       console.error('Failed to fetch items', err)
@@ -170,7 +170,7 @@ export default function App(){
         })()
 
         if(Array.isArray(all) && all.length>0){
-          setItems(all)
+          setItems(uniqueById(all))
           setNextPageUrl(null)
           // clamp pageIndex to valid range after full dataset arrives
           setPageIndex(p=>{
@@ -184,6 +184,18 @@ export default function App(){
         setBackgroundIndexing(false)
       }
     })()
+    // Listen for item-deleted events to remove items from local state
+    function onItemDeleted(ev){
+      try{
+        const id = ev && ev.detail && ev.detail.id
+        if(id == null) return
+        setItems(prev => Array.isArray(prev) ? prev.filter(it=> it.id !== id && it.pk !== id && it.external_id !== id) : prev)
+      }catch(e){/* ignore */}
+    }
+    window.addEventListener('item-deleted', onItemDeleted)
+    return ()=>{
+      window.removeEventListener('item-deleted', onItemDeleted)
+    }
   }, [])
 
   const suggestions = useMemo(()=>{
@@ -279,11 +291,11 @@ export default function App(){
       }
 
       if(Array.isArray(data)){
-        setItems(prev => [...prev, ...data])
+        setItems(prev => uniqueById([...(Array.isArray(prev)?prev:[]), ...data]))
         setNextPageUrl(null)
       } else {
         const results = Array.isArray(data.results) ? data.results : []
-        setItems(prev => [...prev, ...results])
+        setItems(prev => uniqueById([...(Array.isArray(prev)?prev:[]), ...results]))
         setNextPageUrl(data.next || null)
       }
     }catch(err){
@@ -291,6 +303,24 @@ export default function App(){
     }finally{
       setLoadingPages(false)
     }
+  }
+
+  // helper: ensure array of items is unique by `id` preserving first occurrence order
+  function uniqueById(arr){
+    if(!Array.isArray(arr)) return []
+    const seen = new Set()
+    const out = []
+    for(const it of arr){
+      const id = it && (it.id || it._id || it.pk || it.external_id)
+      if(id == null){
+        out.push(it)
+        continue
+      }
+      if(seen.has(id)) continue
+      seen.add(id)
+      out.push(it)
+    }
+    return out
   }
 
   return (
