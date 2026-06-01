@@ -6,8 +6,8 @@ export default function PreviewPane({open, onClose}){
   const [selectedIndex, setSelectedIndex] = useState(null)
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
+  const [selectedPreviewId, setSelectedPreviewId] = useState(null)
   const currentPreviewIdxRef = useRef(0)
-  const currentPreviewIdRef = useRef(null)
   const mountedRef = useRef(false)
   const [nextPageUrl, setNextPageUrl] = useState(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -134,6 +134,7 @@ export default function PreviewPane({open, onClose}){
   async function loadPreviewsForIndex(idx){
     setPreviews([])
     setCurrentPreviewIdx(0)
+    setSelectedPreviewId(null)
     currentPreviewIdxRef.current = 0
     if(idx===null || idx===undefined) return
     const it = items[idx]
@@ -145,8 +146,8 @@ export default function PreviewPane({open, onClose}){
       if(Array.isArray(j)){
         setPreviews(j)
         setCurrentPreviewIdx(0)
+        setSelectedPreviewId((j[0] && j[0].id) || null)
         currentPreviewIdxRef.current = 0
-        try{ currentPreviewIdRef.current = (j[0] && j[0].id) || null }catch(e){ currentPreviewIdRef.current = null }
       }
     }catch(e){
       console.error('failed to load previews', e)
@@ -164,17 +165,22 @@ export default function PreviewPane({open, onClose}){
 
   const [deleting, setDeleting] = useState(false)
 
-  function selectPreviewIndex(idx, pid){
+  function selectPreviewIndex(idx){
     currentPreviewIdxRef.current = idx
-    currentPreviewIdRef.current = pid || null
     setCurrentPreviewIdx(idx)
+    try{
+      const selected = previews && previews.length>idx ? previews[idx] : null
+      setSelectedPreviewId((selected && selected.id) || null)
+    }catch(e){
+      setSelectedPreviewId(null)
+    }
   }
 
   async function deleteCurrentPreview(){
     if(selectedIndex===null) return
     const it = items[selectedIndex]
     if(!it) return
-    const pid = currentPreviewIdRef.current
+    const pid = selectedPreviewId || ((previews && previews[currentPreviewIdx]) ? previews[currentPreviewIdx].id : null)
     const ok = window.confirm('Delete this preview image? This cannot be undone.')
     if(!ok) return
     setDeleting(true)

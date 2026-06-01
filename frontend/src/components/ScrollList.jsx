@@ -56,6 +56,7 @@ function ItemRow({ it }){
   const [charsState, setCharsState] = useState(it.characters || [])
   const [tagsState, setTagsState] = useState(it.tags || [])
   const [situationState, setSituationState] = useState(it.situation || '')
+  const [copied, setCopied] = useState(false)
 
   async function onFetch(e){
     e && e.preventDefault()
@@ -178,7 +179,15 @@ function ItemRow({ it }){
           <div className="chips">
             {Array.isArray(it.titles) && it.titles.length>0 ? (
               <>
-                {it.titles.slice(0,2).map((t,i)=> <button key={i} className="chip" onClick={()=>{}}>{t}</button>)}
+                {it.titles.slice(0,2).map((t,i)=> (
+                  <div key={i} style={{display:'inline-flex', alignItems:'center', marginRight:6}}>
+                    <button className="chip" onClick={()=>{}} style={{paddingRight:8}}>{t}</button>
+                      <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(it.link || ''); alert('Copied link: '+(it.link||'')) }catch(_){ window.prompt('Copy link:', it.link||'') } }} style={{marginLeft:4, padding:'6px'}} title="Copy link">
+                        <img src="/icons/copy.svg" alt="Copy link" style={{width:16, height:16}} />
+                      </button>
+                    {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{marginLeft:4, padding:'6px'}} title="Open link"><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
+                  </div>
+                ))}
                 {it.titles.length>2 && (
                   <button className="chip more" onClick={()=>setShowTitles(s=>!s)}>{showTitles? '▲' : `+${it.titles.length-2}`}</button>
                 )}
@@ -188,7 +197,17 @@ function ItemRow({ it }){
             )}
             {showTitles && Array.isArray(it.titles) && (
               <div className="chip-dropdown">
-                {it.titles.map((t,i)=> <div key={i} className="chip-row">{t}</div>)}
+                {it.titles.map((t,i)=> (
+                  <div key={i} className="chip-row" style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                    <div style={{flex:1, wordBreak:'break-word'}}>{t}</div>
+                    <div style={{marginLeft:8, display:'flex', alignItems:'center', gap:6}}>
+                        <button className="chip" onClick={async ()=>{ try{ await navigator.clipboard.writeText(it.link||''); alert('Copied link: '+(it.link||'')) }catch(_){ window.prompt('Copy link:', it.link||'') } }} title="Copy link" style={{padding:6}}>
+                        <img src="/icons/copy.svg" alt="Copy" style={{width:16, height:16}} />
+                      </button>
+                      {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" title="Open link" style={{padding:6}}><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
             {/* Situation chip */}
@@ -238,7 +257,10 @@ function ItemRow({ it }){
             {hasPreviewLocal ? (
               <img className="preview" src={`/api/items/${it.id}/preview/`} alt="preview" />
             ) : (
-              <a href={it.link} target="_blank" rel="noopener noreferrer" className="link-text">{it.link}</a>
+              // show link only in preview area; actions are provided next to titles
+              <div style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={it.link}>
+                <a href={it.link} target="_blank" rel="noopener noreferrer" className="link-text">{it.link}</a>
+              </div>
             )}
           </div>
         </div>
