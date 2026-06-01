@@ -7,6 +7,7 @@ export default function PreviewPane({open, onClose}){
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const currentPreviewIdxRef = useRef(0)
+  const currentPreviewIdRef = useRef(null)
   const mountedRef = useRef(false)
   const [nextPageUrl, setNextPageUrl] = useState(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -145,6 +146,7 @@ export default function PreviewPane({open, onClose}){
         setPreviews(j)
         setCurrentPreviewIdx(0)
         currentPreviewIdxRef.current = 0
+        try{ currentPreviewIdRef.current = (j[0] && j[0].id) || null }catch(e){ currentPreviewIdRef.current = null }
       }
     }catch(e){
       console.error('failed to load previews', e)
@@ -162,8 +164,9 @@ export default function PreviewPane({open, onClose}){
 
   const [deleting, setDeleting] = useState(false)
 
-  function selectPreviewIndex(idx){
+  function selectPreviewIndex(idx, pid){
     currentPreviewIdxRef.current = idx
+    currentPreviewIdRef.current = pid || null
     setCurrentPreviewIdx(idx)
   }
 
@@ -171,12 +174,19 @@ export default function PreviewPane({open, onClose}){
     if(selectedIndex===null) return
     const it = items[selectedIndex]
     if(!it) return
-    const idx = currentPreviewIdxRef.current
+    const pid = currentPreviewIdRef.current
     const ok = window.confirm('Delete this preview image? This cannot be undone.')
     if(!ok) return
     setDeleting(true)
     try{
-      const resp = await fetch(`/api/items/${it.id}/previews/${idx}/`, {method: 'DELETE'})
+      // prefer deleting by stable DB id when available
+      let resp
+      if(pid){
+        resp = await fetch(`/api/items/${it.id}/previews/id/${pid}/`, {method: 'DELETE'})
+      } else {
+        const idx = currentPreviewIdxRef.current
+        resp = await fetch(`/api/items/${it.id}/previews/${idx}/`, {method: 'DELETE'})
+      }
       if(!resp.ok){
         const j = await resp.json().catch(()=>({}));
         alert('Failed to delete preview: '+(j.detail||j.error||resp.status))
@@ -310,7 +320,7 @@ export default function PreviewPane({open, onClose}){
                 <div className="modal-timeline-wrap">
                   <div className="modal-timeline">
                     {previews && previews.length>0 ? previews.map(p=> (
-                      <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index)} />
+                      <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
                     )) : (
                       <div className="timeline-empty">No previews</div>
                     )}

@@ -576,7 +576,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         for idx, (url_f, body, ctype) in enumerate(candidates):
             try:
                 pi = PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
-                saved.append({'index': idx, 'url': url_f, 'size': len(body) if body else 0, 'content_type': ctype})
+                saved.append({'id': pi.id, 'index': idx, 'url': url_f, 'size': len(body) if body else 0, 'content_type': ctype})
             except Exception:
                 # skip individual failures but continue saving others
                 logging.exception('Failed to save preview candidate %s for item %s', url_f, item.id)
@@ -699,8 +699,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         imgs = item.preview_images.order_by('order')
         data = []
         for idx, img in enumerate(imgs):
-            data.append({'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': img.content_type})
+            data.append({'id': img.id, 'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': img.content_type})
         return Response(data)
+
+    @action(detail=True, methods=['delete'], url_path='previews/id/(?P<pid>[^/]+)')
+    def preview_delete_by_id(self, request, pk=None, pid=None):
+        """DELETE a preview image by its database id for robustness against index drift."""
+        item = self.get_object()
+        try:
+            pi = PreviewImage.objects.get(pk=int(pid), item=item)
+        except Exception:
+            return Response({'detail': 'preview not found'}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            pi.delete()
+            # re-order remaining preview images to keep contiguous order
+            remaining = list(item.preview_images.order_by('order'))
+            for new_idx, img in enumerate(remaining):
+                if img.order != new_idx:
+                    img.order = new_idx
+                    img.save()
+            return Response({'status': 'deleted', 'id': pid})
+        except Exception as e:
+            logging.exception('Failed to delete preview image by id')
+            return Response({'detail': 'Failed to delete preview', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=['get', 'delete'], url_path='previews/(?P<idx>[^/]+)')
     def preview_index(self, request, pk=None, idx=None):
