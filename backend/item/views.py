@@ -34,7 +34,7 @@ except Exception:
     BeautifulSoup = None
 
 
-MIN_IMAGE_FETCH_BYTES = 50000
+MIN_IMAGE_FETCH_BYTES = 100000
 
 
 def _fetch_image_via_requests(url, min_size=None):
