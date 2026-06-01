@@ -119,6 +119,11 @@ curl -v -F "file=@items-backup.json.gz" -F "password=your_password" -F "dry_run=
 - Backend API: http://localhost:8000/api/
 - Django admin: http://localhost:8000/admin/ (login with the superuser you created)
 
+7) Twitter/X bookmark trigger
+
+- If you don't have datasets(json files) for fanart_viewer, you can fetch images by using browse extention.
+- You need to create a twitter account to trriger fetch process.
+
 Troubleshooting
 - If the web container exits with database errors, check `docker compose logs db` and `docker compose logs web` for hints. The DB may not be accepting connections yet — the entrypoint waits but if you ran migrations manually you may need to retry.
 - If uploads are rejected (413 Request Entity Too Large), and you're running locally with the compose nginx/dev server, check whether the platform proxy or reverse-proxy (if any) limits uploads; locally with the plain compose above you should not hit platform limits. Use compressed upload as a workaround.
@@ -158,4 +163,4 @@ Help and next steps
 If you'd like any of those, tell me which and I will prepare the files.
 
 ---
-Last updated: 2025-12-03
+Last updated: 2026-06-02
