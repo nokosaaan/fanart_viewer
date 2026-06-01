@@ -6,6 +6,7 @@ export default function PreviewPane({open, onClose}){
   const [selectedIndex, setSelectedIndex] = useState(null)
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
+  const currentPreviewIdxRef = useRef(0)
   const mountedRef = useRef(false)
   const [nextPageUrl, setNextPageUrl] = useState(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -132,6 +133,7 @@ export default function PreviewPane({open, onClose}){
   async function loadPreviewsForIndex(idx){
     setPreviews([])
     setCurrentPreviewIdx(0)
+    currentPreviewIdxRef.current = 0
     if(idx===null || idx===undefined) return
     const it = items[idx]
     if(!it) return
@@ -142,6 +144,7 @@ export default function PreviewPane({open, onClose}){
       if(Array.isArray(j)){
         setPreviews(j)
         setCurrentPreviewIdx(0)
+        currentPreviewIdxRef.current = 0
       }
     }catch(e){
       console.error('failed to load previews', e)
@@ -153,13 +156,22 @@ export default function PreviewPane({open, onClose}){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndex, items])
 
+  useEffect(()=>{
+    currentPreviewIdxRef.current = currentPreviewIdx
+  }, [currentPreviewIdx])
+
   const [deleting, setDeleting] = useState(false)
+
+  function selectPreviewIndex(idx){
+    currentPreviewIdxRef.current = idx
+    setCurrentPreviewIdx(idx)
+  }
 
   async function deleteCurrentPreview(){
     if(selectedIndex===null) return
     const it = items[selectedIndex]
     if(!it) return
-    const idx = currentPreviewIdx
+    const idx = currentPreviewIdxRef.current
     const ok = window.confirm('Delete this preview image? This cannot be undone.')
     if(!ok) return
     setDeleting(true)
@@ -298,7 +310,7 @@ export default function PreviewPane({open, onClose}){
                 <div className="modal-timeline-wrap">
                   <div className="modal-timeline">
                     {previews && previews.length>0 ? previews.map(p=> (
-                      <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>setCurrentPreviewIdx(p.index)} />
+                      <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index)} />
                     )) : (
                       <div className="timeline-empty">No previews</div>
                     )}

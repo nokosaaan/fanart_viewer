@@ -9,6 +9,7 @@ export default function EditFields({ item, onClose, onSaved }){
   const [characters, setCharacters] = useState((item.characters||[]).join(', '))
   const [tags, setTags] = useState((item.tags||[]).join(', '))
   const [titles, setTitles] = useState((item.titles||[]).join(', '))
+  const [situation, setSituation] = useState((item.situation||'').toUpperCase())
   const [loading, setLoading] = useState(false)
 
   function parseList(str){
@@ -21,6 +22,7 @@ export default function EditFields({ item, onClose, onSaved }){
       characters: parseList(characters),
       tags: tags.trim()===''? []: parseList(tags),
       titles: parseList(titles),
+      situation: situation,
     }
     setLoading(true)
     try{
@@ -63,6 +65,16 @@ export default function EditFields({ item, onClose, onSaved }){
         <div style={{marginBottom:8}}>
           <label style={{display:'block', fontSize:12}}>Titles (comma separated)</label>
           <input style={{width:'100%'}} value={titles} onChange={e=>setTitles(e.target.value)} />
+        </div>
+        <div style={{marginBottom:8}}>
+          <label style={{display:'block', fontSize:12}}>Situation</label>
+          <select style={{width:'100%'}} value={situation} onChange={e=>setSituation(e.target.value)}>
+            <option value="">—</option>
+            <option value="SOLO">SOLO</option>
+            <option value="CP">CP</option>
+            <option value="MULTIPLE">MULTIPLE</option>
+            <option value="PARODY">PARODY</option>
+          </select>
         </div>
         <div style={{marginTop:12}}>
           <button className="btn" onClick={save} disabled={loading}>{loading? 'Saving...' : 'Save'}</button>

@@ -55,6 +55,7 @@ function ItemRow({ it }){
   const [showEditor, setShowEditor] = useState(false)
   const [charsState, setCharsState] = useState(it.characters || [])
   const [tagsState, setTagsState] = useState(it.tags || [])
+  const [situationState, setSituationState] = useState(it.situation || '')
 
   async function onFetch(e){
     e && e.preventDefault()
@@ -192,8 +193,8 @@ function ItemRow({ it }){
             )}
             {/* Situation chip */}
             <div style={{marginLeft:8}}>
-              {it.situation && (
-                <span className={`situation-chip s-${(it.situation||'').toLowerCase()}`}>{(it.situation||'').toUpperCase()}</span>
+              {situationState && (
+                <span className={`situation-chip s-${(situationState||'').toLowerCase()}`}>{(situationState||'').toUpperCase()}</span>
               )}
             </div>
             {/* Characters: always show all characters when present */}
@@ -325,6 +326,7 @@ function ItemRow({ it }){
           // update local chars/tags state
           setCharsState(newItem.characters || [])
           setTagsState(newItem.tags || [])
+          setSituationState(newItem.situation || '')
           setShowEditor(false)
           try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id } })) }catch(e){}
         }} />

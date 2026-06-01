@@ -1,6 +1,6 @@
 import React, {useState} from 'react'
 
-export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter}){
+export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly}){
   const [open, setOpen] = useState(false)
 
   function onToggleCP(e){
@@ -65,6 +65,12 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
               ))}
             </div>
             <div>
+              <button
+                className={`cp-chip ${titleMissingOnly ? 'enabled' : ''}`}
+                onClick={() => setTitleMissingOnly(v => !v)}
+              >
+                {titleMissingOnly ? 'Title: MISSING' : 'Title: ANY'}
+              </button>
               <button
                 className={`cp-chip ${includeCP ? 'enabled' : ''}`}
                 onClick={() => {

@@ -11,6 +11,7 @@ export default function App(){
   const [includeR18, setIncludeR18] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [situationFilter, setSituationFilter] = useState('ALL')
+  const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
   const PAGE_SIZE = 50
   const [nextPageUrl, setNextPageUrl] = useState(null)
@@ -226,19 +227,32 @@ export default function App(){
   const filtered = useMemo(()=>{
     const q = query.trim().toLowerCase()
     const list = Array.isArray(items) ? items : (items && Array.isArray(items.results) ? items.results : [])
+
+    function hasAnyTitle(it){
+      if(!it) return false
+      if(Array.isArray(it.titles)){
+        return it.titles.some(t => String(t || '').trim().length > 0)
+      }
+      if(typeof it.titles === 'string'){
+        return it.titles.trim().length > 0
+      }
+      return false
+    }
+
     return list.filter(it=>{
       if(!includeCP && (it.situation||'').toUpperCase()==='CP') return false
       if(!includeR18 && (it.situation||'').toUpperCase()==='R18') return false
       if(situationFilter && situationFilter!=='ALL'){
         if(((it.situation||'').toUpperCase()) !== situationFilter) return false
       }
+      if(titleMissingOnly && hasAnyTitle(it)) return false
       if(filters.length===0 && q==='') return true
       const hay = [ ...(it.titles||[]), ...(it.characters||[]), ...(it.tags||[]), it.artist, it.link ].join(' ').toLowerCase()
       const matchesQuery = q==='' || hay.includes(q)
       const matchesFilters = filters.every(f => hay.includes(f.toLowerCase()))
       return matchesQuery && matchesFilters
     })
-  }, [items, query, filters, includeCP, situationFilter])
+  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly])
   
 
   // pagination over filtered results
@@ -246,7 +260,7 @@ export default function App(){
   useEffect(()=>{
     // reset to first page if filters change
     setPageIndex(0)
-  }, [query, filters, includeCP, includeR18, situationFilter])
+  }, [query, filters, includeCP, includeR18, situationFilter, titleMissingOnly])
 
   const paginatedItems = useMemo(()=>{
     const start = pageIndex * PAGE_SIZE
@@ -346,6 +360,8 @@ export default function App(){
         setPreviewOpen={setPreviewOpen}
         situationFilter={situationFilter}
         setSituationFilter={setSituationFilter}
+        titleMissingOnly={titleMissingOnly}
+        setTitleMissingOnly={setTitleMissingOnly}
       />
       <ScrollList items={paginatedItems} />
       {nextPageUrl && (

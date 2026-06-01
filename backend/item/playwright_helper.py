@@ -16,6 +16,9 @@ except Exception:
     HAVE_RENDERER = False
 
 
+MIN_IMAGE_FETCH_BYTES = 50000
+
+
 def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
     """Return list of (idx, bytes, content_type) fetched from target_url using Playwright login to Pixiv.
     Requires PIXIV_USER and PIXIV_PASS in env.
@@ -435,12 +438,12 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                             except Exception:
                                 b, ct = None, None
                         attempted_fetches.append({'url': turl, 'size': len(b) if b else 0, 'content_type': ct, 'phase': 'main'})
-                        if b and len(b) >= 10240:
+                        if b and len(b) >= MIN_IMAGE_FETCH_BYTES:
                             body, content_type = b, ct
                             break
                     # prefer substantial images; skip tiny assets
                     try:
-                        if body and len(body) >= 10240:
+                        if body and len(body) >= MIN_IMAGE_FETCH_BYTES:
                             results.append((i, body, content_type, candidate_i))
                         else:
                             main_small_found.append((candidate_i, len(body) if body else 0, content_type))
@@ -474,11 +477,11 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                         except Exception:
                             b, ct = None, None
                     attempted_fetches.append({'url': turl, 'size': len(b) if b else 0, 'content_type': ct, 'phase': 'main'})
-                    if b and len(b) >= 10240:
+                    if b and len(b) >= MIN_IMAGE_FETCH_BYTES:
                         body, content_type = b, ct
                         break
                 try:
-                    if body and len(body) >= 10240:
+                    if body and len(body) >= MIN_IMAGE_FETCH_BYTES:
                         results.append((0, body, content_type, turl))
                     else:
                         main_small_found.append((candidate_single, len(body) if body else 0, content_type))
@@ -515,7 +518,7 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                                 body, ct = None, None
                         attempted_fetches.append({'url': h, 'size': len(body) if body else 0, 'content_type': ct, 'phase': 'pw_fallback'})
                         ok = False
-                        if ct and ct.startswith('image') and body and len(body) >= 10240:
+                        if ct and ct.startswith('image') and body and len(body) >= MIN_IMAGE_FETCH_BYTES:
                             results.append((0, body, ct, h))
                             fallback_used = True
                             ok = True
@@ -536,7 +539,7 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
                             except Exception:
                                 body2, content_type = None, None
                         attempted_fetches.append({'url': candidate, 'size': len(body2) if body2 else 0, 'content_type': content_type, 'phase': 'pw_fallback'})
-                        if body2 is None or len(body2) < 10240:
+                        if body2 is None or len(body2) < MIN_IMAGE_FETCH_BYTES:
                             pw_fallback_small_found.append((candidate, len(body2) if body2 else 0, content_type))
                             continue
                         results.append((0, body2, content_type, candidate))

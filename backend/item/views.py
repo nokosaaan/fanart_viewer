@@ -34,6 +34,9 @@ except Exception:
     BeautifulSoup = None
 
 
+MIN_IMAGE_FETCH_BYTES = 50000
+
+
 def _fetch_image_via_requests(url, min_size=None):
     """Fetch a single URL via server-side requests.
 
@@ -474,9 +477,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                                     # skip SVGs
                                     if ctype and ctype.lower().split(';',1)[0] == 'image/svg+xml':
                                         continue
-                                    # Skip very small images (icons/UI assets)
+                                    # Skip images at or below the minimum fetch size.
                                     try:
-                                        if len(body or b'') < 10240:
+                                        if len(body or b'') < MIN_IMAGE_FETCH_BYTES:
                                             continue
                                     except Exception:
                                         pass
@@ -508,7 +511,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                             if h:
                                 # When fetching Playwright-discovered URLs, skip very small
                                 # assets (icons/thumbnails). Require at least 10KB.
-                                b, ct = _internal_fetch(h, min_size=10240)
+                                b, ct = _internal_fetch(h, min_size=MIN_IMAGE_FETCH_BYTES)
                                 if b and ct:
                                     candidates.append((h, b, ct))
                                     used_method = used_method or 'playwright'
@@ -519,16 +522,14 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'detail': 'No image candidates found or failed to fetch', 'hints': hints}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
         # If Playwright was explicitly requested, enforce a global minimum
-        # size threshold to remove small icons/thumbnails that might have
-        # been collected earlier via HTML scraping. This ensures the
-        # Playwright path yields only substantial image candidates.
+        # Enforce the minimum image size across all scraping methods so
+        # small icons/thumbnails are never returned to the client.
         try:
             if force_method == 'playwright':
-                min_bytes = 10240
                 filtered = []
                 for (u, b, ct) in candidates:
                     try:
-                        if b and len(b) >= min_bytes:
+                        if b and len(b) >= MIN_IMAGE_FETCH_BYTES:
                             filtered.append((u, b, ct))
                     except Exception:
                         # if size check fails, conservatively keep the candidate
@@ -749,7 +750,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     def update_fields(self, request, pk=None):
         """Update editable JSON fields on an Item (characters, tags, titles).
 
-        Expects JSON body with any of: `characters` (list), `tags` (list|null), `titles` (list).
+        Expects JSON body with any of: `characters` (list), `tags` (list|null), `titles` (list), `situation` (string).
         Returns the updated serialized item on success.
         """
         item = self.get_object()
@@ -776,6 +777,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({'detail': 'titles must be a list'}, status=status.HTTP_400_BAD_REQUEST)
             item.titles = titles
             updates['titles'] = titles
+
+        if 'situation' in data:
+            situation = data.get('situation')
+            if situation is None:
+                situation = ''
+            if not isinstance(situation, str):
+                return Response({'detail': 'situation must be a string'}, status=status.HTTP_400_BAD_REQUEST)
+            item.situation = situation.strip().upper()
+            updates['situation'] = item.situation
 
         if not updates:
             return Response({'detail': 'No updatable fields provided'}, status=status.HTTP_400_BAD_REQUEST)
