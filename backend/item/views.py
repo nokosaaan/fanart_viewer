@@ -222,7 +222,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         used_method = None
 
         # If the target URL itself points to an image, try that first
-        body, ctype = _internal_fetch(target_url)
+        body, ctype = _internal_fetch(target_url, min_size=MIN_IMAGE_FETCH_BYTES)
         candidates = []
         if body and ctype:
             used_method = 'direct'
@@ -309,7 +309,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     if cand_url in seen:
                         continue
                     seen.add(cand_url)
-                    b, ct = _internal_fetch(cand_url)
+                    b, ct = _internal_fetch(cand_url, min_size=MIN_IMAGE_FETCH_BYTES)
                     if b and ct:
                         candidates.append((cand_url, b, ct))
                         used_method = 'html'
@@ -332,7 +332,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         if tw_url in seen:
                             continue
                         try:
-                            b, ct = _internal_fetch(tw_url)
+                            b, ct = _internal_fetch(tw_url, min_size=MIN_IMAGE_FETCH_BYTES)
                             if b and ct:
                                 candidates.append((tw_url, b, ct))
                                 used_method = used_method or 'html'
