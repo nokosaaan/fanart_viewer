@@ -5,6 +5,7 @@ from a clean machine (no existing JSON fixture, no DB migrations applied).
 It uses Docker and Docker Compose to provide a reproducible environment.
 
 Prerequisites
+ - WSL2 or Ubuntu development environment
  - Docker (engine) installed and working
  - Docker Compose (v2 or later) or `docker compose` plugin
  - git (to clone the repository)
