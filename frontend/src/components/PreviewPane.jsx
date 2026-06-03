@@ -310,8 +310,8 @@ export default function PreviewPane({open, onClose}){
         <div className="preview-modal-backdrop" onClick={()=>setSelectedIndex(null)}>
           <div className="preview-modal">
               {/* Left/right full-height edge zones for consistent click areas */}
-            <div className="modal-edge modal-edge-left" onClick={prev} aria-label="Previous" />
-            <div className="modal-edge modal-edge-right" onClick={next} aria-label="Next" />
+            <div className="modal-edge modal-edge-left" onClick={e=>{e.stopPropagation(); prev()}} aria-label="Previous" />
+            <div className="modal-edge modal-edge-right" onClick={e=>{e.stopPropagation(); next()}} aria-label="Next" />
 
               {/* Close button (top-right) */}
               <button className="modal-close" onClick={()=>setSelectedIndex(null)} aria-label="Close">✕</button>

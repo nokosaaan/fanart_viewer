@@ -767,6 +767,28 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'detail': 'Failed to delete item', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+    @action(detail=False, methods=['get'], url_path='all_titles')
+    def all_titles(self, request):
+        """Return all unique titles used across all items, sorted alphabetically."""
+        all_titles = set()
+        for item in Item.objects.only('titles'):
+            if isinstance(item.titles, list):
+                for t in item.titles:
+                    if t and isinstance(t, str):
+                        all_titles.add(t.strip())
+        return Response(sorted(all_titles))
+
+    @action(detail=False, methods=['get'], url_path='all_characters')
+    def all_characters(self, request):
+        """Return all unique characters used across all items, sorted alphabetically."""
+        all_chars = set()
+        for item in Item.objects.only('characters'):
+            if isinstance(item.characters, list):
+                for c in item.characters:
+                    if c and isinstance(c, str):
+                        all_chars.add(c.strip())
+        return Response(sorted(all_chars))
+
     @action(detail=True, methods=['post'], url_path='update_fields')
     def update_fields(self, request, pk=None):
         """Update editable JSON fields on an Item (characters, tags, titles).
