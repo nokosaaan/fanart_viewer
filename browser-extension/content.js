@@ -170,17 +170,11 @@
     }
 
     const testId = (element.getAttribute('data-testid') || '').toLowerCase()
-    if (testId === 'unbookmark') {
-      return false
-    }
-    if (testId === 'bookmark') {
+    if (testId === 'bookmark' || testId === 'unbookmark') {
       return true
     }
 
     const label = `${element.getAttribute('aria-label') || ''} ${element.getAttribute('title') || ''} ${element.textContent || ''}`.trim().toLowerCase()
-    if (/remove\s+bookmark|unbookmark/.test(label)) {
-      return false
-    }
     return /bookmark/.test(label)
   }
 
@@ -260,9 +254,61 @@
     sendBookmark(currentUrl)
   }
 
+  // --- Pixiv support ---
+
+  function getPixivIllustId() {
+    const match = location.pathname.match(/\/artworks\/(\d+)/)
+    return match ? match[1] : null
+  }
+
+  function getPixivBookmarkElementFromPath(event) {
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+    for (const node of path) {
+      if (!(node instanceof Element)) continue
+      const label = (node.getAttribute('aria-label') || '').trim()
+      if (label === 'ブックマーク' || label === 'ブックマーク済み') return node
+      // fallback: anchor linking to bookmark_add.php (older Pixiv or tag dialog)
+      const href = node.getAttribute('href') || ''
+      if (href.includes('bookmark_add.php')) return node
+    }
+    if (event.target instanceof Element) {
+      return event.target.closest('[aria-label="ブックマーク"], [aria-label="ブックマーク済み"], a[href*="bookmark_add.php"]')
+    }
+    return null
+  }
+
+  function shouldTriggerPixivBookmark(element) {
+    if (!element) return false
+    const label = (element.getAttribute('aria-label') || '').trim()
+    if (label === 'ブックマーク' || label === 'ブックマーク済み') return true
+    return (element.getAttribute('href') || '').includes('bookmark_add.php')
+  }
+
+  function handlePixivBookmark(event) {
+    const illustId = getPixivIllustId()
+    if (!illustId) return
+
+    const element = getPixivBookmarkElementFromPath(event)
+    if (!element || !shouldTriggerPixivBookmark(element)) return
+
+    const artworkUrl = `https://www.pixiv.net/artworks/${illustId}`
+
+    cleanupRecent()
+    const now = Date.now()
+    const lastHit = recentUrls.get(artworkUrl)
+    if (lastHit && now - lastHit < DEDUPE_MS) return
+
+    recentUrls.set(artworkUrl, now)
+    sendBookmark(artworkUrl)
+  }
+
   document.addEventListener('pointerdown', handlePotentialBookmark, true)
   document.addEventListener('mousedown', handlePotentialBookmark, true)
   document.addEventListener('click', handlePotentialBookmark, true)
+
+  document.addEventListener('pointerdown', handlePixivBookmark, true)
+  document.addEventListener('mousedown', handlePixivBookmark, true)
+  document.addEventListener('click', handlePixivBookmark, true)
 
   showToast('fanart_viewer bookmark bridge loaded')
 })()

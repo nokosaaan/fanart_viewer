@@ -603,28 +603,55 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'detail': 'No URL provided'}, status=status.HTTP_400_BAD_REQUEST)
 
         item = _find_item_by_url(target_url)
-        if not item:
-            tweet_id = None
-            try:
-                match = re.search(r'/status/(\d+)', _normalize_lookup_url(target_url))
-                if match:
-                    tweet_id = int(match.group(1))
-            except Exception:
-                tweet_id = None
+        item_created = False
 
-            if not tweet_id:
+        if item:
+            # Item exists — skip if preview is already stored to avoid redundant fetches.
+            # If preview is missing (e.g. a previous fetch failed), fall through and retry.
+            try:
+                has_preview = item.preview_images.exists() or bool(item.preview_data)
+            except Exception:
+                has_preview = False
+            if has_preview:
+                return Response({'status': 'already_processed', 'item_id': item.id}, status=status.HTTP_200_OK)
+        else:
+            normalized = _normalize_lookup_url(target_url)
+            external_id = None
+            source = None
+
+            # Twitter/X: extract tweet ID from /status/<id>
+            try:
+                m = re.search(r'/status/(\d+)', normalized)
+                if m:
+                    external_id = int(m.group(1))
+                    source = 'twitter_bookmark'
+            except Exception:
+                pass
+
+            # Pixiv: extract illust ID from /artworks/<id>
+            if external_id is None:
+                try:
+                    m = re.search(r'/artworks/(\d+)', normalized)
+                    if m:
+                        external_id = int(m.group(1))
+                        source = 'pixiv_bookmark'
+                except Exception:
+                    pass
+
+            if external_id is None:
                 return Response({'detail': 'No matching item found for URL', 'url': target_url}, status=status.HTTP_404_NOT_FOUND)
 
             item = Item.objects.create(
-                external_id=tweet_id,
-                source='twitter_bookmark',
+                external_id=external_id,
+                source=source,
                 situation='',
                 titles=[],
                 characters=[],
                 artist='',
-                link=_normalize_lookup_url(target_url),
+                link=normalized,
                 tags=None,
             )
+            item_created = True
 
         # Run the expensive preview fetch/save flow after returning the HTTP response
         # so browser-side callers do not sit in a long pending state.
@@ -642,7 +669,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             {
                 'status': 'processing',
                 'item_id': item.id,
-                'item_created': True if item.source == 'twitter_bookmark' else False,
+                'item_created': item_created,
             },
             status=status.HTTP_202_ACCEPTED,
         )

@@ -66,6 +66,20 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
         pass
       page = context.new_page()
 
+      # Inject site-specific cookies before navigation for authenticated access.
+      # PIXIV_PHPSESSID env var enables R18 content on Pixiv.
+      try:
+        pixiv_session = os.environ.get('PIXIV_PHPSESSID')
+        if pixiv_session and 'pixiv.net' in url:
+          context.add_cookies([{
+            'name': 'PHPSESSID',
+            'value': pixiv_session,
+            'domain': '.pixiv.net',
+            'path': '/',
+          }])
+      except Exception:
+        pass
+
       try:
         page.goto(url, wait_until='networkidle', timeout=timeout)
       except Exception:
@@ -74,6 +88,18 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
           page.wait_for_selector('#react-root', timeout=timeout)
         except Exception:
           pass
+
+      # Dismiss sensitive content warnings (Twitter/X shows an overlay with
+      # data-testid="sensitive-content-warning" that hides images until clicked).
+      try:
+        page.evaluate("""
+          () => {
+            document.querySelectorAll('[data-testid="sensitive-content-warning"] button').forEach(b => b.click())
+          }
+        """)
+        page.wait_for_timeout(600)
+      except Exception:
+        pass
 
       # perform gentle scrolls to trigger lazy-loading images
       try:

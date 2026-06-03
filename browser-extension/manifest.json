@@ -9,7 +9,7 @@
     "http://127.0.0.1:8000/*",
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://www.pixiv.net/artworks/*"
+    "https://www.pixiv.net/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -17,7 +17,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*", "https://twitter.com/*", "https://www.pixiv.net/artworks/*"],
+      "matches": ["https://x.com/*", "https://twitter.com/*", "https://www.pixiv.net/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
