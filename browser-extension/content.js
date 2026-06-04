@@ -261,27 +261,42 @@
     return match ? match[1] : null
   }
 
+  function _isPixivBookmarkNode(node) {
+    if (!(node instanceof Element)) return false
+    const label = (node.getAttribute('aria-label') || '').trim()
+    const title = (node.getAttribute('title') || '').trim()
+    const gtm   = (node.getAttribute('data-gtm-value') || '').toLowerCase()
+    const href  = node.getAttribute('href') || ''
+    // Japanese: 前方一致（「ブックマーク」「ブックマーク済み」「ブックマーク済」など）
+    if (/^ブックマーク/.test(label) || /^ブックマーク/.test(title)) return true
+    // English: case-insensitive prefix match
+    if (/^bookmarks?$/i.test(label) || /^bookmarks?$/i.test(title)) return true
+    // Pixiv GTM analytics attribute
+    if (gtm === 'bookmark_add' || gtm === 'bookmark_delete' || gtm === 'bookmark_remove') return true
+    // Legacy bookmark_add.php link
+    if (href.includes('bookmark_add.php')) return true
+    return false
+  }
+
   function getPixivBookmarkElementFromPath(event) {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : []
     for (const node of path) {
-      if (!(node instanceof Element)) continue
-      const label = (node.getAttribute('aria-label') || '').trim()
-      if (label === 'ブックマーク' || label === 'ブックマーク済み') return node
-      // fallback: anchor linking to bookmark_add.php (older Pixiv or tag dialog)
-      const href = node.getAttribute('href') || ''
-      if (href.includes('bookmark_add.php')) return node
+      if (_isPixivBookmarkNode(node)) return node
     }
     if (event.target instanceof Element) {
-      return event.target.closest('[aria-label="ブックマーク"], [aria-label="ブックマーク済み"], a[href*="bookmark_add.php"]')
+      return event.target.closest(
+        '[aria-label^="ブックマーク"], [title^="ブックマーク"], ' +
+        '[aria-label="Bookmark"], [aria-label="Bookmarked"], ' +
+        '[title="Bookmark"], [title="Bookmarked"], ' +
+        '[data-gtm-value="bookmark_add"], [data-gtm-value="bookmark_delete"], ' +
+        'a[href*="bookmark_add.php"]'
+      )
     }
     return null
   }
 
   function shouldTriggerPixivBookmark(element) {
-    if (!element) return false
-    const label = (element.getAttribute('aria-label') || '').trim()
-    if (label === 'ブックマーク' || label === 'ブックマーク済み') return true
-    return (element.getAttribute('href') || '').includes('bookmark_add.php')
+    return _isPixivBookmarkNode(element)
   }
 
   function handlePixivBookmark(event) {

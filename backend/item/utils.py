@@ -63,6 +63,13 @@ def _fetch_via_api(tweet_url: str) -> List[str]:
     return urls
 
 
+def _upgrade_twitter_img_size(url: str) -> str:
+    """Upgrade pbs.twimg.com image URLs from small/medium/thumb to large for better quality."""
+    if 'pbs.twimg.com' not in url:
+        return url
+    return re.sub(r'(?<=[?&])name=(?:small|medium|thumb|360x360|240x240)', 'name=large', url)
+
+
 def _fetch_via_scrape(tweet_url: str) -> List[str]:
     # Simple HTML scraping fallback. Works for many public tweets without login.
     headers = {
@@ -84,7 +91,7 @@ def _fetch_via_scrape(tweet_url: str) -> List[str]:
         # ignore inline/data URIs (these can be extremely large blobs)
         if u.strip().startswith('data:'):
             return
-        full = urljoin(tweet_url, u)
+        full = _upgrade_twitter_img_size(urljoin(tweet_url, u))
         if full not in seen:
             seen.add(full)
             results.append(full)

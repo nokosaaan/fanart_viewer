@@ -306,6 +306,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     continue
                 try:
                     cand_url = urljoin(target_url, h)
+                    # Upgrade Twitter thumbnail URLs to large for better quality
+                    if 'pbs.twimg.com' in cand_url:
+                        cand_url = re.sub(r'(?<=[?&])name=(?:small|medium|thumb|360x360|240x240)', 'name=large', cand_url)
                     if cand_url in seen:
                         continue
                     seen.add(cand_url)

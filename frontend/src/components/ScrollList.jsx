@@ -53,6 +53,7 @@ function ItemRow({ it }){
   const [fetchMethod, setFetchMethod] = useState('html')
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [showEditor, setShowEditor] = useState(false)
+  const [titlesState, setTitlesState] = useState(it.titles || [])
   const [charsState, setCharsState] = useState(it.characters || [])
   const [tagsState, setTagsState] = useState(it.tags || [])
   const [situationState, setSituationState] = useState(it.situation || '')
@@ -177,9 +178,9 @@ function ItemRow({ it }){
         <div className="col titles-col">
           <div className="col-header">Titles</div>
           <div className="chips">
-            {Array.isArray(it.titles) && it.titles.length>0 ? (
+            {Array.isArray(titlesState) && titlesState.length>0 ? (
               <>
-                {it.titles.slice(0,2).map((t,i)=> (
+                {titlesState.slice(0,2).map((t,i)=> (
                   <div key={i} style={{display:'inline-flex', alignItems:'center', marginRight:6}}>
                     <button className="chip" onClick={()=>{}} style={{paddingRight:8}}>{t}</button>
                       <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(it.link || ''); alert('Copied link: '+(it.link||'')) }catch(_){ window.prompt('Copy link:', it.link||'') } }} style={{marginLeft:4, padding:'6px'}} title="Copy link">
@@ -188,16 +189,16 @@ function ItemRow({ it }){
                     {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{marginLeft:4, padding:'6px'}} title="Open link"><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
                   </div>
                 ))}
-                {it.titles.length>2 && (
-                  <button className="chip more" onClick={()=>setShowTitles(s=>!s)}>{showTitles? '▲' : `+${it.titles.length-2}`}</button>
+                {titlesState.length>2 && (
+                  <button className="chip more" onClick={()=>setShowTitles(s=>!s)}>{showTitles? '▲' : `+${titlesState.length-2}`}</button>
                 )}
               </>
             ) : (
               <div className="empty">—</div>
             )}
-            {showTitles && Array.isArray(it.titles) && (
+            {showTitles && Array.isArray(titlesState) && (
               <div className="chip-dropdown">
-                {it.titles.map((t,i)=> (
+                {titlesState.map((t,i)=> (
                   <div key={i} className="chip-row" style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
                     <div style={{flex:1, wordBreak:'break-word'}}>{t}</div>
                     <div style={{marginLeft:8, display:'flex', alignItems:'center', gap:6}}>
@@ -347,6 +348,7 @@ function ItemRow({ it }){
       showEditor && (
         <EditFields item={it} onClose={()=>setShowEditor(false)} onSaved={(newItem)=>{
           // update local chars/tags state
+          setTitlesState(newItem.titles || [])
           setCharsState(newItem.characters || [])
           setTagsState(newItem.tags || [])
           setSituationState(newItem.situation || '')

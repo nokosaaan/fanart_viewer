@@ -37,7 +37,12 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
     logged_in = False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not headful)
+        launch_args = [
+            '--no-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled',
+        ]
+        browser = p.chromium.launch(headless=not headful, args=launch_args)
         ctx = browser.new_context()
         page = ctx.new_page()
 
