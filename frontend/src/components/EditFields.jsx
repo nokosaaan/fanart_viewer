@@ -142,6 +142,7 @@ export default function EditFields({ item, onClose, onSaved }){
             <option value="CP">CP</option>
             <option value="MULTIPLE">MULTIPLE</option>
             <option value="PARODY">PARODY</option>
+            <option value="R18">R18</option>
           </select>
         </div>
         <div style={{marginBottom:8}}>

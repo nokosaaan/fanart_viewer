@@ -26,6 +26,7 @@ services:
       - DATABASE_PORT=5432
       # Database and API credentials are loaded from the project .env via env_file
       - HEADLESS_ALLOWED=1
+      - PIXIV_PHPSESSID=${PIXIV_PHPSESSID}
     depends_on:
       - db
 

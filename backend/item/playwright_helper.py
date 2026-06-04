@@ -28,8 +28,10 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
 
     pixiv_user = os.environ.get('PIXIV_USER') or os.environ.get('PIXIV_USERNAME')
     pixiv_pass = os.environ.get('PIXIV_PASS') or os.environ.get('PIXIV_PASSWORD')
-    if not pixiv_user or not pixiv_pass:
-        raise RuntimeError('PIXIV_USER/PIXIV_PASS not set in environment')
+    pixiv_phpsessid = os.environ.get('PIXIV_PHPSESSID')
+
+    if not pixiv_phpsessid and (not pixiv_user or not pixiv_pass):
+        raise RuntimeError('PIXIV_USER/PIXIV_PASS or PIXIV_PHPSESSID not set in environment')
 
     results = []
     logged_in = False
@@ -39,45 +41,61 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
         ctx = browser.new_context()
         page = ctx.new_page()
 
-        # login
-        login_url = 'https://accounts.pixiv.net/login'
-        page.goto(login_url)
-        try:
-            if page.query_selector('input[name="pixiv_id"]'):
-                page.fill('input[name="pixiv_id"]', pixiv_user)
-            elif page.query_selector('input[id="LoginForm-username"]'):
-                page.fill('input[id="LoginForm-username"]', pixiv_user)
-            else:
-                if page.query_selector('input[type="email"]'):
-                    page.fill('input[type="email"]', pixiv_user)
+        if pixiv_phpsessid:
+            # Inject session cookie directly — faster and more reliable than
+            # username/password login (avoids CAPTCHA and 2FA issues).
+            try:
+                ctx.add_cookies([{
+                    'name': 'PHPSESSID',
+                    'value': pixiv_phpsessid,
+                    'domain': '.pixiv.net',
+                    'path': '/',
+                    'httpOnly': True,
+                    'secure': True,
+                }])
+                logged_in = True
+            except Exception:
+                logged_in = False
+        else:
+            # login via username/password
+            login_url = 'https://accounts.pixiv.net/login'
+            page.goto(login_url)
+            try:
+                if page.query_selector('input[name="pixiv_id"]'):
+                    page.fill('input[name="pixiv_id"]', pixiv_user)
+                elif page.query_selector('input[id="LoginForm-username"]'):
+                    page.fill('input[id="LoginForm-username"]', pixiv_user)
+                else:
+                    if page.query_selector('input[type="email"]'):
+                        page.fill('input[type="email"]', pixiv_user)
 
-            if page.query_selector('input[name="password"]'):
-                page.fill('input[name="password"]', pixiv_pass)
-            elif page.query_selector('input[id="LoginForm-password"]'):
-                page.fill('input[id="LoginForm-password"]', pixiv_pass)
+                if page.query_selector('input[name="password"]'):
+                    page.fill('input[name="password"]', pixiv_pass)
+                elif page.query_selector('input[id="LoginForm-password"]'):
+                    page.fill('input[id="LoginForm-password"]', pixiv_pass)
 
-            if page.query_selector('button[type="submit"]'):
-                page.click('button[type="submit"]')
-            else:
-                page.keyboard.press('Enter')
-        except Exception:
-            # proceed, maybe already logged in
-            pass
+                if page.query_selector('button[type="submit"]'):
+                    page.click('button[type="submit"]')
+                else:
+                    page.keyboard.press('Enter')
+            except Exception:
+                # proceed, maybe already logged in
+                pass
 
-        try:
-            page.wait_for_load_state('networkidle', timeout=20000)
-        except Exception:
-            pass
+            try:
+                page.wait_for_load_state('networkidle', timeout=20000)
+            except Exception:
+                pass
 
-        # after attempting login, inspect cookies to heuristically detect login success
-        try:
-            cookies = ctx.cookies()
-            for c in cookies:
-                if c.get('domain') and ('pixiv' in c.get('domain') or 'pximg' in c.get('domain')):
-                    logged_in = True
-                    break
-        except Exception:
-            logged_in = False
+            # after attempting login, inspect cookies to heuristically detect login success
+            try:
+                cookies = ctx.cookies()
+                for c in cookies:
+                    if c.get('domain') and ('pixiv' in c.get('domain') or 'pximg' in c.get('domain')):
+                        logged_in = True
+                        break
+            except Exception:
+                logged_in = False
 
         # Attach a response listener to capture image responses made while
         # loading the target page. This captures requests that the logged-in

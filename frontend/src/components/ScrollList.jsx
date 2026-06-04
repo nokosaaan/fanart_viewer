@@ -267,15 +267,16 @@ function ItemRow({ it }){
       </div>
 
       <div className="actions-row">
-        <form onSubmit={onFetch} style={{display:'inline-block'}}>
-          <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)} />
+        <div style={{display:'inline-block'}}>
+          <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); onFetch(e) } }} />
           <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
             <option value="html">HTML scrape</option>
             <option value="api">Use API</option>
             <option value="playwright">Use Browser (Playwright)</option>
           </select>
-          <button className="btn" type="submit" disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
-        </form>
+          <button className="btn" type="button" onClick={onFetch} disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
+        </div>
         <button className="btn" style={{marginLeft:8}} onClick={onAddToPreview} disabled={loading}>{loading? 'Adding...' : 'Add to Preview'}</button>
         <button className="btn" style={{marginLeft:8}} onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
