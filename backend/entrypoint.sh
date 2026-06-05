@@ -15,8 +15,8 @@ python manage.py makemigrations --noinput || true
 echo "Running migrations..."
 python manage.py migrate --noinput
 
-echo "Importing JSON data (idempotent)..."
-python manage.py import_json_data || true
+# echo "Importing JSON data (idempotent)..."
+# python manage.py import_json_data || true
 
 echo "Starting server..."
 exec python manage.py runserver 0.0.0.0:8000
