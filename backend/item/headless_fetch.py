@@ -37,6 +37,7 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
         raise RuntimeError(f'Unsupported browser: {browser_name}')
       # Launch browser with some flags to reduce automation detection surface
       launch_args = [
+        '--no-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-dev-shm-usage',
       ]
@@ -77,6 +78,25 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
             'domain': '.pixiv.net',
             'path': '/',
           }])
+      except Exception:
+        pass
+
+      # TWITTER_AUTH_TOKEN env var enables viewing sensitive user content on X/Twitter.
+      # The account must have "Display media that may contain sensitive content" enabled.
+      try:
+        twitter_auth_token = os.environ.get('TWITTER_AUTH_TOKEN')
+        if twitter_auth_token and ('twitter.com' in url or 'x.com' in url):
+          twitter_cookies = []
+          for domain in ('.twitter.com', '.x.com'):
+            twitter_cookies.append({
+              'name': 'auth_token',
+              'value': twitter_auth_token,
+              'domain': domain,
+              'path': '/',
+              'httpOnly': True,
+              'secure': True,
+            })
+          context.add_cookies(twitter_cookies)
       except Exception:
         pass
 
