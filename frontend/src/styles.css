@@ -113,3 +113,33 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 
 .pagination-controls{ display:flex; justify-content:center; align-items:center; gap:8px; margin:12px 0 }
 .pagination-controls .btn{ padding:6px 10px }
+
+/* Google Drive style toast notification */
+@keyframes fv-toast-in{ from{ opacity:0; transform:translateY(12px) } to{ opacity:1; transform:translateY(0) } }
+@keyframes fv-spin{ to{ transform:rotate(360deg) } }
+.fv-toast{
+  position:fixed; bottom:20px; right:20px; z-index:9999;
+  min-width:280px; max-width:420px;
+  background:#323232; color:#fff;
+  padding:14px 16px; border-radius:4px;
+  box-shadow:0 4px 16px rgba(0,0,0,0.35);
+  display:flex; align-items:center; gap:12px;
+  font-size:13px; line-height:1.4;
+  animation:fv-toast-in 0.2s ease;
+}
+.fv-toast--success{ background:#1e4620 }
+.fv-toast--error  { background:#7f1d1d }
+.fv-toast__spinner{
+  width:16px; height:16px; border-radius:50%; flex-shrink:0;
+  border:2px solid rgba(255,255,255,0.25);
+  border-top-color:#fff;
+  animation:fv-spin 0.7s linear infinite;
+}
+.fv-toast__icon{ font-size:15px; flex-shrink:0; line-height:1 }
+.fv-toast__msg{ flex:1; word-break:break-word }
+.fv-toast__close{
+  background:none; border:none; color:rgba(255,255,255,0.6);
+  cursor:pointer; padding:0; font-size:16px; line-height:1;
+  flex-shrink:0; margin-left:4px;
+}
+.fv-toast__close:hover{ color:#fff }

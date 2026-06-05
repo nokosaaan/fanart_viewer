@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
 import EditFields from './EditFields'
 
 async function fetchAndSavePreview(id, url, options = {}){
@@ -55,6 +55,16 @@ function ItemRow({ it }){
   const [showEditor, setShowEditor] = useState(false)
   const [titlesState, setTitlesState] = useState(it.titles || [])
   const [charsState, setCharsState] = useState(it.characters || [])
+  const [toast, setToast] = useState(null) // {msg, type:'loading'|'success'|'error'}
+  const toastTimerRef = useRef(null)
+
+  function showToast(msg, type = 'loading') {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToast({ msg, type })
+    if (type !== 'loading') {
+      toastTimerRef.current = setTimeout(() => setToast(null), 4500)
+    }
+  }
   const [tagsState, setTagsState] = useState(it.tags || [])
   const [situationState, setSituationState] = useState(it.situation || '')
   const [copied, setCopied] = useState(false)
@@ -129,15 +139,14 @@ function ItemRow({ it }){
 
   async function onAddToPreview(e){
     e && e.preventDefault()
-    const ok = window.confirm('This will fetch and add preview images to the timeline. Continue?')
-    if(!ok) return
     setLoading(true)
+    showToast('プレビューを取得中…')
     try{
       const res = await fetchAndSavePreview(it.id, url || it.link, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
       setLoading(false)
       if(!res.ok){
         const detail = res.body && (res.body.detail || res.body.error)
-        alert('Add to preview failed' + (detail ? (': '+detail) : '.'))
+        showToast('取得失敗' + (detail ? ': ' + detail : ''), 'error')
         console.warn('addToPreview failed', res.body)
         return
       }
@@ -145,8 +154,12 @@ function ItemRow({ it }){
       setDebugInfo(res.body)
       try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = res.body }catch(e){}
       try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
-      try{ window.alert('Preview added.'); }catch(e){}
-    }catch(e){ setLoading(false); console.error(e); alert('Add to preview failed: '+(e && e.message? e.message : String(e))) }
+      showToast('プレビューを追加しました ✓', 'success')
+    }catch(e){
+      setLoading(false)
+      console.error(e)
+      showToast('取得失敗: ' + (e && e.message ? e.message : String(e)), 'error')
+    }
   }
 
   async function saveSelected(){
@@ -355,6 +368,16 @@ function ItemRow({ it }){
           setShowEditor(false)
           try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id } })) }catch(e){}
         }} />
+      )}
+
+      {toast && (
+        <div className={`fv-toast${toast.type === 'success' ? ' fv-toast--success' : toast.type === 'error' ? ' fv-toast--error' : ''}`}>
+          {toast.type === 'loading' && <div className="fv-toast__spinner" />}
+          {toast.type === 'success' && <span className="fv-toast__icon">✓</span>}
+          {toast.type === 'error'   && <span className="fv-toast__icon">⚠</span>}
+          <span className="fv-toast__msg">{toast.msg}</span>
+          <button className="fv-toast__close" onClick={() => setToast(null)}>✕</button>
+        </div>
       )}
     </div>
   )

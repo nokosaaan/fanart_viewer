@@ -34,7 +34,7 @@ except Exception:
     BeautifulSoup = None
 
 
-MIN_IMAGE_FETCH_BYTES = 100000
+MIN_IMAGE_FETCH_BYTES = 50000
 
 
 def _fetch_image_via_requests(url, min_size=None):
@@ -309,6 +309,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     # Upgrade Twitter thumbnail URLs to large for better quality
                     if 'pbs.twimg.com' in cand_url:
                         cand_url = re.sub(r'(?<=[?&])name=(?:small|medium|thumb|360x360|240x240)', 'name=large', cand_url)
+                    # Skip profile images — we want tweet media images only
+                    if '/profile_images/' in cand_url:
+                        continue
                     if cand_url in seen:
                         continue
                     seen.add(cand_url)

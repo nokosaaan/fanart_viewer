@@ -92,6 +92,9 @@ def _fetch_via_scrape(tweet_url: str) -> List[str]:
         if u.strip().startswith('data:'):
             return
         full = _upgrade_twitter_img_size(urljoin(tweet_url, u))
+        # skip profile images — we want tweet media images only
+        if '/profile_images/' in full:
+            return
         if full not in seen:
             seen.add(full)
             results.append(full)
