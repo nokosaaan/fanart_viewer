@@ -29,6 +29,11 @@ try:
 except Exception:
     HAVE_PIXIV_PLAYWRIGHT = False
 try:
+    from .ytdlp_fetch import fetch_twitter_media_ytdlp
+    HAVE_YTDLP = True
+except Exception:
+    HAVE_YTDLP = False
+try:
     from bs4 import BeautifulSoup
 except Exception:
     BeautifulSoup = None
@@ -349,6 +354,19 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             except Exception:
                 # don't fail the whole request if the helper errors
                 pass
+
+            # yt-dlp fallback for Twitter/X: used when HTML scraping found nothing.
+            # Handles sensitive accounts that require authentication.
+            if not candidates and HAVE_YTDLP and os.environ.get('TWITTER_AUTH_TOKEN'):
+                if ('twitter.com' in target_url) or ('x.com' in target_url):
+                    try:
+                        ytdlp_results = fetch_twitter_media_ytdlp(target_url)
+                        for (img_bytes, mime) in ytdlp_results:
+                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
+                                candidates.append((target_url, img_bytes, mime))
+                                used_method = 'ytdlp'
+                    except Exception:
+                        logging.exception('yt-dlp fetch failed for %s', target_url)
 
             # If the client explicitly requested API mode for twitter/x, prefer
             # the API-based candidates (override HTML hints when API returns results).

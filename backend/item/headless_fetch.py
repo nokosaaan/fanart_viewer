@@ -83,8 +83,10 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
 
       # TWITTER_AUTH_TOKEN env var enables viewing sensitive user content on X/Twitter.
       # The account must have "Display media that may contain sensitive content" enabled.
+      # TWITTER_CT0 is the CSRF token cookie (same tab, same session as auth_token).
       try:
         twitter_auth_token = os.environ.get('TWITTER_AUTH_TOKEN')
+        twitter_ct0 = os.environ.get('TWITTER_CT0')
         if twitter_auth_token and ('twitter.com' in url or 'x.com' in url):
           twitter_cookies = []
           for domain in ('.twitter.com', '.x.com'):
@@ -96,6 +98,15 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
               'httpOnly': True,
               'secure': True,
             })
+            if twitter_ct0:
+              twitter_cookies.append({
+                'name': 'ct0',
+                'value': twitter_ct0,
+                'domain': domain,
+                'path': '/',
+                'httpOnly': False,
+                'secure': True,
+              })
           context.add_cookies(twitter_cookies)
       except Exception:
         pass
