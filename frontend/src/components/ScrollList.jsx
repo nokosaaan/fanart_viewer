@@ -39,7 +39,7 @@ async function fetchPreviewCandidates(id, url, options = {}){
   }catch(e){ console.error(e); return { ok: false, body: {error: e.message} } }
 }
 
-function ItemRow({ it }){
+function ItemRow({ it, readOnly }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
@@ -281,17 +281,19 @@ function ItemRow({ it }){
       </div>
 
       <div className="actions-row">
-        <div style={{display:'inline-block'}}>
-          <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)}
-            onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); onFetch(e) } }} />
-          <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
-            <option value="html">HTML scrape</option>
-            <option value="api">Use API</option>
-            <option value="playwright">Use Browser (Playwright)</option>
-          </select>
-          <button className="btn" type="button" onClick={onFetch} disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
-        </div>
-        <button className="btn" style={{marginLeft:8}} onClick={onAddToPreview} disabled={loading}>{loading? 'Adding...' : 'Add to Preview'}</button>
+        {!readOnly && (
+          <div style={{display:'inline-block'}}>
+            <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)}
+              onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); onFetch(e) } }} />
+            <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
+              <option value="html">HTML scrape</option>
+              <option value="api">Use API</option>
+              <option value="playwright">Use Browser (Playwright)</option>
+            </select>
+            <button className="btn" type="button" onClick={onFetch} disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
+          </div>
+        )}
+        {!readOnly && <button className="btn" style={{marginLeft:8}} onClick={onAddToPreview} disabled={loading}>{loading? 'Adding...' : 'Add to Preview'}</button>}
         <button className="btn" style={{marginLeft:8}} onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
           if(!ok) return
@@ -303,19 +305,19 @@ function ItemRow({ it }){
             alert('Previews cleared.')
           }catch(e){ console.error(e); alert('Failed to clear previews') }
         }}>Clear Previews</button>
-        <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff'}} onClick={async ()=>{
-          const ok = window.confirm('Delete this item from the database? This will remove its previews too.')
-          if(!ok) return
-          try{
-            const resp = await fetch(`/api/items/${it.id}/delete_item/`, {method:'DELETE'})
-            if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to delete item: '+(j.detail||j.error||resp.status)); return }
-            try{ window.dispatchEvent(new CustomEvent('item-deleted', { detail: { id: it.id } })) }catch(e){}
-            alert('Item deleted.')
-          }catch(e){ console.error(e); alert('Failed to delete item') }
-        }}>Delete Item</button>
-        {// Edit fields UI is hidden by default. To re-enable editing, uncomment the button below:
-        <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
-        }
+        {!readOnly && <>
+          <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff'}} onClick={async ()=>{
+            const ok = window.confirm('Delete this item from the database? This will remove its previews too.')
+            if(!ok) return
+            try{
+              const resp = await fetch(`/api/items/${it.id}/delete_item/`, {method:'DELETE'})
+              if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to delete item: '+(j.detail||j.error||resp.status)); return }
+              try{ window.dispatchEvent(new CustomEvent('item-deleted', { detail: { id: it.id } })) }catch(e){}
+              alert('Item deleted.')
+            }catch(e){ console.error(e); alert('Failed to delete item') }
+          }}>Delete Item</button>
+          <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
+        </>}
         {/* fetch debug is stored internally; use `window.showFetchDebug(id)` in the console to inspect */}
       </div>
       
@@ -383,11 +385,11 @@ function ItemRow({ it }){
   )
 }
 
-export default function ScrollList({items}){
+export default function ScrollList({items, readOnly=false}){
   return (
     <div className="scroll-list">
       {items.map(it=> (
-        <ItemRow it={it} key={it.id} />
+        <ItemRow it={it} key={it.id} readOnly={readOnly} />
       ))}
     </div>
   )

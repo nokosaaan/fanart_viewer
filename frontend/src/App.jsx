@@ -2,8 +2,11 @@ import React, {useEffect, useState, useMemo} from 'react'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
+import LoginScreen from './components/LoginScreen'
 
-export default function App(){
+function AppMain({ role, onLogout }){
+  const readOnly = role === 'viewer'
+
   const [items, setItems] = useState([])
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState([])
@@ -341,9 +344,15 @@ export default function App(){
     <div className="app">
       <header className="app-header">
         <h1>Fanart Viewer</h1>
-        <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
-          Preview Timeline
-        </button>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
+          <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
+            Preview Timeline
+          </button>
+          {role !== 'none' && (
+            <button type="button" className="btn" onClick={onLogout} style={{fontSize:12}}>ログアウト</button>
+          )}
+        </div>
       </header>
       <SearchBar
         query={query}
@@ -363,7 +372,7 @@ export default function App(){
         titleMissingOnly={titleMissingOnly}
         setTitleMissingOnly={setTitleMissingOnly}
       />
-      <ScrollList items={paginatedItems} />
+      <ScrollList items={paginatedItems} readOnly={readOnly} />
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
           <button className="btn" onClick={loadNextPage} disabled={loadingPages}>{loadingPages ? 'Loading…' : 'Load more pages'}</button>
@@ -384,4 +393,39 @@ export default function App(){
       )}
     </div>
   )
+}
+
+// Thin auth wrapper — handles login state and renders AppMain once authenticated.
+export default function App() {
+  const [role, setRole] = useState(null) // null=checking, 'login', 'admin', 'viewer', 'none'
+
+  useEffect(() => {
+    fetch('/api/auth/')
+      .then(r => r.json())
+      .then(j => {
+        if (!j.auth_required) { setRole('none'); return }
+        const saved = localStorage.getItem('fv_role')
+        if (saved) {
+          fetch('/api/items/?page_size=1').then(r => {
+            if (r.ok) setRole(saved)
+            else { localStorage.removeItem('fv_token'); localStorage.removeItem('fv_role'); setRole('login') }
+          }).catch(() => setRole('login'))
+        } else {
+          setRole('login')
+        }
+      })
+      .catch(() => setRole('none'))
+  }, [])
+
+  function handleLogin(newRole) { setRole(newRole) }
+
+  function handleLogout() {
+    localStorage.removeItem('fv_token')
+    localStorage.removeItem('fv_role')
+    setRole('login')
+  }
+
+  if (role === null) return null
+  if (role === 'login') return <LoginScreen onLogin={handleLogin} />
+  return <AppMain role={role} onLogout={handleLogout} />
 }
