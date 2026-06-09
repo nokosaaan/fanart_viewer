@@ -67,6 +67,7 @@ function ItemRow({ it, readOnly }){
   }
   const [tagsState, setTagsState] = useState(it.tags || [])
   const [situationState, setSituationState] = useState(it.situation || '')
+  const [artistState, setArtistState] = useState(it.artist || '')
   const [copied, setCopied] = useState(false)
 
   async function onFetch(e){
@@ -241,7 +242,7 @@ function ItemRow({ it, readOnly }){
 
         <div className="col artist-col">
           <div className="col-header">Artist</div>
-          <div className="artist-chip">{it.artist || '—'}</div>
+          <div className="artist-chip">{artistState || '—'}</div>
         </div>
 
         <div className="col tags-col">
@@ -367,6 +368,7 @@ function ItemRow({ it, readOnly }){
           setCharsState(newItem.characters || [])
           setTagsState(newItem.tags || [])
           setSituationState(newItem.situation || '')
+          setArtistState(newItem.artist || '')
           setShowEditor(false)
           try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id } })) }catch(e){}
         }} />

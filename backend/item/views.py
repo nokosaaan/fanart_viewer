@@ -12,8 +12,8 @@ from django.http import HttpResponse, JsonResponse
 import re
 from urllib.parse import urljoin, urlparse
 
-from .models import Item, PreviewImage
-from .serializers import ItemSerializer
+from .models import Item, PreviewImage, CharacterGroup
+from .serializers import ItemSerializer, CharacterGroupSerializer
 import logging
 import traceback
 import base64
@@ -33,6 +33,11 @@ try:
     HAVE_YTDLP = True
 except Exception:
     HAVE_YTDLP = False
+try:
+    from .poipiku_fetch import fetch_poipiku_media
+    HAVE_POIPIKU = True
+except Exception:
+    HAVE_POIPIKU = False
 try:
     from bs4 import BeautifulSoup
 except Exception:
@@ -368,6 +373,23 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     except Exception:
                         logging.exception('yt-dlp fetch failed for %s', target_url)
 
+            # Poipiku: dedicated fetcher that handles IllustItemThubExpand and
+            # the ShowAppendFile AJAX endpoint.  Run for any poipiku.com URL,
+            # regardless of whether HTML scraping found something, because the
+            # generic scraper only picks up the first thumbnail at _640 size.
+            if HAVE_POIPIKU and 'poipiku.com' in target_url:
+                try:
+                    poipiku_results = fetch_poipiku_media(target_url)
+                    if poipiku_results:
+                        candidates = []  # replace generic results with poipiku-specific ones
+                        for (img_bytes, mime) in poipiku_results:
+                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
+                                candidates.append((target_url, img_bytes, mime))
+                        if candidates:
+                            used_method = 'poipiku'
+                except Exception:
+                    logging.exception('Poipiku fetch failed for %s', target_url)
+
             # If the client explicitly requested API mode for twitter/x, prefer
             # the API-based candidates (override HTML hints when API returns results).
             if force_method == 'api' and (('twitter.com' in target_url) or ('x.com' in target_url)):
@@ -643,12 +665,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             external_id = None
             source = None
 
-            # Twitter/X: extract tweet ID from /status/<id>
+            # Twitter/X: extract tweet ID and username from /{username}/status/<id>
+            artist = ''
             try:
                 m = re.search(r'/status/(\d+)', normalized)
                 if m:
                     external_id = int(m.group(1))
                     source = 'twitter_bookmark'
+                    um = re.search(r'(?:twitter\.com|x\.com)/([A-Za-z0-9_]+)/status/', normalized)
+                    if um:
+                        artist = um.group(1)
             except Exception:
                 pass
 
@@ -662,6 +688,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 except Exception:
                     pass
 
+            # Poipiku: extract illust ID from /{user_id}/{illust_id}.html
+            if external_id is None:
+                try:
+                    m = re.search(r'poipiku\.com/\d+/(\d+)(?:\.html)?', normalized)
+                    if m:
+                        external_id = int(m.group(1))
+                        source = 'poipiku_bookmark'
+                except Exception:
+                    pass
+
             if external_id is None:
                 return Response({'detail': 'No matching item found for URL', 'url': target_url}, status=status.HTTP_404_NOT_FOUND)
 
@@ -671,7 +707,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 situation='',
                 titles=[],
                 characters=[],
-                artist='',
+                artist=artist,
                 link=normalized,
                 tags=None,
             )
@@ -881,6 +917,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             item.situation = situation.strip().upper()
             updates['situation'] = item.situation
 
+        if 'artist' in data:
+            artist = data.get('artist')
+            if artist is None:
+                artist = ''
+            if not isinstance(artist, str):
+                return Response({'detail': 'artist must be a string'}, status=status.HTTP_400_BAD_REQUEST)
+            item.artist = artist.strip()
+            updates['artist'] = item.artist
+
         if not updates:
             return Response({'detail': 'No updatable fields provided'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -902,4 +947,41 @@ def items_from_db(request):
     qs = Item.objects.all().order_by('external_id')
     serializer = ItemSerializer(qs, many=True, context={'request': request})
     return JsonResponse(serializer.data, safe=False)
+
+
+class CharacterGroupViewSet(viewsets.ModelViewSet):
+    queryset = CharacterGroup.objects.all()
+    serializer_class = CharacterGroupSerializer
+
+    @action(detail=False, methods=['post'], url_path='move_character')
+    def move_character(self, request):
+        """Move a character name from one group to another (or to ungrouped).
+
+        Body: { "character": "name", "from_group_id": 1|null, "to_group_id": 2|null }
+        """
+        char = (request.data.get('character') or '').strip()
+        if not char:
+            return Response({'detail': 'character required'}, status=status.HTTP_400_BAD_REQUEST)
+        from_id = request.data.get('from_group_id')
+        to_id = request.data.get('to_group_id')
+
+        if from_id is not None:
+            try:
+                src = CharacterGroup.objects.get(pk=from_id)
+                if char in src.characters:
+                    src.characters = [c for c in src.characters if c != char]
+                    src.save(update_fields=['characters'])
+            except CharacterGroup.DoesNotExist:
+                pass
+
+        if to_id is not None:
+            try:
+                dst = CharacterGroup.objects.get(pk=to_id)
+                if char not in dst.characters:
+                    dst.characters = list(dst.characters) + [char]
+                    dst.save(update_fields=['characters'])
+            except CharacterGroup.DoesNotExist:
+                return Response({'detail': 'target group not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({'status': 'ok'})
 

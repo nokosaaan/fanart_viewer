@@ -137,6 +137,68 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
             page.wait_for_load_state('networkidle', timeout=timeout_ms)
         except Exception:
             pass
+
+        # Use Pixiv's AJAX pages API (via ctx.request.get) to get original URLs.
+        # ctx.request.get shares session cookies with the browser context and
+        # can set Referer explicitly — more reliable than in-page page.evaluate.
+        ajax_original_urls = []
+        try:
+            illust_id_match = re.search(r'/artworks/(\d+)', target_url)
+            if illust_id_match and logged_in:
+                illust_id = illust_id_match.group(1)
+                api_resp = ctx.request.get(
+                    f'https://www.pixiv.net/ajax/illust/{illust_id}/pages',
+                    headers={
+                        'Accept': 'application/json',
+                        'Referer': f'https://www.pixiv.net/artworks/{illust_id}',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+                    },
+                    timeout=15000,
+                )
+                if api_resp.status == 200:
+                    api_data = api_resp.json()
+                    for pg in (api_data.get('body') or []):
+                        orig = (pg.get('urls') or {}).get('original')
+                        if orig:
+                            ajax_original_urls.append(orig)
+        except Exception:
+            ajax_original_urls = []
+
+        # If AJAX gave us original URLs, download them directly and return early.
+        # This avoids the complex URL-construction fallback path entirely.
+        if ajax_original_urls:
+            results = []
+            ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+            for idx, orig_url in enumerate(ajax_original_urls):
+                try:
+                    img_resp = ctx.request.get(
+                        orig_url,
+                        headers={'Referer': 'https://www.pixiv.net/', 'User-Agent': ua},
+                        timeout=60000,
+                    )
+                    if img_resp.status == 200:
+                        body = img_resp.body()
+                        ct = img_resp.headers.get('content-type', 'image/jpeg').split(';', 1)[0]
+                        if body and len(body) >= MIN_IMAGE_FETCH_BYTES and ct.startswith('image') and ct != 'image/svg+xml':
+                            results.append((idx, body, ct, orig_url))
+                except Exception:
+                    continue
+            try:
+                browser.close()
+            except Exception:
+                pass
+            debug = {
+                'found_count': len(ajax_original_urls),
+                'pixiv_hosted_count': len(ajax_original_urls),
+                'returned_count': len(results),
+                'logged_in': logged_in,
+                'fallback_used': False,
+                'main_small_found_count': 0,
+                'pw_fallback_small_found_count': 0,
+                'attempted_fetches': [{'url': u, 'phase': 'ajax'} for u in ajax_original_urls],
+            }
+            return {'logged_in': logged_in, 'images': results, 'debug': debug}
+
         # Build a lookup map of captured responses by URL for quick access
         captured_map = {c['url']: (c['body'], c.get('content_type')) for c in captured_responses if c.get('body')}
 
@@ -261,14 +323,16 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
             except Exception:
                 continue
 
-        # Prepare fetch candidates. For pixiv-hosted images, try multiple _pN variants
-        # so callers can select the largest-bytes image. We'll attempt up to MAX_PAGES.
+        # Prefer AJAX-sourced original URLs; fall back to DOM-scraped pximg URLs.
+        # AJAX originals are exact and bypass the fragile URL string reconstruction.
         candidates = []
-        if pixiv_imgs:
+        if ajax_original_urls:
+            candidates = ajax_original_urls
+        elif pixiv_imgs:
             for u in pixiv_imgs:
                 candidates.append(u)
         else:
-            candidates = [imgs[0]]
+            candidates = [imgs[0]] if imgs else []
 
         seen_urls = set()
         MAX_PAGES = 8

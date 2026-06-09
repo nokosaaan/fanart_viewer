@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import CharacterGroupManager from './CharacterGroupManager'
 
 function getCookie(name){
   const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -73,6 +74,7 @@ export default function EditFields({ item, onClose, onSaved }){
   const [charList, setCharList] = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
   const [tags, setTags] = useState((item.tags||[]).join(', '))
+  const [artist, setArtist] = useState(item.artist||'')
   const [loading, setLoading] = useState(false)
   const [allTitles, setAllTitles] = useState([])
   const [allChars, setAllChars] = useState([])
@@ -95,6 +97,7 @@ export default function EditFields({ item, onClose, onSaved }){
       characters: charList,
       situation: situation,
       tags: tags.trim()===''? []: parseList(tags),
+      artist: artist.trim(),
     }
     setLoading(true)
     try{
@@ -127,13 +130,14 @@ export default function EditFields({ item, onClose, onSaved }){
           selectPlaceholder="— タイトルを選択 —"
           newInputPlaceholder="新しいタイトルを入力"
         />
-        <TagField
-          label="Characters"
-          list={charList} setList={setCharList}
-          allOptions={allChars} setAllOptions={setAllChars}
-          selectPlaceholder="— キャラクターを選択 —"
-          newInputPlaceholder="新しいキャラクターを入力"
-        />
+        <div style={{marginBottom:8}}>
+          <label style={{display:'block', fontSize:12, marginBottom:4}}>Characters</label>
+          <CharacterGroupManager charList={charList} setCharList={setCharList} allChars={allChars} />
+        </div>
+        <div style={{marginBottom:8}}>
+          <label style={{display:'block', fontSize:12}}>Artist</label>
+          <input style={{width:'100%'}} value={artist} onChange={e=>setArtist(e.target.value)} placeholder="artist name / Twitter ID" />
+        </div>
         <div style={{marginBottom:8}}>
           <label style={{display:'block', fontSize:12}}>Situation</label>
           <select style={{width:'100%'}} value={situation} onChange={e=>setSituation(e.target.value)}>

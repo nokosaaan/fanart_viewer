@@ -16,6 +16,7 @@ function AppMain({ role, onLogout }){
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
+  const [pageInputVal, setPageInputVal] = useState('')
   const PAGE_SIZE = 50
   const [nextPageUrl, setNextPageUrl] = useState(null)
   const [loadingPages, setLoadingPages] = useState(false)
@@ -382,7 +383,28 @@ function AppMain({ role, onLogout }){
       {filtered.length > PAGE_SIZE && (
         <div className="pagination-controls">
           <button className="btn" onClick={()=>setPageIndex(p=>Math.max(0, p-1))} disabled={pageIndex===0}>Prev</button>
-          <span style={{margin:'0 12px'}}>Page {pageIndex+1} / {totalPages} — {filtered.length} results</span>
+          <span style={{margin:'0 8px'}}>Page</span>
+          <input
+            type="number"
+            min={1}
+            max={totalPages}
+            value={pageInputVal !== '' ? pageInputVal : pageIndex+1}
+            onChange={e=>setPageInputVal(e.target.value)}
+            onKeyDown={e=>{
+              if(e.key==='Enter'){
+                const v = parseInt(pageInputVal, 10)
+                if(!isNaN(v)) setPageIndex(Math.max(0, Math.min(totalPages-1, v-1)))
+                setPageInputVal('')
+                e.target.blur()
+              } else if(e.key==='Escape'){
+                setPageInputVal('')
+                e.target.blur()
+              }
+            }}
+            onBlur={()=>setPageInputVal('')}
+            style={{width:56, textAlign:'center', padding:'2px 4px'}}
+          />
+          <span style={{margin:'0 8px'}}>/ {totalPages} — {filtered.length} results</span>
           <button className="btn" onClick={()=>setPageIndex(p=>Math.min(totalPages-1, p+1))} disabled={pageIndex>=totalPages-1}>Next</button>
         </div>
       )}

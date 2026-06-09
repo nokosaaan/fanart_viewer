@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Item
+from .models import Item, CharacterGroup
 
 
 class ItemSerializer(serializers.ModelSerializer):
@@ -30,3 +30,9 @@ class ItemSerializer(serializers.ModelSerializer):
 
 class PreviewSerializer(serializers.Serializer):
     status = serializers.CharField()
+
+
+class CharacterGroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CharacterGroup
+        fields = ('id', 'name', 'characters', 'created_at')

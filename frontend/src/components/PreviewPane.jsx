@@ -1,9 +1,12 @@
 import React, {useEffect, useState, useRef} from 'react'
 
+const PANE_PAGE_SIZE = 50
+
 export default function PreviewPane({open, onClose}){
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(null)
+  const [panePageIndex, setPanePageIndex] = useState(0)
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
@@ -69,6 +72,7 @@ export default function PreviewPane({open, onClose}){
 
   useEffect(()=>{
     if(!open) return
+    setPanePageIndex(0)
     loadItems('/api/items/?page_size=1000', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -291,18 +295,40 @@ export default function PreviewPane({open, onClose}){
             <div className="preview-empty">No previews available</div>
           )}
           <div className="preview-list">
-            {items.map((it, idx) => (
-              <div className="preview-item" key={it.id}>
-                <button className="preview-thumb-btn" onClick={()=>openLarge(idx)}>
-                  <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} />
-                </button>
-                <div className="preview-meta">
-                  <div className="preview-title">{(it.titles && it.titles[0]) || it.titles || it.title || ''}</div>
-                  <div className="preview-artist">{it.artist || ''}</div>
+            {items.slice(panePageIndex*PANE_PAGE_SIZE, (panePageIndex+1)*PANE_PAGE_SIZE).map((it, localIdx) => {
+              const globalIdx = panePageIndex * PANE_PAGE_SIZE + localIdx
+              return (
+                <div className="preview-item" key={it.id}>
+                  <button className="preview-thumb-btn" onClick={()=>openLarge(globalIdx)}>
+                    <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} />
+                  </button>
+                  <div className="preview-meta">
+                    <div className="preview-title">{(it.titles && it.titles[0]) || it.titles || it.title || ''}</div>
+                    <div className="preview-artist">{it.artist || ''}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
+          {items.length > PANE_PAGE_SIZE && (
+            <div className="pane-pagination">
+              <button className="btn" onClick={()=>setPanePageIndex(p=>Math.max(0,p-1))} disabled={panePageIndex===0}>Prev</button>
+              <span>Page</span>
+              <input
+                type="number"
+                min={1}
+                max={Math.ceil(items.length/PANE_PAGE_SIZE)}
+                value={panePageIndex+1}
+                onChange={e=>{
+                  const v = parseInt(e.target.value,10)
+                  if(!isNaN(v)) setPanePageIndex(Math.max(0, Math.min(Math.ceil(items.length/PANE_PAGE_SIZE)-1, v-1)))
+                }}
+                style={{width:48, textAlign:'center'}}
+              />
+              <span>/ {Math.ceil(items.length/PANE_PAGE_SIZE)}</span>
+              <button className="btn" onClick={()=>setPanePageIndex(p=>Math.min(Math.ceil(items.length/PANE_PAGE_SIZE)-1,p+1))} disabled={panePageIndex>=Math.ceil(items.length/PANE_PAGE_SIZE)-1}>Next</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -317,29 +343,31 @@ export default function PreviewPane({open, onClose}){
               <button className="modal-close" onClick={()=>setSelectedIndex(null)} aria-label="Close">✕</button>
 
             <div className="modal-content" onClick={e=>e.stopPropagation()}>
-              <div className="modal-main">
-                <img className="preview-modal-img" src={
-                  (previews && previews.length>0)
-                    ? `/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
-                    : `/api/items/${items[selectedIndex].id}/preview/`
-                } alt={(items[selectedIndex].titles && items[selectedIndex].titles[0])||items[selectedIndex].title||''} />
-                <div className="modal-timeline-wrap">
-                  <div className="modal-timeline">
-                    {previews && previews.length>0 ? previews.map(p=> (
-                      <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
-                    )) : (
-                      <div className="timeline-empty">No previews</div>
-                    )}
+              <div className="modal-top">
+                <div className="modal-main">
+                  <img className="preview-modal-img" src={
+                    (previews && previews.length>0)
+                      ? `/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
+                      : `/api/items/${items[selectedIndex].id}/preview/`
+                  } alt={(items[selectedIndex].titles && items[selectedIndex].titles[0])||items[selectedIndex].title||''} />
+                </div>
+                <div className="modal-meta">
+                  <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
+                  <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
+                  <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
+                  <div style={{marginTop:12}}>
+                    <button className="btn" onClick={deleteCurrentPreview} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete This Preview'}</button>
+                    <button className="btn" style={{marginLeft:8}} onClick={clearAllPreviews} disabled={deleting}>{deleting ? 'Processing...' : 'Clear All Previews'}</button>
                   </div>
                 </div>
               </div>
-              <div className="modal-meta">
-                <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
-                <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
-                <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
-                <div style={{marginTop:12}}>
-                  <button className="btn" onClick={deleteCurrentPreview} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete This Preview'}</button>
-                  <button className="btn" style={{marginLeft:8}} onClick={clearAllPreviews} disabled={deleting}>{deleting ? 'Processing...' : 'Clear All Previews'}</button>
+              <div className="modal-timeline-wrap">
+                <div className="modal-timeline">
+                  {previews && previews.length>0 ? previews.map(p=> (
+                    <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
+                  )) : (
+                    <div className="timeline-empty">No previews</div>
+                  )}
                 </div>
               </div>
             </div>

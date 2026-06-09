@@ -30,3 +30,15 @@ class PreviewImage(models.Model):
 
     def __str__(self):
         return f"PreviewImage {self.item_id}#{self.order} ({self.content_type})"
+
+
+class CharacterGroup(models.Model):
+    name = models.CharField(max_length=200, unique=True)
+    characters = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
