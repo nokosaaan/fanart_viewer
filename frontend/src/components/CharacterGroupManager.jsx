@@ -7,313 +7,282 @@ function getCookie(name) {
 
 const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') }
 
-// CharacterGroupManager
-// Props:
-//   charList       string[]   — current characters assigned to this item
-//   setCharList    fn         — update item's character list
-//   allChars       string[]   — all known character names (for suggestions)
-export default function CharacterGroupManager({ charList, setCharList, allChars }) {
-  const [groups, setGroups] = useState([])          // [{id, name, characters:[]}]
-  const [collapsed, setCollapsed] = useState({})    // {groupId: bool}
+// Global character group management panel.
+// Opened from the app header; does not touch item.characters.
+export default function CharacterGroupManager({ onClose }) {
+  const [groups, setGroups] = useState([])
+  const [allChars, setAllChars] = useState([])
+  const [collapsed, setCollapsed] = useState({})
   const [newGroupName, setNewGroupName] = useState('')
   const [addingGroup, setAddingGroup] = useState(false)
-  const [moveMenu, setMoveMenu] = useState(null)    // {char, fromGroupId}
-  const [addCharMenu, setAddCharMenu] = useState(null)  // groupId | 'ungrouped'
+  const [renaming, setRenaming] = useState(null)     // groupId being renamed
+  const [renameVal, setRenameVal] = useState('')
+  const [addCharTarget, setAddCharTarget] = useState(null)  // groupId
   const [addCharInput, setAddCharInput] = useState('')
-  const [ungroupedCollapsed, setUngroupedCollapsed] = useState(false)
+  const [moveState, setMoveState] = useState(null)   // {char, fromGroupId}
 
-  const loadGroups = useCallback(async () => {
-    try {
-      const r = await fetch('/api/character-groups/')
-      if (!r.ok) return
-      const data = await r.json()
-      const list = Array.isArray(data) ? data : (data.results || [])
-      setGroups(list)
-    } catch (e) {
-      console.error('Failed to load character groups', e)
-    }
+  const load = useCallback(async () => {
+    const [gr, ch] = await Promise.all([
+      fetch('/api/character-groups/').then(r => r.json()).catch(() => []),
+      fetch('/api/items/all_characters/').then(r => r.json()).catch(() => []),
+    ])
+    setGroups(Array.isArray(gr) ? gr : (gr.results || []))
+    setAllChars(Array.isArray(ch) ? ch : [])
   }, [])
 
-  useEffect(() => { loadGroups() }, [loadGroups])
-
-  // Close menus on outside click
-  useEffect(() => {
-    if (!moveMenu && addCharMenu === null) return
-    function handler(e) {
-      if (!e.target.closest('.cgm-menu')) {
-        setMoveMenu(null)
-        setAddCharMenu(null)
-        setAddCharInput('')
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [moveMenu, addCharMenu])
+  useEffect(() => { load() }, [load])
 
   function groupOf(char) {
     return groups.find(g => Array.isArray(g.characters) && g.characters.includes(char)) || null
   }
 
-  // Characters in this item that belong to a known group
-  const assignedChars = charList.filter(c => groupOf(c) !== null)
-  // Characters in this item with no group
-  const ungroupedChars = charList.filter(c => groupOf(c) === null)
+  const assignedChars = new Set(groups.flatMap(g => g.characters || []))
+  const ungrouped = allChars.filter(c => !assignedChars.has(c))
 
-  // Groups that have at least one character present in this item
-  const activeGroups = groups.filter(g =>
-    Array.isArray(g.characters) && g.characters.some(c => charList.includes(c))
-  )
-  // Groups that have no characters in this item (for move targets)
-  const allGroupsSorted = [...groups].sort((a, b) => a.name.localeCompare(b.name))
+  // --- API helpers ---
+  async function apiCall(url, method, body) {
+    const r = await fetch(url, { method, headers: HEADERS, credentials: 'same-origin', body: body ? JSON.stringify(body) : undefined })
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}))
+      throw new Error(j.detail || j.name || r.status)
+    }
+    return r.status === 204 ? null : r.json()
+  }
 
   async function createGroup() {
     const name = newGroupName.trim()
     if (!name) return
     try {
-      const r = await fetch('/api/character-groups/', {
-        method: 'POST',
-        headers: HEADERS,
-        credentials: 'same-origin',
-        body: JSON.stringify({ name, characters: [] }),
-      })
-      if (!r.ok) { const j = await r.json().catch(() => ({})); alert('Failed: ' + (j.name || j.detail || r.status)); return }
-      setNewGroupName('')
-      setAddingGroup(false)
-      await loadGroups()
-    } catch (e) { alert('Failed to create group: ' + e.message) }
+      await apiCall('/api/character-groups/', 'POST', { name, characters: [] })
+      setNewGroupName(''); setAddingGroup(false)
+      load()
+    } catch (e) { alert('作成失敗: ' + e.message) }
+  }
+
+  async function renameGroup(g) {
+    const name = renameVal.trim()
+    if (!name || name === g.name) { setRenaming(null); return }
+    try {
+      await apiCall(`/api/character-groups/${g.id}/`, 'PATCH', { name })
+      setRenaming(null)
+      load()
+    } catch (e) { alert('リネーム失敗: ' + e.message) }
   }
 
   async function deleteGroup(g) {
-    if (!window.confirm(`グループ「${g.name}」を削除しますか？\nキャラクター割り当ては解除されます。`)) return
+    if (!window.confirm(`グループ「${g.name}」を削除しますか？\nキャラクターの割り当てが解除されます。`)) return
     try {
-      await fetch(`/api/character-groups/${g.id}/`, {
-        method: 'DELETE', headers: HEADERS, credentials: 'same-origin',
-      })
-      await loadGroups()
-    } catch (e) { alert('削除に失敗しました') }
+      await apiCall(`/api/character-groups/${g.id}/`, 'DELETE')
+      load()
+    } catch (e) { alert('削除失敗: ' + e.message) }
   }
 
   async function moveCharacter(char, fromGroupId, toGroupId) {
     try {
-      const r = await fetch('/api/character-groups/move_character/', {
-        method: 'POST',
-        headers: HEADERS,
-        credentials: 'same-origin',
-        body: JSON.stringify({ character: char, from_group_id: fromGroupId, to_group_id: toGroupId }),
+      await apiCall('/api/character-groups/move_character/', 'POST', {
+        character: char, from_group_id: fromGroupId, to_group_id: toGroupId,
       })
-      if (!r.ok) { const j = await r.json().catch(() => ({})); alert('移動失敗: ' + (j.detail || r.status)); return }
-      await loadGroups()
+      setMoveState(null)
+      load()
     } catch (e) { alert('移動失敗: ' + e.message) }
-    setMoveMenu(null)
+  }
+
+  async function removeFromGroup(char, groupId) {
+    const g = groups.find(x => x.id === groupId)
+    if (!g) return
+    try {
+      await apiCall(`/api/character-groups/${groupId}/`, 'PATCH', {
+        characters: g.characters.filter(c => c !== char),
+      })
+      load()
+    } catch (e) { alert('削除失敗: ' + e.message) }
   }
 
   async function addCharToGroup(char, groupId) {
     const trimmed = char.trim()
     if (!trimmed) return
-    // Add to item list if not present
-    if (!charList.includes(trimmed)) setCharList(prev => [...prev, trimmed])
-    // Assign to group
-    if (groupId !== 'ungrouped') {
-      await moveCharacter(trimmed, null, groupId)
-    }
-    setAddCharMenu(null)
-    setAddCharInput('')
+    try {
+      await apiCall('/api/character-groups/move_character/', 'POST', {
+        character: trimmed, from_group_id: null, to_group_id: groupId,
+      })
+      setAddCharTarget(null); setAddCharInput('')
+      load()
+    } catch (e) { alert('追加失敗: ' + e.message) }
   }
 
-  function removeCharFromItem(char) {
-    setCharList(prev => prev.filter(c => c !== char))
-  }
+  const suggestions = (addCharInput
+    ? allChars.filter(c => c.toLowerCase().includes(addCharInput.toLowerCase()))
+    : allChars
+  ).filter(c => {
+    const g = groups.find(x => x.id === addCharTarget)
+    return g ? !g.characters.includes(c) : true
+  }).slice(0, 10)
 
-  function toggleGroup(id) {
-    setCollapsed(prev => ({ ...prev, [id]: !prev[id] }))
-  }
-
-  // Suggestions: allChars filtered to not-yet-in-item
-  const suggestions = (allChars || []).filter(c => !charList.includes(c))
+  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name))
 
   return (
-    <div className="cgm-root">
-      {/* Groups with item characters */}
-      {activeGroups.map(g => {
-        const chars = g.characters.filter(c => charList.includes(c))
-        const isCollapsed = collapsed[g.id]
-        return (
-          <div key={g.id} className="cgm-group">
-            <div className="cgm-group-header">
-              <button className="cgm-toggle" onClick={() => toggleGroup(g.id)}>
-                {isCollapsed ? '▶' : '▼'}
-              </button>
-              <span className="cgm-group-name">{g.name}</span>
-              <span className="cgm-group-count">{chars.length}</span>
-              <button className="cgm-add-char-btn" title="このグループにキャラを追加"
-                onClick={() => { setAddCharMenu(g.id); setAddCharInput('') }}>＋</button>
-              <button className="cgm-del-group-btn" title="グループを削除" onClick={() => deleteGroup(g)}>🗑</button>
-            </div>
-            {!isCollapsed && (
-              <div className="cgm-chips">
-                {chars.map(char => (
-                  <span key={char} className="cgm-chip">
+    <div className="cgm-panel-backdrop" onClick={onClose}>
+      <div className="cgm-panel" onClick={e => e.stopPropagation()}>
+        <div className="cgm-panel-header">
+          <strong>キャラクターグループ管理</strong>
+          <button className="cgm-panel-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="cgm-panel-body">
+          {/* Groups */}
+          {sortedGroups.map(g => {
+            const chars = g.characters || []
+            const isCollapsed = collapsed[g.id]
+            return (
+              <div key={g.id} className="cgm-panel-group">
+                <div className="cgm-panel-group-header">
+                  <button className="cgm-toggle" onClick={() => setCollapsed(p => ({ ...p, [g.id]: !p[g.id] }))}>
+                    {isCollapsed ? '▶' : '▼'}
+                  </button>
+
+                  {renaming === g.id ? (
+                    <input
+                      className="cgm-rename-input"
+                      value={renameVal}
+                      onChange={e => setRenameVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') renameGroup(g); if (e.key === 'Escape') setRenaming(null) }}
+                      onBlur={() => renameGroup(g)}
+                      autoFocus
+                    />
+                  ) : (
+                    <span className="cgm-panel-group-name" onDoubleClick={() => { setRenaming(g.id); setRenameVal(g.name) }}>
+                      {g.name}
+                    </span>
+                  )}
+
+                  <span className="cgm-group-count">{chars.length}</span>
+                  <button className="cgm-icon-btn" title="キャラを追加"
+                    onClick={() => { setAddCharTarget(g.id); setAddCharInput('') }}>＋</button>
+                  <button className="cgm-icon-btn cgm-icon-rename" title="グループ名を変更"
+                    onClick={() => { setRenaming(g.id); setRenameVal(g.name) }}>✎</button>
+                  <button className="cgm-icon-btn cgm-icon-delete" title="グループを削除"
+                    onClick={() => deleteGroup(g)}>🗑</button>
+                </div>
+
+                {!isCollapsed && (
+                  <div className="cgm-panel-chips">
+                    {chars.map(char => (
+                      <span key={char} className="cgm-panel-chip">
+                        {char}
+                        <button className="cgm-chip-btn" title="グループを変更"
+                          onClick={() => setMoveState({ char, fromGroupId: g.id })}>⇄</button>
+                        <button className="cgm-chip-btn cgm-chip-del" title="このグループから外す"
+                          onClick={() => removeFromGroup(char, g.id)}>×</button>
+                      </span>
+                    ))}
+                    {chars.length === 0 && <span className="cgm-empty-hint">キャラなし</span>}
+                  </div>
+                )}
+
+                {/* Add char popover for this group */}
+                {addCharTarget === g.id && (
+                  <AddCharPopover
+                    input={addCharInput}
+                    setInput={setAddCharInput}
+                    suggestions={suggestions}
+                    onAdd={c => addCharToGroup(c, g.id)}
+                    onClose={() => { setAddCharTarget(null); setAddCharInput('') }}
+                  />
+                )}
+              </div>
+            )
+          })}
+
+          {/* Ungrouped */}
+          {ungrouped.length > 0 && (
+            <div className="cgm-panel-group cgm-panel-ungrouped">
+              <div className="cgm-panel-group-header">
+                <span className="cgm-panel-group-name" style={{ color: '#9ca3af' }}>未分類 ({ungrouped.length})</span>
+              </div>
+              <div className="cgm-panel-chips">
+                {ungrouped.map(char => (
+                  <span key={char} className="cgm-panel-chip cgm-panel-chip-ungrouped">
                     {char}
-                    <button className="cgm-chip-move" title="グループを変更"
-                      onClick={() => setMoveMenu({ char, fromGroupId: g.id })}>⇄</button>
-                    <button className="cgm-chip-remove" onClick={() => removeCharFromItem(char)}>×</button>
+                    <button className="cgm-chip-btn" title="グループに割り当て"
+                      onClick={() => setMoveState({ char, fromGroupId: null })}>⇄</button>
                   </span>
                 ))}
               </div>
-            )}
-            {addCharMenu === g.id && (
-              <AddCharPopup
-                input={addCharInput}
-                setInput={setAddCharInput}
-                suggestions={suggestions}
-                onAdd={c => addCharToGroup(c, g.id)}
-                onClose={() => { setAddCharMenu(null); setAddCharInput('') }}
-              />
-            )}
-          </div>
-        )
-      })}
-
-      {/* Ungrouped characters */}
-      {ungroupedChars.length > 0 && (
-        <div className="cgm-group cgm-ungrouped">
-          <div className="cgm-group-header">
-            <button className="cgm-toggle" onClick={() => setUngroupedCollapsed(p => !p)}>
-              {ungroupedCollapsed ? '▶' : '▼'}
-            </button>
-            <span className="cgm-group-name" style={{ color: '#888' }}>未分類</span>
-            <span className="cgm-group-count">{ungroupedChars.length}</span>
-            <button className="cgm-add-char-btn" title="未分類にキャラを追加"
-              onClick={() => { setAddCharMenu('ungrouped'); setAddCharInput('') }}>＋</button>
-          </div>
-          {!ungroupedCollapsed && (
-            <div className="cgm-chips">
-              {ungroupedChars.map(char => (
-                <span key={char} className="cgm-chip cgm-chip-ungrouped">
-                  {char}
-                  <button className="cgm-chip-move" title="グループに割り当て"
-                    onClick={() => setMoveMenu({ char, fromGroupId: null })}>⇄</button>
-                  <button className="cgm-chip-remove" onClick={() => removeCharFromItem(char)}>×</button>
-                </span>
-              ))}
             </div>
           )}
-          {addCharMenu === 'ungrouped' && (
-            <AddCharPopup
-              input={addCharInput}
-              setInput={setAddCharInput}
-              suggestions={suggestions}
-              onAdd={c => addCharToGroup(c, 'ungrouped')}
-              onClose={() => { setAddCharMenu(null); setAddCharInput('') }}
-            />
-          )}
-        </div>
-      )}
 
-      {/* Empty item — quick add button */}
-      {charList.length === 0 && addCharMenu === null && (
-        <div style={{ padding: '4px 0' }}>
-          <button className="cgm-add-char-btn" onClick={() => { setAddCharMenu('ungrouped'); setAddCharInput('') }}>
-            ＋ キャラクターを追加
-          </button>
-        </div>
-      )}
-      {charList.length > 0 && addCharMenu === null && ungroupedChars.length === 0 && activeGroups.length === 0 && (
-        <div style={{ padding: '4px 0' }}>
-          <button className="cgm-add-char-btn" onClick={() => { setAddCharMenu('ungrouped'); setAddCharInput('') }}>
-            ＋ キャラクターを追加
-          </button>
-        </div>
-      )}
-
-      {/* New group creation row */}
-      <div className="cgm-new-group-row">
-        {addingGroup ? (
-          <div className="cgm-new-group-form">
-            <input
-              className="cgm-new-group-input"
-              placeholder="新しいグループ名"
-              value={newGroupName}
-              onChange={e => setNewGroupName(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') createGroup(); if (e.key === 'Escape') { setAddingGroup(false); setNewGroupName('') } }}
-              autoFocus
-            />
-            <button className="btn" onClick={createGroup}>作成</button>
-            <button className="btn" onClick={() => { setAddingGroup(false); setNewGroupName('') }}>キャンセル</button>
+          {/* New group */}
+          <div className="cgm-new-group-row">
+            {addingGroup ? (
+              <div className="cgm-new-group-form">
+                <input
+                  className="cgm-new-group-input"
+                  placeholder="新しいグループ名"
+                  value={newGroupName}
+                  onChange={e => setNewGroupName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') createGroup(); if (e.key === 'Escape') { setAddingGroup(false); setNewGroupName('') } }}
+                  autoFocus
+                />
+                <button className="btn" onClick={createGroup}>作成</button>
+                <button className="btn" onClick={() => { setAddingGroup(false); setNewGroupName('') }}>キャンセル</button>
+              </div>
+            ) : (
+              <button className="cgm-new-group-btn" onClick={() => setAddingGroup(true)}>
+                ＋ グループを新規作成
+              </button>
+            )}
           </div>
-        ) : (
-          <button className="cgm-new-group-btn" onClick={() => setAddingGroup(true)}>＋ グループを新規作成</button>
+        </div>
+
+        {/* Move popover */}
+        {moveState && (
+          <div className="cgm-move-overlay" onClick={() => setMoveState(null)}>
+            <div className="cgm-move-popup" onClick={e => e.stopPropagation()}>
+              <div className="cgm-move-title">「{moveState.char}」を移動</div>
+              {sortedGroups.filter(g => g.id !== moveState.fromGroupId).map(g => (
+                <button key={g.id} className="cgm-move-option"
+                  onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, g.id)}>
+                  {g.name}
+                </button>
+              ))}
+              {moveState.fromGroupId !== null && (
+                <button className="cgm-move-option cgm-move-ungrouped"
+                  onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, null)}>
+                  未分類に移動
+                </button>
+              )}
+              <button className="cgm-move-cancel" onClick={() => setMoveState(null)}>キャンセル</button>
+            </div>
+          </div>
         )}
       </div>
-
-      {/* All groups (empty ones — for move targets) — shown as collapsed */}
-      {allGroupsSorted.filter(g => !g.characters.some(c => charList.includes(c))).length > 0 && (
-        <div className="cgm-empty-groups">
-          <span className="cgm-empty-groups-label">他のグループ:</span>
-          {allGroupsSorted.filter(g => !g.characters.some(c => charList.includes(c))).map(g => (
-            <span key={g.id} className="cgm-empty-group-chip">
-              {g.name}
-              <button className="cgm-add-char-btn" style={{ marginLeft: 4 }} title={`「${g.name}」にキャラを追加`}
-                onClick={() => { setAddCharMenu(g.id); setAddCharInput('') }}>＋</button>
-              <button className="cgm-del-group-btn" title="グループを削除" onClick={() => deleteGroup(g)}>🗑</button>
-              {addCharMenu === g.id && (
-                <AddCharPopup
-                  input={addCharInput}
-                  setInput={setAddCharInput}
-                  suggestions={suggestions}
-                  onAdd={c => addCharToGroup(c, g.id)}
-                  onClose={() => { setAddCharMenu(null); setAddCharInput('') }}
-                />
-              )}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Move popover */}
-      {moveMenu && (
-        <div className="cgm-menu cgm-move-menu">
-          <div className="cgm-move-title">「{moveMenu.char}」を移動</div>
-          {allGroupsSorted.filter(g => g.id !== moveMenu.fromGroupId).map(g => (
-            <button key={g.id} className="cgm-move-option"
-              onClick={() => moveCharacter(moveMenu.char, moveMenu.fromGroupId, g.id)}>
-              {g.name}
-            </button>
-          ))}
-          {moveMenu.fromGroupId !== null && (
-            <button className="cgm-move-option cgm-move-option-ungrouped"
-              onClick={() => moveCharacter(moveMenu.char, moveMenu.fromGroupId, null)}>
-              未分類に移動
-            </button>
-          )}
-          <button className="cgm-move-cancel" onClick={() => setMoveMenu(null)}>キャンセル</button>
-        </div>
-      )}
     </div>
   )
 }
 
-function AddCharPopup({ input, setInput, suggestions, onAdd, onClose }) {
-  const filtered = suggestions.filter(s => !input || s.toLowerCase().includes(input.toLowerCase())).slice(0, 12)
-
+function AddCharPopover({ input, setInput, suggestions, onAdd, onClose }) {
   return (
-    <div className="cgm-menu cgm-add-popup">
+    <div className="cgm-add-popover">
       <input
         className="cgm-add-input"
         placeholder="キャラクター名"
         value={input}
         onChange={e => setInput(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && input.trim()) onAdd(input.trim()); if (e.key === 'Escape') onClose() }}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && input.trim()) onAdd(input.trim())
+          if (e.key === 'Escape') onClose()
+        }}
         autoFocus
       />
-      {filtered.map(s => (
+      {suggestions.map(s => (
         <button key={s} className="cgm-add-suggestion" onClick={() => onAdd(s)}>{s}</button>
       ))}
-      {input.trim() && !suggestions.includes(input.trim()) && (
+      {input.trim() && !suggestions.some(s => s === input.trim()) && (
         <button className="cgm-add-suggestion cgm-add-new" onClick={() => onAdd(input.trim())}>
           ＋ 「{input.trim()}」を新規追加
         </button>
       )}
+      <button className="cgm-add-cancel" onClick={onClose}>キャンセル</button>
     </div>
   )
 }

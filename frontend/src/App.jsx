@@ -3,6 +3,7 @@ import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
+import CharacterGroupManager from './components/CharacterGroupManager'
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
@@ -13,6 +14,7 @@ function AppMain({ role, onLogout }){
   const [includeCP, setIncludeCP] = useState(false)
   const [includeR18, setIncludeR18] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
@@ -347,6 +349,7 @@ function AppMain({ role, onLogout }){
         <h1>Fanart Viewer</h1>
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
+          <button type="button" className="btn" onClick={()=>setCharGroupOpen(true)} style={{fontSize:12}}>キャラクターグループ</button>
           <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
             Preview Timeline
           </button>
@@ -413,6 +416,7 @@ function AppMain({ role, onLogout }){
           <PreviewPane open={previewOpen} onClose={()=>setPreviewOpen(false)} />
         </React.Suspense>
       )}
+      {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
     </div>
   )
 }

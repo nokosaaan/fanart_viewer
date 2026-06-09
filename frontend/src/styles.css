@@ -151,42 +151,72 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 }
 .fv-toast__close:hover{ color:#fff }
 
-/* Character Group Manager */
-.cgm-root{ position:relative; display:flex; flex-direction:column; gap:4px }
-.cgm-group{ border:1px solid #e5e7eb; border-radius:6px; overflow:visible; background:#fafafa }
-.cgm-ungrouped{ border-color:#d1d5db; background:#f9fafb }
-.cgm-group-header{ display:flex; align-items:center; gap:4px; padding:4px 6px; cursor:default }
+/* CharacterPicker (per-item, inside EditFields) */
+.cp-root{ display:flex; flex-direction:column; gap:3px }
+.cp-group{ border:1px solid #e5e7eb; border-radius:5px; background:#fafafa }
+.cp-group-header{ display:flex; align-items:center; gap:4px; width:100%; background:none; border:none; padding:4px 6px; cursor:pointer; text-align:left }
+.cp-group-header:hover{ background:#f3f4f6 }
+.cp-toggle{ font-size:9px; color:#9ca3af; flex-shrink:0 }
+.cp-group-name{ font-weight:600; font-size:13px; flex:1 }
+.cp-selected-badge{ font-size:11px; background:#2563eb; color:#fff; border-radius:10px; padding:1px 6px }
+.cp-chips{ display:flex; flex-wrap:wrap; gap:4px; padding:4px 8px 6px }
+.cp-chip{ background:#f3f4f6; border:1px solid #e5e7eb; border-radius:4px; padding:3px 8px; font-size:12px; cursor:pointer; color:#374151 }
+.cp-chip:hover{ background:#e5e7eb }
+.cp-chip-on{ background:#dbeafe; border-color:#93c5fd; color:#1d4ed8; font-weight:500 }
+.cp-chip-on:hover{ background:#bfdbfe }
+.cp-chip-remove{ background:none; border:none; cursor:pointer; padding:0 0 0 4px; font-size:12px; color:#9ca3af }
+.cp-chip-remove:hover{ color:#ef4444 }
+.cp-new-row{ position:relative; display:flex; gap:4px; align-items:flex-start; padding:4px 0 }
+.cp-new-input{ flex:1; padding:3px 6px; font-size:13px; border:1px solid #d1d5db; border-radius:4px }
+.cp-suggestions{ position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #d1d5db; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,0.1); z-index:200; display:flex; flex-direction:column }
+.cp-suggestion{ background:none; border:none; text-align:left; padding:4px 8px; font-size:13px; cursor:pointer }
+.cp-suggestion:hover{ background:#eff6ff }
+.cp-add-btn{ background:none; border:1px dashed #d1d5db; border-radius:4px; padding:3px 8px; font-size:12px; color:#6b7280; cursor:pointer }
+.cp-add-btn:hover{ border-color:#6b7280; color:#374151 }
+.cp-extra{ display:flex; flex-wrap:wrap; gap:4px; padding:2px 0 }
+
+/* CharacterGroupManager panel (global, modal) */
+.cgm-panel-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1500; display:flex; align-items:center; justify-content:center }
+.cgm-panel{ background:#fff; border-radius:8px; width:560px; max-width:96vw; max-height:88vh; display:flex; flex-direction:column; box-shadow:0 8px 32px rgba(0,0,0,0.18) }
+.cgm-panel-header{ display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid #f3f4f6; flex-shrink:0 }
+.cgm-panel-close{ background:none; border:none; font-size:18px; cursor:pointer; color:#9ca3af; line-height:1 }
+.cgm-panel-close:hover{ color:#374151 }
+.cgm-panel-body{ flex:1 1 auto; overflow-y:auto; padding:12px 16px; display:flex; flex-direction:column; gap:6px }
+.cgm-panel-group{ border:1px solid #e5e7eb; border-radius:6px; background:#fafafa }
+.cgm-panel-ungrouped{ border-color:#d1d5db; background:#f9fafb }
+.cgm-panel-group-header{ display:flex; align-items:center; gap:6px; padding:6px 8px }
 .cgm-toggle{ background:none; border:none; cursor:pointer; padding:0 2px; font-size:10px; color:#6b7280; flex-shrink:0 }
-.cgm-group-name{ font-weight:600; font-size:13px; flex:1 1 auto }
+.cgm-panel-group-name{ font-weight:600; font-size:13px; flex:1 1 auto }
+.cgm-rename-input{ flex:1; padding:2px 6px; font-size:13px; border:1px solid #93c5fd; border-radius:4px; outline:none }
 .cgm-group-count{ font-size:11px; color:#9ca3af; background:#e5e7eb; border-radius:10px; padding:1px 6px }
-.cgm-add-char-btn{ background:none; border:1px solid #d1d5db; border-radius:4px; cursor:pointer; padding:1px 5px; font-size:12px; color:#4b5563; line-height:1.4 }
-.cgm-add-char-btn:hover{ background:#e5e7eb }
-.cgm-del-group-btn{ background:none; border:none; cursor:pointer; padding:1px 4px; font-size:12px; color:#d1d5db; line-height:1 }
-.cgm-del-group-btn:hover{ color:#ef4444 }
-.cgm-chips{ display:flex; flex-wrap:wrap; gap:4px; padding:2px 8px 6px }
-.cgm-chip{ display:inline-flex; align-items:center; gap:2px; background:#e0e7ff; border-radius:4px; padding:2px 4px 2px 7px; font-size:12px }
-.cgm-chip-ungrouped{ background:#f3f4f6 }
-.cgm-chip-move{ background:none; border:none; cursor:pointer; padding:0 2px; font-size:11px; color:#6b7280; line-height:1 }
-.cgm-chip-move:hover{ color:#2563eb }
-.cgm-chip-remove{ background:none; border:none; cursor:pointer; padding:0 2px; font-size:13px; color:#9ca3af; line-height:1 }
-.cgm-chip-remove:hover{ color:#ef4444 }
-.cgm-new-group-row{ padding:2px 0 }
-.cgm-new-group-btn{ background:none; border:1px dashed #d1d5db; border-radius:6px; width:100%; padding:5px; font-size:12px; color:#6b7280; cursor:pointer; text-align:center }
+.cgm-icon-btn{ background:none; border:none; cursor:pointer; padding:2px 5px; font-size:13px; color:#9ca3af; border-radius:4px }
+.cgm-icon-btn:hover{ background:#f3f4f6; color:#374151 }
+.cgm-icon-delete:hover{ color:#ef4444 }
+.cgm-icon-rename:hover{ color:#2563eb }
+.cgm-panel-chips{ display:flex; flex-wrap:wrap; gap:4px; padding:4px 10px 8px }
+.cgm-panel-chip{ display:inline-flex; align-items:center; gap:2px; background:#e0e7ff; border-radius:4px; padding:2px 4px 2px 8px; font-size:12px }
+.cgm-panel-chip-ungrouped{ background:#f3f4f6 }
+.cgm-chip-btn{ background:none; border:none; cursor:pointer; padding:0 3px; font-size:12px; color:#6b7280; line-height:1 }
+.cgm-chip-btn:hover{ color:#2563eb }
+.cgm-chip-del:hover{ color:#ef4444 }
+.cgm-empty-hint{ font-size:12px; color:#9ca3af; padding:2px 4px }
+.cgm-new-group-row{ padding:4px 0 }
+.cgm-new-group-btn{ background:none; border:1px dashed #d1d5db; border-radius:6px; width:100%; padding:6px; font-size:12px; color:#6b7280; cursor:pointer; text-align:center }
 .cgm-new-group-btn:hover{ border-color:#6b7280; color:#374151 }
-.cgm-new-group-form{ display:flex; gap:4px; align-items:center }
-.cgm-new-group-input{ flex:1; padding:3px 6px; font-size:13px; border:1px solid #d1d5db; border-radius:4px }
-.cgm-empty-groups{ display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:4px 0; font-size:12px }
-.cgm-empty-groups-label{ color:#9ca3af; font-size:11px }
-.cgm-empty-group-chip{ display:inline-flex; align-items:center; gap:2px; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:4px; padding:2px 6px; font-size:12px; position:relative }
-/* Menus (move / add-char popover) */
-.cgm-menu{ position:absolute; z-index:2000; background:#fff; border:1px solid #d1d5db; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.12); padding:6px; min-width:160px; display:flex; flex-direction:column; gap:2px }
-.cgm-move-title{ font-size:11px; color:#6b7280; padding:2px 6px 4px; border-bottom:1px solid #f3f4f6; margin-bottom:2px }
-.cgm-move-option{ background:none; border:none; text-align:left; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:13px }
-.cgm-move-option:hover{ background:#eff6ff }
-.cgm-move-option-ungrouped{ color:#6b7280 }
-.cgm-move-cancel{ background:none; border-top:1px solid #f3f4f6; margin-top:2px; padding:4px 8px; color:#9ca3af; font-size:12px; cursor:pointer; border-radius:0 0 4px 4px; text-align:left }
-.cgm-add-popup{ min-width:200px }
-.cgm-add-input{ width:100%; padding:4px 8px; font-size:13px; border:1px solid #d1d5db; border-radius:4px; margin-bottom:4px; box-sizing:border-box }
+.cgm-new-group-form{ display:flex; gap:6px; align-items:center }
+.cgm-new-group-input{ flex:1; padding:4px 8px; font-size:13px; border:1px solid #d1d5db; border-radius:4px }
+/* Add char popover */
+.cgm-add-popover{ display:flex; flex-direction:column; gap:2px; padding:6px 10px; background:#f8fafc; border-top:1px solid #e5e7eb }
+.cgm-add-input{ width:100%; padding:4px 8px; font-size:13px; border:1px solid #d1d5db; border-radius:4px; box-sizing:border-box }
 .cgm-add-suggestion{ background:none; border:none; text-align:left; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:13px; width:100% }
 .cgm-add-suggestion:hover{ background:#eff6ff }
 .cgm-add-new{ color:#2563eb; font-weight:500 }
+.cgm-add-cancel{ background:none; border:none; color:#9ca3af; font-size:12px; cursor:pointer; text-align:left; padding:2px 8px }
+/* Move popup */
+.cgm-move-overlay{ position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.2) }
+.cgm-move-popup{ background:#fff; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:8px; min-width:180px; display:flex; flex-direction:column; gap:2px }
+.cgm-move-title{ font-size:11px; color:#6b7280; padding:2px 8px 6px; border-bottom:1px solid #f3f4f6; margin-bottom:2px }
+.cgm-move-option{ background:none; border:none; text-align:left; padding:5px 10px; border-radius:4px; cursor:pointer; font-size:13px }
+.cgm-move-option:hover{ background:#eff6ff }
+.cgm-move-ungrouped{ color:#6b7280 }
+.cgm-move-cancel{ background:none; border-top:1px solid #f3f4f6; margin-top:4px; padding:5px 10px; color:#9ca3af; font-size:12px; cursor:pointer; text-align:left }

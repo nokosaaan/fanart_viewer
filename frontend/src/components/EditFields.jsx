@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import CharacterGroupManager from './CharacterGroupManager'
+import CharacterPicker from './CharacterPicker'
 
 function getCookie(name){
   const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -121,7 +121,7 @@ export default function EditFields({ item, onClose, onSaved }){
 
   return (
     <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:1300}} onClick={onClose}>
-      <div style={{width:520, maxWidth:'90%', margin:'6% auto', background:'#fff', padding:16}} onClick={e=>e.stopPropagation()}>
+      <div style={{width:520, maxWidth:'90%', margin:'4% auto', background:'#fff', padding:16, maxHeight:'90vh', overflowY:'auto'}} onClick={e=>e.stopPropagation()}>
         <h3>Edit Item #{item.id}</h3>
         <TagField
           label="Titles"
@@ -132,7 +132,7 @@ export default function EditFields({ item, onClose, onSaved }){
         />
         <div style={{marginBottom:8}}>
           <label style={{display:'block', fontSize:12, marginBottom:4}}>Characters</label>
-          <CharacterGroupManager charList={charList} setCharList={setCharList} allChars={allChars} />
+          <CharacterPicker charList={charList} setCharList={setCharList} allChars={allChars} />
         </div>
         <div style={{marginBottom:8}}>
           <label style={{display:'block', fontSize:12}}>Artist</label>

@@ -197,8 +197,8 @@ function ItemRow({ it, readOnly }){
                 {titlesState.slice(0,2).map((t,i)=> (
                   <div key={i} style={{display:'inline-flex', alignItems:'center', marginRight:6}}>
                     <button className="chip" onClick={()=>{}} style={{paddingRight:8}}>{t}</button>
-                      <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(it.link || ''); alert('Copied link: '+(it.link||'')) }catch(_){ window.prompt('Copy link:', it.link||'') } }} style={{marginLeft:4, padding:'6px'}} title="Copy link">
-                        <img src="/icons/copy.svg" alt="Copy link" style={{width:16, height:16}} />
+                      <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} style={{marginLeft:4, padding:'6px'}} title="タイトルをコピー">
+                        <img src="/icons/copy.svg" alt="Copy title" style={{width:16, height:16}} />
                       </button>
                     {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{marginLeft:4, padding:'6px'}} title="Open link"><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
                   </div>
@@ -216,7 +216,7 @@ function ItemRow({ it, readOnly }){
                   <div key={i} className="chip-row" style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
                     <div style={{flex:1, wordBreak:'break-word'}}>{t}</div>
                     <div style={{marginLeft:8, display:'flex', alignItems:'center', gap:6}}>
-                        <button className="chip" onClick={async ()=>{ try{ await navigator.clipboard.writeText(it.link||''); alert('Copied link: '+(it.link||'')) }catch(_){ window.prompt('Copy link:', it.link||'') } }} title="Copy link" style={{padding:6}}>
+                        <button className="chip" onClick={async ()=>{ try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} title="タイトルをコピー" style={{padding:6}}>
                         <img src="/icons/copy.svg" alt="Copy" style={{width:16, height:16}} />
                       </button>
                       {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" title="Open link" style={{padding:6}}><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
