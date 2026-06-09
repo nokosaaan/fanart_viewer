@@ -247,7 +247,7 @@ function AppMain({ role, onLogout }){
 
     return list.filter(it=>{
       if(!includeCP && (it.situation||'').toUpperCase()==='CP') return false
-      if(!includeR18 && (it.situation||'').toUpperCase()==='R18') return false
+      if((readOnly || !includeR18) && (it.situation||'').toUpperCase()==='R18') return false
       if(situationFilter && situationFilter!=='ALL'){
         if(((it.situation||'').toUpperCase()) !== situationFilter) return false
       }
@@ -258,7 +258,7 @@ function AppMain({ role, onLogout }){
       const matchesFilters = filters.every(f => hay.includes(f.toLowerCase()))
       return matchesQuery && matchesFilters
     })
-  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly])
+  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, readOnly])
   
 
   // pagination over filtered results
@@ -349,7 +349,7 @@ function AppMain({ role, onLogout }){
         <h1>Fanart Viewer</h1>
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
-          <button type="button" className="btn" onClick={()=>setCharGroupOpen(true)} style={{fontSize:12}}>キャラクターグループ</button>
+          {!readOnly && <button type="button" className="btn" onClick={()=>setCharGroupOpen(true)} style={{fontSize:12}}>キャラクターグループ</button>}
           <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
             Preview Timeline
           </button>
@@ -375,6 +375,7 @@ function AppMain({ role, onLogout }){
         setSituationFilter={setSituationFilter}
         titleMissingOnly={titleMissingOnly}
         setTitleMissingOnly={setTitleMissingOnly}
+        readOnly={readOnly}
       />
       <ScrollList items={paginatedItems} readOnly={readOnly} />
       {nextPageUrl && (
@@ -413,7 +414,7 @@ function AppMain({ role, onLogout }){
       )}
       {previewOpen && (
         <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
-          <PreviewPane open={previewOpen} onClose={()=>setPreviewOpen(false)} />
+          <PreviewPane open={previewOpen} onClose={()=>setPreviewOpen(false)} readOnly={readOnly} filteredItems={filtered} />
         </React.Suspense>
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}

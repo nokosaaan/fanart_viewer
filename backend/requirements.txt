@@ -5,3 +5,7 @@ requests
 playwright
 beautifulsoup4
 yt-dlp
+python-dotenv
+gallery-dl
+gunicorn
+whitenoise

@@ -15,6 +15,22 @@ async function getBackendOrigin() {
   }
 }
 
+// Read the auth token.
+// Primary: chrome.storage.local (set by content_localhost.js reading the non-HttpOnly fv_ext cookie).
+// Fallback: chrome.cookies API reading the HttpOnly fv_auth cookie directly.
+async function readAuthToken(backendOrigin) {
+  try {
+    const stored = await chrome.storage.local.get('fv_auth_token')
+    if (stored.fv_auth_token) return stored.fv_auth_token
+  } catch (_) {}
+  try {
+    const cookie = await chrome.cookies.get({ url: backendOrigin + '/', name: 'fv_auth' })
+    return cookie ? cookie.value : null
+  } catch (_) {
+    return null
+  }
+}
+
 async function readResponseBody(response) {
   const text = await response.text()
   if (!text) {
@@ -36,16 +52,22 @@ async function postBookmark(url) {
 
   const tried = []
   for (const backendOrigin of originCandidates) {
+    const token = await readAuthToken(backendOrigin)
     const endpoint = `${backendOrigin}/api/items/bookmark_fetch/`
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    }
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(new Error('Request timed out')), REQUEST_TIMEOUT_MS)
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers,
         body: JSON.stringify({ url }),
         signal: controller.signal,
       })

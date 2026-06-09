@@ -1,0 +1,42 @@
+version: '3.8'
+
+# Production compose for Cloudflare Tunnel deployment.
+# Usage:
+#   1. npm --prefix frontend run build          # build React frontend
+#   2. docker compose -f docker-compose.prod.yml up -d --build
+#   3. cloudflared tunnel --url http://localhost:8000
+#
+# Set DJANGO_DEBUG=0 (and a strong DJANGO_SECRET_KEY) in .env before starting.
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fanart}
+      POSTGRES_USER: ${POSTGRES_USER:-fanart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  web:
+    build: ./backend
+    restart: always
+    volumes:
+      - ./backend/data:/app/data
+      # Mount the built React frontend so Django/whitenoise can serve it
+      - ./frontend/dist:/app/frontend_dist:ro
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - DJANGO_DEBUG=0
+      - FRONTEND_DIST=/app/frontend_dist
+    depends_on:
+      - db
+
+volumes:
+  db_data:

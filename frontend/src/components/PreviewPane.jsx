@@ -2,8 +2,9 @@ import React, {useEffect, useState, useRef} from 'react'
 
 const PANE_PAGE_SIZE = 50
 
-export default function PreviewPane({open, onClose}){
+export default function PreviewPane({open, onClose, readOnly, filteredItems}){
   const [items, setItems] = useState([])
+  const allLoadedRef = useRef([]) // full unfiltered set fetched from API
   const [loading, setLoading] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(null)
   const [panePageIndex, setPanePageIndex] = useState(0)
@@ -51,12 +52,23 @@ export default function PreviewPane({open, onClose}){
           // if parsing fails, leave `next` as-is
         }
       }
-      const have = list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
-      if(!mountedRef.current) return have
+      const withPreview = list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
+      if(!mountedRef.current) return withPreview
+      if(replace){
+        allLoadedRef.current = withPreview
+      } else {
+        allLoadedRef.current = (allLoadedRef.current || []).concat(withPreview)
+      }
+      // Apply the same item-level filters as the main list (e.g. R18 hidden for viewer)
+      let have = allLoadedRef.current
+      if(Array.isArray(filteredItems) && filteredItems.length > 0){
+        const allowedIds = new Set(filteredItems.map(it => it.id))
+        have = have.filter(it => allowedIds.has(it.id))
+      }
       if(replace){
         setItems(have)
       } else {
-        setItems(prev => (prev || []).concat(have))
+        setItems(have)
       }
       setNextPageUrl(next)
       return have
@@ -76,6 +88,20 @@ export default function PreviewPane({open, onClose}){
     loadItems('/api/items/?page_size=1000', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // Re-apply filter when filteredItems changes (e.g. search/situation filter toggled while pane is open)
+  useEffect(()=>{
+    if(!open) return
+    let have = allLoadedRef.current || []
+    if(Array.isArray(filteredItems) && filteredItems.length > 0){
+      const allowedIds = new Set(filteredItems.map(it => it.id))
+      have = have.filter(it => allowedIds.has(it.id))
+    }
+    setItems(have)
+    setSelectedIndex(null)
+    setPanePageIndex(0)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredItems])
 
   // close preview pane when clicking outside it (but not when clicking the modal)
   useEffect(()=>{
@@ -303,6 +329,7 @@ export default function PreviewPane({open, onClose}){
                     <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} />
                   </button>
                   <div className="preview-meta">
+                    <div className="preview-item-id">#{it.id}</div>
                     <div className="preview-title">{(it.titles && it.titles[0]) || it.titles || it.title || ''}</div>
                     <div className="preview-artist">{it.artist || ''}</div>
                   </div>
@@ -355,10 +382,12 @@ export default function PreviewPane({open, onClose}){
                   <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
                   <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
                   <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
-                  <div style={{marginTop:12}}>
-                    <button className="btn" onClick={deleteCurrentPreview} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete This Preview'}</button>
-                    <button className="btn" style={{marginLeft:8}} onClick={clearAllPreviews} disabled={deleting}>{deleting ? 'Processing...' : 'Clear All Previews'}</button>
-                  </div>
+                  {!readOnly && (
+                    <div style={{marginTop:12}}>
+                      <button className="btn" onClick={deleteCurrentPreview} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete This Preview'}</button>
+                      <button className="btn" style={{marginLeft:8}} onClick={clearAllPreviews} disabled={deleting}>{deleting ? 'Processing...' : 'Clear All Previews'}</button>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="modal-timeline-wrap">

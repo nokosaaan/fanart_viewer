@@ -15,8 +15,18 @@ python manage.py makemigrations --noinput || true
 echo "Running migrations..."
 python manage.py migrate --noinput
 
-# echo "Importing JSON data (idempotent)..."
-# python manage.py import_json_data || true
-
 echo "Starting server..."
-exec python manage.py runserver 0.0.0.0:8000
+if [ "${DJANGO_DEBUG:-1}" = "0" ]; then
+  # Production: collect static files then start gunicorn
+  echo "Collecting static files..."
+  python manage.py collectstatic --noinput 2>/dev/null || true
+  exec gunicorn backend.wsgi:application \
+    --bind 0.0.0.0:8000 \
+    --workers "${GUNICORN_WORKERS:-2}" \
+    --timeout 120 \
+    --access-logfile - \
+    --error-logfile -
+else
+  # Development: Django runserver with auto-reload
+  exec python manage.py runserver 0.0.0.0:8000
+fi

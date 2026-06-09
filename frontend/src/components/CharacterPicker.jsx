@@ -5,7 +5,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 export default function CharacterPicker({ charList, setCharList, allChars }) {
   const [groups, setGroups] = useState([])
   const [collapsed, setCollapsed] = useState({})
-  const [ungroupedCollapsed, setUngroupedCollapsed] = useState(false)
+  const [ungroupedCollapsed, setUngroupedCollapsed] = useState(true)
   const [newCharInput, setNewCharInput] = useState('')
   const [showNewInput, setShowNewInput] = useState(false)
 
@@ -14,7 +14,9 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
       const r = await fetch('/api/character-groups/')
       if (!r.ok) return
       const data = await r.json()
-      setGroups(Array.isArray(data) ? data : (data.results || []))
+      const list = Array.isArray(data) ? data : (data.results || [])
+      setGroups(list)
+      setCollapsed(Object.fromEntries(list.map(g => [g.id, true])))
     } catch (e) {
       console.error('Failed to load character groups', e)
     }

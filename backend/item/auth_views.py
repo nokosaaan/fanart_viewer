@@ -31,8 +31,17 @@ def login_view(request):
     admin_pass  = os.environ.get('ADMIN_PASSWORD', '')
     viewer_pass = os.environ.get('VIEWER_PASSWORD', '')
 
+    MAX_AGE = 30 * 24 * 3600
     if admin_pass and password == admin_pass:
-        return JsonResponse({'token': _make_token('admin'), 'role': 'admin'})
+        token = _make_token('admin')
+        resp = JsonResponse({'token': token, 'role': 'admin'})
+        resp.set_cookie('fv_auth', token, max_age=MAX_AGE, httponly=True,  samesite='Lax')
+        resp.set_cookie('fv_ext',  token, max_age=MAX_AGE, httponly=False, samesite='Lax')
+        return resp
     if viewer_pass and password == viewer_pass:
-        return JsonResponse({'token': _make_token('viewer'), 'role': 'viewer'})
+        token = _make_token('viewer')
+        resp = JsonResponse({'token': token, 'role': 'viewer'})
+        resp.set_cookie('fv_auth', token, max_age=MAX_AGE, httponly=True,  samesite='Lax')
+        resp.set_cookie('fv_ext',  token, max_age=MAX_AGE, httponly=False, samesite='Lax')
+        return resp
     return JsonResponse({'detail': 'パスワードが違います'}, status=401)

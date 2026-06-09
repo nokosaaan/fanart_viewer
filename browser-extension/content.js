@@ -69,81 +69,6 @@
     }
   }
 
-  function normalizeOrigin(value) {
-    return String(value || '').trim().replace(/\/$/, '')
-  }
-
-  async function getBackendOriginCandidates() {
-    const defaults = ['http://localhost:8000', 'http://127.0.0.1:8000']
-    try {
-      if (chrome && chrome.storage && chrome.storage.sync) {
-        const stored = await chrome.storage.sync.get(['backendOrigin'])
-        const configured = normalizeOrigin(stored.backendOrigin)
-        return [configured, ...defaults].map(normalizeOrigin).filter((origin, index, array) => origin && array.indexOf(origin) === index)
-      }
-    } catch (_error) {
-      // fall through to defaults
-    }
-    return defaults.map(normalizeOrigin)
-  }
-
-  async function readResponseBody(response) {
-    const text = await response.text()
-    if (!text) {
-      return { text: '', json: null }
-    }
-    try {
-      return { text, json: JSON.parse(text) }
-    } catch (_error) {
-      return { text, json: null }
-    }
-  }
-
-  async function postBookmark(url) {
-    const originCandidates = await getBackendOriginCandidates()
-    const tried = []
-
-    for (const backendOrigin of originCandidates) {
-      const endpoint = `${backendOrigin}/api/items/bookmark_fetch/`
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-      try {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify({ url }),
-          signal: controller.signal,
-        })
-
-        const body = await readResponseBody(response)
-        tried.push({ endpoint, ok: response.ok, status: response.status, body: body.json || body.text })
-
-        return {
-          ok: response.ok,
-          status: response.status,
-          body: body.json || body.text,
-          endpoint,
-          tried,
-        }
-      } catch (error) {
-        const message = error && error.name === 'AbortError'
-          ? `Timeout after ${REQUEST_TIMEOUT_MS}ms`
-          : (error && error.message ? error.message : String(error))
-        tried.push({ endpoint, ok: false, error: message })
-      } finally {
-        clearTimeout(timeoutId)
-      }
-    }
-
-    const lastFailure = tried.length ? tried[tried.length - 1] : null
-    const error = new Error(lastFailure && lastFailure.error ? lastFailure.error : 'Failed to contact backend')
-    error.tried = tried
-    throw error
-  }
-
   function getBookmarkActionElementFromPath(event) {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : []
     for (const node of path) {
@@ -178,50 +103,71 @@
     return /bookmark/.test(label)
   }
 
+  // Delegate the actual HTTP request to the background service worker.
+  // Background scripts have access to chrome.cookies and can read the fv_auth
+  // session cookie, which content scripts cannot do directly.
   function sendBookmark(url) {
-    showToast('Sending tweet URL to fanart_viewer…')
+    showToast('Sending to fanart_viewer…')
     const progressTimer = setTimeout(() => {
-      showToast('Still working… fanart_viewer is fetching the tweet image.')
+      showToast('Still working… fanart_viewer is fetching the image.')
     }, 7000)
 
     if (pendingUrls.has(url)) {
       clearTimeout(progressTimer)
-      showToast('Already sending this tweet…', 'error')
+      showToast('Already sending this URL…', 'error')
       return
     }
     pendingUrls.add(url)
 
     try {
-      postBookmark(url)
-        .then(result => {
-          clearTimeout(progressTimer)
-          if (result.ok) {
-            const body = result.body || {}
-            const status = body.status || 'saved'
-            const count = typeof body.count !== 'undefined' ? body.count : ''
-            showToast(count ? `fanart_viewer: ${status} (${count})` : `fanart_viewer: ${status}`)
-            return
-          }
+      chrome.runtime.sendMessage({ type: 'FV_BOOKMARK_CLICKED', url }, response => {
+        clearTimeout(progressTimer)
+        pendingUrls.delete(url)
 
-          const body = result.body || {}
-          const detail = body.detail || body.error || result.status || 'unknown error'
-          const endpoint = result.endpoint ? `\n${result.endpoint}` : ''
-          const status = typeof result.status !== 'undefined' ? `\nHTTP ${result.status}` : ''
-          const tried = Array.isArray(result.tried) && result.tried.length
-            ? `\ntried: ${result.tried.map(item => item.endpoint || item.error || 'unknown').join(' | ')}`
-            : ''
-          showToast(`fanart_viewer rejected the request:${status}${endpoint}\n${detail}${tried}`, 'error')
-        })
-        .catch(error => {
-          clearTimeout(progressTimer)
-          const message = error && error.message ? error.message : String(error)
-          if (!/extension context invalidated/i.test(message)) {
-            showToast(`Send failed: ${message}`, 'error')
+        if (chrome.runtime.lastError) {
+          const msg = (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'Extension error'
+          if (!/extension context invalidated/i.test(msg)) {
+            showToast(`Send failed: ${msg}`, 'error')
           }
-        })
-        .finally(() => {
-          pendingUrls.delete(url)
-        })
+          return
+        }
+
+        if (!response) {
+          showToast('No response from extension background', 'error')
+          return
+        }
+
+        // response.ok = background handled the message (true even for HTTP errors)
+        // response.result.ok = the actual HTTP request succeeded
+        if (!response.ok) {
+          // postBookmark threw (network error / timeout)
+          const tried = Array.isArray(response.tried) && response.tried.length
+            ? `\ntried: ${response.tried.map(item => item.endpoint || item.error || 'unknown').join(' | ')}`
+            : ''
+          showToast(`Send failed: ${response.error || 'unknown error'}${tried}`, 'error')
+          return
+        }
+
+        const result = response.result || {}
+        if (result.ok) {
+          const body = result.body || {}
+          const status = body.status || 'saved'
+          const count = typeof body.count !== 'undefined' ? body.count : ''
+          showToast(count ? `fanart_viewer: ${status} (${count})` : `fanart_viewer: ${status}`)
+          return
+        }
+
+        // HTTP error (4xx/5xx)
+        const body = result.body || {}
+        const detail = body.detail || body.error || result.status || 'unknown error'
+        const hint = result.status === 401 ? '\n(fanart_viewer にログインしているか確認してください)' : ''
+        const endpoint = result.endpoint ? `\n${result.endpoint}` : ''
+        const httpStatus = typeof result.status !== 'undefined' ? `\nHTTP ${result.status}` : ''
+        const tried = Array.isArray(result.tried) && result.tried.length
+          ? `\ntried: ${result.tried.map(item => item.endpoint || item.error || 'unknown').join(' | ')}`
+          : ''
+        showToast(`fanart_viewer rejected the request:${httpStatus}${endpoint}\n${detail}${hint}${tried}`, 'error')
+      })
     } catch (err) {
       clearTimeout(progressTimer)
       pendingUrls.delete(url)
@@ -324,6 +270,114 @@
   document.addEventListener('pointerdown', handlePixivBookmark, true)
   document.addEventListener('mousedown', handlePixivBookmark, true)
   document.addEventListener('click', handlePixivBookmark, true)
+
+  // --- Poipiku support ---
+
+  // Returns the canonical illustration URL if on a detail page, otherwise null.
+  // Matches: /123/456.html  /123/456/  /123/456
+  function getPoipikuIllustUrl() {
+    const m = location.pathname.match(/^\/(\d+)\/(\d+)(?:\.html)?\/?$/)
+    if (!m) return null
+    return `https://poipiku.com/${m[1]}/${m[2]}.html`
+  }
+
+  function _isPoipikuBookmarkNode(node) {
+    if (!(node instanceof Element)) return false
+    const cls   = (node.className && typeof node.className === 'string' ? node.className : '').toLowerCase()
+    const label = (node.getAttribute('aria-label') || '').toLowerCase()
+    const title = (node.getAttribute('title') || '').toLowerCase()
+    const text  = (node.textContent || '').trim()
+    if (/bookmark|favorite|bookmarklist/i.test(cls)) return true
+    if (/ブックマーク|お気に入り|保存/.test(label) || /bookmark/i.test(label)) return true
+    if (/ブックマーク|お気に入り|保存/.test(title) || /bookmark/i.test(title)) return true
+    if (/^(ブックマーク|お気に入り|保存する)$/.test(text)) return true
+    return false
+  }
+
+  function getPoipikuBookmarkElementFromPath(event) {
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : []
+    for (const node of path) {
+      if (_isPoipikuBookmarkNode(node)) return node
+    }
+    if (event.target instanceof Element) {
+      return event.target.closest(
+        '[class*="BookMark"],[class*="Bookmark"],[class*="Favorite"],' +
+        '[aria-label*="ブックマーク"],[aria-label*="bookmark" i],' +
+        '[title*="ブックマーク"],[title*="bookmark" i]'
+      )
+    }
+    return null
+  }
+
+  function handlePoipikuBookmark(event) {
+    // Skip clicks on the injected FV button itself (handled by its own listener)
+    if (event.target && event.target.id === 'fv-poipiku-btn') return
+
+    const url = getPoipikuIllustUrl()
+    if (!url) return
+
+    const element = getPoipikuBookmarkElementFromPath(event)
+    if (!element) return
+
+    cleanupRecent()
+    const now = Date.now()
+    const lastHit = recentUrls.get(url)
+    if (lastHit && now - lastHit < DEDUPE_MS) return
+
+    recentUrls.set(url, now)
+    sendBookmark(url)
+  }
+
+  // Inject a small floating "Save to FV" button on Poipiku detail pages.
+  // This is a reliable fallback that works regardless of Poipiku's button structure.
+  function injectPoipikuButton() {
+    if (document.getElementById('fv-poipiku-btn')) return
+    if (!getPoipikuIllustUrl()) return
+
+    const btn = document.createElement('button')
+    btn.id = 'fv-poipiku-btn'
+    btn.textContent = '📌 FV'
+    btn.title = 'Save to fanart_viewer'
+    btn.style.cssText = [
+      'position:fixed',
+      'bottom:72px',
+      'right:16px',
+      'z-index:2147483646',
+      'padding:6px 10px',
+      'border-radius:8px',
+      'border:none',
+      'background:rgba(99,102,241,0.92)',
+      'color:#fff',
+      'font:bold 13px/1 system-ui,sans-serif',
+      'cursor:pointer',
+      'box-shadow:0 4px 12px rgba(0,0,0,0.3)',
+      'user-select:none',
+    ].join(';')
+
+    btn.addEventListener('click', () => {
+      const url = getPoipikuIllustUrl()
+      if (!url) return
+      cleanupRecent()
+      const now = Date.now()
+      const lastHit = recentUrls.get(url)
+      if (lastHit && now - lastHit < DEDUPE_MS) return
+      recentUrls.set(url, now)
+      sendBookmark(url)
+    })
+
+    document.documentElement.appendChild(btn)
+  }
+
+  if (location.hostname === 'poipiku.com') {
+    document.addEventListener('pointerdown', handlePoipikuBookmark, true)
+    document.addEventListener('mousedown', handlePoipikuBookmark, true)
+    document.addEventListener('click', handlePoipikuBookmark, true)
+
+    // Inject button now and re-check after SPA-style navigation
+    injectPoipikuButton()
+    const _poipikuObserver = new MutationObserver(() => injectPoipikuButton())
+    _poipikuObserver.observe(document.documentElement, { childList: true, subtree: false })
+  }
 
   showToast('fanart_viewer bookmark bridge loaded')
 })()

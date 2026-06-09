@@ -4,7 +4,12 @@ Fetches all images from a Poipiku work URL (https://poipiku.com/{user_id}/{illus
 - Parses IllustItemThumbImg from the initial page HTML.
 - Calls the ShowAppendFile AJAX endpoint to retrieve images not yet in the DOM.
 - Strips the _640.jpg thumbnail suffix to get original-resolution URLs.
-- Uses POIPIKU_PHPSESSID cookie for authenticated access (R15/R18/follower-only).
+
+Cookie authentication (for R15/R18/follower-only works):
+  POIPIKU_LK         → sent as Cookie: POIPIKU_LK=<value>   (long-lived login key)
+  POIPIKU_JSESSIONID → sent as Cookie: JSESSIONID=<value>   (session key, shorter-lived)
+Both are optional; POIPIKU_LK alone is usually enough for R15 access.
+Get both values from browser DevTools → Application → Cookies → https://poipiku.com.
 """
 
 import os
@@ -96,13 +101,21 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
     except ImportError as exc:
         raise RuntimeError(f'Missing dependency: {exc}')
 
-    phpsessid = os.environ.get('POIPIKU_PHPSESSID')
+    poipiku_lk         = os.environ.get('POIPIKU_LK')
+    poipiku_jsessionid = os.environ.get('POIPIKU_JSESSIONID')
 
     session = _requests.Session()
     session.headers.update(_HEADERS)
-    if phpsessid:
-        session.cookies.set('PHPSESSID', phpsessid, domain='.poipiku.com', path='/')
-        session.cookies.set('PHPSESSID', phpsessid, domain='poipiku.com', path='/')
+
+    # Build Cookie header directly — more reliable than session.cookies.set()
+    # across requests versions and avoids domain-matching edge cases.
+    cookie_parts = []
+    if poipiku_lk:
+        cookie_parts.append(f'POIPIKU_LK={poipiku_lk}')
+    if poipiku_jsessionid:
+        cookie_parts.append(f'JSESSIONID={poipiku_jsessionid}')
+    if cookie_parts:
+        session.headers['Cookie'] = '; '.join(cookie_parts)
 
     # Extract user_id / illust_id from URL.
     # Supported formats:
@@ -166,8 +179,8 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
         return []
 
     # Download images.  Try the original (no _640.jpg suffix) first — accessible
-    # when POIPIKU_PHPSESSID is set.  On 403, fall back to the _640.jpg thumbnail
-    # which is always publicly accessible.
+    # when authenticated (POIPIKU_LK set).  On 403, fall back to the _640.jpg
+    # thumbnail which is always publicly accessible.
     dl_headers = {
         'Referer': page_url,
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',

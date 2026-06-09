@@ -188,6 +188,7 @@ function ItemRow({ it, readOnly }){
 
   return (
     <div className="item" key={it.id}>
+      <div className="item-id-badge">#{it.id}</div>
       <div className="meta-grid">
         <div className="col titles-col">
           <div className="col-header">Titles</div>
@@ -295,7 +296,7 @@ function ItemRow({ it, readOnly }){
           </div>
         )}
         {!readOnly && <button className="btn" style={{marginLeft:8}} onClick={onAddToPreview} disabled={loading}>{loading? 'Adding...' : 'Add to Preview'}</button>}
-        <button className="btn" style={{marginLeft:8}} onClick={async ()=>{
+        {!readOnly && <button className="btn" style={{marginLeft:8}} onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
           if(!ok) return
           try{
@@ -305,7 +306,7 @@ function ItemRow({ it, readOnly }){
             try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
             alert('Previews cleared.')
           }catch(e){ console.error(e); alert('Failed to clear previews') }
-        }}>Clear Previews</button>
+        }}>Clear Previews</button>}
         {!readOnly && <>
           <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff'}} onClick={async ()=>{
             const ok = window.confirm('Delete this item from the database? This will remove its previews too.')

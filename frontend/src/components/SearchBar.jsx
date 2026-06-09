@@ -1,6 +1,6 @@
 import React, {useState} from 'react'
 
-export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly}){
+export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, readOnly}){
   const [open, setOpen] = useState(false)
 
   function onToggleCP(e){
@@ -84,20 +84,22 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
               >
                 {includeCP ? 'CP: ON' : 'CP: OFF'}
               </button>
-              <button
-                style={{marginLeft:8}}
-                className={`cp-chip ${includeR18 ? 'enabled' : ''}`}
-                onClick={() => {
-                  const willEnable = !includeR18
-                  if (willEnable) {
-                    const ok = window.confirm('閲覧注意: R18 コンテンツが表示されます。表示を続けてもよいですか？')
-                    if (!ok) return
-                  }
-                  setIncludeR18(willEnable)
-                }}
-              >
-                {includeR18 ? 'R18: ON' : 'R18: OFF'}
-              </button>
+              {!readOnly && (
+                <button
+                  style={{marginLeft:8}}
+                  className={`cp-chip ${includeR18 ? 'enabled' : ''}`}
+                  onClick={() => {
+                    const willEnable = !includeR18
+                    if (willEnable) {
+                      const ok = window.confirm('閲覧注意: R18 コンテンツが表示されます。表示を続けてもよいですか？')
+                      if (!ok) return
+                    }
+                    setIncludeR18(willEnable)
+                  }}
+                >
+                  {includeR18 ? 'R18: ON' : 'R18: OFF'}
+                </button>
+              )}
             </div>
           </div>
         </div>

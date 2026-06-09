@@ -45,6 +45,9 @@ class SimpleAuthMiddleware:
 
         auth_header = request.headers.get('Authorization', '')
         token = auth_header.removeprefix('Bearer ').strip()
+        # Also accept cookie-based auth for <img src> and other browser-native requests
+        if not token:
+            token = request.COOKIES.get('fv_auth', '')
         role = verify_token(token)
 
         if role is None:

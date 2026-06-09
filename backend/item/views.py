@@ -34,6 +34,16 @@ try:
 except Exception:
     HAVE_YTDLP = False
 try:
+    from .twitter_gql_fetch import fetch_twitter_media, TwitterAuthError
+    HAVE_TWITTER_GQL = True
+except Exception:
+    HAVE_TWITTER_GQL = False
+try:
+    from .gallerydl_fetch import fetch_twitter_media_gallerydl
+    HAVE_GALLERYDL = True
+except Exception:
+    HAVE_GALLERYDL = False
+try:
     from .poipiku_fetch import fetch_poipiku_media
     HAVE_POIPIKU = True
 except Exception:
@@ -152,7 +162,7 @@ def _run_bookmark_fetch_job(item_id, target_url, data=None):
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
-    queryset = Item.objects.all().order_by('external_id')
+    queryset = Item.objects.all().order_by('-id')
     serializer_class = ItemSerializer
 
     def list(self, request, *args, **kwargs):
@@ -360,8 +370,35 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 # don't fail the whole request if the helper errors
                 pass
 
-            # yt-dlp fallback for Twitter/X: used when HTML scraping found nothing.
-            # Handles sensitive accounts that require authentication.
+            # gallery-dl fetch for Twitter/X sensitive images (primary auth method).
+            # gallery-dl maintains active Twitter support and handles sensitive
+            # content reliably via cookie auth.
+            if not candidates and HAVE_GALLERYDL and os.environ.get('TWITTER_AUTH_TOKEN'):
+                if ('twitter.com' in target_url) or ('x.com' in target_url):
+                    try:
+                        gdl_results = fetch_twitter_media_gallerydl(target_url)
+                        for (img_bytes, mime) in gdl_results:
+                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
+                                candidates.append((target_url, img_bytes, mime))
+                                used_method = 'gallerydl'
+                    except Exception:
+                        logging.exception('gallery-dl fetch failed for %s', target_url)
+
+            # GraphQL API fallback (browser-free, but more fragile than gallery-dl).
+            if not candidates and HAVE_TWITTER_GQL and os.environ.get('TWITTER_AUTH_TOKEN'):
+                if ('twitter.com' in target_url) or ('x.com' in target_url):
+                    try:
+                        gql_results = fetch_twitter_media(target_url)
+                        for (img_bytes, mime) in gql_results:
+                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
+                                candidates.append((target_url, img_bytes, mime))
+                                used_method = 'twitter_gql'
+                    except TwitterAuthError as e:
+                        logging.warning('Twitter GQL auth error for %s: %s', target_url, e)
+                    except Exception:
+                        logging.exception('Twitter GQL fetch failed for %s', target_url)
+
+            # yt-dlp fallback (primarily video, last resort for images).
             if not candidates and HAVE_YTDLP and os.environ.get('TWITTER_AUTH_TOKEN'):
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
@@ -938,13 +975,22 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'updated', 'updated': updates, 'item': serializer.data})
 
+    @action(detail=False, methods=['get'], url_path='twitter_auth_check')
+    def twitter_auth_check(self, request):
+        """Twitter認証情報の有効性を確認する診断エンドポイント。"""
+        if not HAVE_TWITTER_GQL:
+            return Response({'ok': False, 'reason': 'twitter_gql_fetch module not available'})
+        from .twitter_gql_fetch import verify_credentials
+        result = verify_credentials()
+        return Response(result)
+
 
 def items_from_db(request):
     """Return all items serialized from the Django DB.
 
     This replaces the older `items_from_rust` name and endpoint.
     """
-    qs = Item.objects.all().order_by('external_id')
+    qs = Item.objects.all().order_by('-id')
     serializer = ItemSerializer(qs, many=True, context={'request': request})
     return JsonResponse(serializer.data, safe=False)
 

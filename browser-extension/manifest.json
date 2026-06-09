@@ -1,15 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "fanart_viewer Twitter Bookmark Bridge",
-  "version": "0.1.0",
-  "description": "Detects X/Twitter bookmark clicks and sends the tweet URL to local fanart_viewer.",
-  "permissions": ["storage"],
+  "name": "fanart_viewer Bookmark Bridge",
+  "version": "0.2.0",
+  "description": "Detects bookmark/save actions on X/Twitter, Pixiv, and Poipiku and sends URLs to local fanart_viewer.",
+  "permissions": ["storage", "cookies"],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
+    "https://*.trycloudflare.com/*",
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://www.pixiv.net/*"
+    "https://www.pixiv.net/*",
+    "https://poipiku.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -17,8 +19,22 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*", "https://twitter.com/*", "https://www.pixiv.net/*"],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://www.pixiv.net/*",
+        "https://poipiku.com/*"
+      ],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost:8000/*",
+        "http://127.0.0.1:8000/*",
+        "https://*.trycloudflare.com/*"
+      ],
+      "js": ["content_localhost.js"],
       "run_at": "document_idle"
     }
   ]
