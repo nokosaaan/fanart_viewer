@@ -24,7 +24,6 @@ services:
     environment:
       - DATABASE_HOST=db
       - DATABASE_PORT=5432
-      # Database and API credentials are loaded from the project .env via env_file
       - HEADLESS_ALLOWED=1
     depends_on:
       - db
@@ -32,9 +31,9 @@ services:
   frontend:
     build: ./frontend
     volumes:
-    - ./frontend:/app
-    - frontend_node_modules:/app/node_modules
-    - ./.env:/app/.env:ro
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - ./.env:/app/.env:ro
     ports:
       - "3000:3000"
     environment:

@@ -1,167 +1,169 @@
-# Fanart Viewer — Local release: Install & run from scratch
+# Fanart Viewer — ローカル開発 / ラズパイ本番 セットアップガイド
 
-This document explains how to install and run a local release of Fanart Viewer
-from a clean machine (no existing JSON fixture, no DB migrations applied).
-It uses Docker and Docker Compose to provide a reproducible environment.
+## 環境の種類
 
-Prerequisites
- - WSL2 or Ubuntu development environment
- - Docker (engine) installed and working
- - Docker Compose (v2 or later) or `docker compose` plugin
- - git (to clone the repository)
- - At least ~1.5–4 GB free disk and a few GB RAM (backend image with headless browser may be large)
+| ファイル | 用途 |
+|---|---|
+| `docker-compose.yml` | ローカル開発（HMR付きdevサーバー） |
+| `docker-compose.prod.yml` | ラズパイ本番（gunicorn + Cloudflare Tunnel） |
 
-Overview
- - The repository includes a `docker-compose.yml` with three services:
-   - `db`: PostgreSQL 15
-   - `web`: Django backend (runs migrations and gunicorn via `entrypoint.sh`)
-   - `frontend`: React/Vite frontend (dev server in local compose)
+---
 
-High-level steps
- 1. Clone repo and create `.env` from `.env.example`
- 2. Configure required environment variables (DB password, optional API keys)
- 3. Start services with Docker Compose
- 4. Run Django migrations and create a superuser
- 5. (Optional) Import JSON fixtures when you have them
- 6. Access the app and admin UI
+## ローカル開発環境
 
-Step-by-step
+### 必要なもの
+- Docker (Engine + Compose v2)
+- git
 
-1) Clone the repository
+### 手順
 
 ```bash
+# 1. リポジトリをクローン
 git clone https://github.com/nokosaaan/fanart_viewer.git
 cd fanart_viewer
-git checkout local  # optional: if you want the local branch
-```
 
-2) Create `.env` and set secrets
-
-Copy the example `.env` and the backend example into a working `.env`. The compose file reads `.env` in the project root and also the backend service sources `backend/.env` via the volume.
-
-```bash
+# 2. .env を作成
 cp .env.example .env
-cp backend/.env.example backend/.env
+# .env を編集して最低限以下を設定:
+#   POSTGRES_PASSWORD=任意の強いパスワード
+#   DJANGO_SECRET_KEY=ランダムな文字列
+#   DJANGO_DEBUG=1
 
-# Edit .env and backend/.env to set at least:
-# - POSTGRES_PASSWORD  (strong password)
-# - TW_BEARER (optional; required for Twitter API based media fetches)
-# - DJANGO_SECRET_KEY (backend/.env)
-# - DJANGO_DEBUG=1 (for local development; set to 0 in production)
+# 3. 起動
+docker compose up -d --build
 
-editor .env backend/.env
-```
-
-Important environment variables (minimum)
-- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` — database credentials
-- `DJANGO_SECRET_KEY` — Django secret key
-- `DJANGO_DEBUG` — set `1` for local development
-- `VITE_BACKEND_URL` or `BACKEND_URL` — if running frontend separately
-
-3) Build and start services
-
-For a first run you can build the images and start services:
-
-```bash
-# Build and start (detached)
-docker compose build
-docker compose up -d
-
-# View logs
+# 4. ログ確認
 docker compose logs -f web
 ```
 
-Notes:
-- The `web` service uses `backend/entrypoint.sh` which waits for the DB and runs migrations automatically in some setups. If your setup mounts the code, you may need to run migrations manually (see next step).
+アクセス先:
+- フロントエンド: http://localhost:3000
+- バックエンド API: http://localhost:8000/api/
+- Django 管理画面: http://localhost:8000/admin/
 
-4) Run migrations and create an admin user
+---
 
-If the entrypoint did not run migrations, run them manually against the running `web` container:
+## ラズパイ本番環境（Cloudflare Tunnel）
+
+### 必要なもの
+- Docker (Engine + Compose v2)
+- Cloudflare アカウント（無料プランでOK）
+- ドメイン（Cloudflare 管理下）
+
+### 初回セットアップ
+
+#### 1. Cloudflare Tunnel を作成してトークンを取得
+
+1. [Cloudflare Zero Trust ダッシュボード](https://one.dash.cloudflare.com/) → Networks → Tunnels
+2. "Create a tunnel" → Type: Cloudflared → 名前をつける
+3. 表示されたトークンをコピー
+4. Public Hostname タブで設定:
+   - Domain: your-domain.com
+   - Service: `http://web:8000`
+
+#### 2. .env を設定
 
 ```bash
-# run migrations
-docker compose exec web python manage.py migrate --noinput
-
-# create a Django superuser (interactive)
-docker compose exec web python manage.py createsuperuser
+cp .env.example .env
 ```
 
-If `docker compose exec` reports the container is not ready, check `docker compose logs web` and wait for DB readiness.
+`.env` に以下を設定:
 
-5) (Optional) Import data when you have a fixture
+```env
+DJANGO_DEBUG=0
+DJANGO_SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32)" の出力>
+POSTGRES_PASSWORD=強いパスワード
+CLOUDFLARE_TUNNEL_TOKEN=<Cloudflareからコピーしたトークン>
+VITE_ADMIN_PATH=<管理者ログイン用のシークレットパス>
+ADMIN_PASSWORD=管理者パスワード
+VIEWER_PASSWORD=閲覧者パスワード（不要なら空）
+```
 
-If you later obtain a JSON fixture (Django `dumpdata` format), you can import it using the included management command. Place the fixture on the host and use a command like:
+#### 3. フロントエンドをビルド
 
 ```bash
-# copy fixture into container (example)
-cp /path/to/items-backup.json backend/backup/items-backup.json
+docker compose -f docker-compose.prod.yml run --rm frontend-build
+```
 
-# then run import inside web container
+#### 4. 起動
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+#### 5. ラズパイ起動時の自動起動設定（初回のみ）
+
+```bash
+# systemd サービスを登録
+sudo cp fanart-viewer.service /etc/systemd/system/
+# パスをラズパイの実際のパスに合わせて編集
+sudo nano /etc/systemd/system/fanart-viewer.service
+
+sudo systemctl daemon-reload
+sudo systemctl enable fanart-viewer
+sudo systemctl start fanart-viewer
+```
+
+### データ更新時の手順
+
+フロントエンドを変更した場合:
+```bash
+docker compose -f docker-compose.prod.yml run --rm frontend-build
+docker compose -f docker-compose.prod.yml restart web
+```
+
+バックエンドのみ変更した場合:
+```bash
+docker compose -f docker-compose.prod.yml up -d --build web
+```
+
+全体を更新する場合:
+```bash
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml run --rm frontend-build
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+---
+
+## データ管理
+
+### マイグレーションとスーパーユーザー作成（初回）
+
+```bash
+# 開発
+docker compose exec web python manage.py createsuperuser
+
+# 本番
+docker compose -f docker-compose.prod.yml exec web python manage.py createsuperuser
+```
+
+### JSON フィクスチャのインポート
+
+```bash
+cp /path/to/items-backup.json backend/backup/
 docker compose exec web python manage.py import_json_data /app/backup/items-backup.json
 ```
 
-Notes about large backups and previews
-- If your JSON is large, compress it (`.gz` or `.zip`) before using the `restore` UI — the backend supports `.gz` and `.zip` uploads and will extract the JSON server-side.
-- The repo includes an admin-only endpoint to upload a fixture and run `restore_previews_from_fixture`. To use that endpoint locally you may set the env var `RESTORE_PREVIEWS_PASSWORD` and then use the frontend UI or `curl` to POST the file.
+---
 
-Example: gzip and upload via curl (dry-run)
+## よく使うコマンド
 
 ```bash
-# compress (if large)
-gzip -c items-backup.json > items-backup.json.gz
+# ログ確認
+docker compose -f docker-compose.prod.yml logs -f web
+docker compose -f docker-compose.prod.yml logs -f cloudflared
 
-# POST to local web (CORS not needed when same host)
-curl -v -F "file=@items-backup.json.gz" -F "password=your_password" -F "dry_run=1" http://localhost:8000/api/admin/restore_previews/
+# コンテナに入る
+docker compose -f docker-compose.prod.yml exec web /bin/bash
+
+# 停止
+docker compose -f docker-compose.prod.yml down
+
+# systemd 経由での状態確認
+sudo systemctl status fanart-viewer
 ```
-
-6) Access the app
-
-- Frontend (dev server): http://localhost:3000
-- Backend API: http://localhost:8000/api/
-- Django admin: http://localhost:8000/admin/ (login with the superuser you created)
-
-7) Twitter/X bookmark trigger
-
-- If you don't have datasets(json files) for fanart_viewer, you can fetch images by using browse extention.
-- You need to create a twitter account to trriger fetch process.
-
-Troubleshooting
-- If the web container exits with database errors, check `docker compose logs db` and `docker compose logs web` for hints. The DB may not be accepting connections yet — the entrypoint waits but if you ran migrations manually you may need to retry.
-- If uploads are rejected (413 Request Entity Too Large), and you're running locally with the compose nginx/dev server, check whether the platform proxy or reverse-proxy (if any) limits uploads; locally with the plain compose above you should not hit platform limits. Use compressed upload as a workaround.
-
-Production notes (brief)
-- For production packaging consider:
-  - Building frontend into static files and serving with nginx (production `frontend/Dockerfile` supports this)
-  - Using a managed Postgres (Render, RDS) and configuring `DATABASE_URL`
-  - Adding TLS and secure env var storage
-
-FAQ / common commands
-
-Start (build if needed):
-
-```bash
-docker compose up -d --build
-```
-
-Stop and remove containers:
-
-```bash
-docker compose down
-```
-
-Run a shell in the web container:
-
-```bash
-docker compose exec web /bin/bash
-```
-
-Help and next steps
-- If you want, I can also:
-  - Add `docker-compose.prod.yml` for an opinionated production setup
-  - Add a small `RELEASE` script to automate migration + createsuperuser + sample data import
-  - Add a GitHub Actions workflow to build and push Docker images automatically
-
-If you'd like any of those, tell me which and I will prepare the files.
 
 ---
-Last updated: 2026-06-02
+
+Last updated: 2026-06-13

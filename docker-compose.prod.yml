@@ -1,12 +1,17 @@
 version: '3.8'
 
-# Production compose for Cloudflare Tunnel deployment.
-# Usage:
-#   1. npm --prefix frontend run build          # build React frontend
-#   2. docker compose -f docker-compose.prod.yml up -d --build
-#   3. cloudflared tunnel --url http://localhost:8000
+# Production compose file for Raspberry Pi hosting with Cloudflare Tunnel.
 #
-# Set DJANGO_DEBUG=0 (and a strong DJANGO_SECRET_KEY) in .env before starting.
+# Prerequisites:
+#   1. Build the frontend:
+#        docker compose -f docker-compose.prod.yml run --rm frontend-build
+#   2. Set in .env:
+#        DJANGO_DEBUG=0
+#        DJANGO_SECRET_KEY=<strong random key>
+#        CLOUDFLARE_TUNNEL_TOKEN=<token from Cloudflare Zero Trust dashboard>
+#
+# Start:  docker compose -f docker-compose.prod.yml up -d
+# Stop:   docker compose -f docker-compose.prod.yml down
 
 services:
   db:
@@ -21,22 +26,49 @@ services:
 
   web:
     build: ./backend
+    command: /app/entrypoint.sh
     restart: always
     volumes:
+      - ./backend:/app
       - ./backend/data:/app/data
-      # Mount the built React frontend so Django/whitenoise can serve it
       - ./frontend/dist:/app/frontend_dist:ro
     env_file:
       - .env
-    ports:
-      - "8000:8000"
     environment:
       - DATABASE_HOST=db
       - DATABASE_PORT=5432
+      - HEADLESS_ALLOWED=1
       - DJANGO_DEBUG=0
       - FRONTEND_DIST=/app/frontend_dist
     depends_on:
       - db
+    # No ports exposed — cloudflared routes traffic internally via Docker network.
+
+  # One-shot service to build the React frontend.
+  # Run before first deploy and after any frontend changes:
+  #   docker compose -f docker-compose.prod.yml run --rm frontend-build
+  frontend-build:
+    build: ./frontend
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - ./.env:/app/.env:ro
+    command: sh -c "npm install && npm run build"
+    profiles:
+      - build
+
+  # Cloudflare Tunnel — exposes the app at your configured public hostname
+  # without requiring any port forwarding on the router.
+  # Configure the tunnel's Public Hostname in Zero Trust dashboard to: http://web:8000
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - web
 
 volumes:
   db_data:
+  frontend_node_modules:
