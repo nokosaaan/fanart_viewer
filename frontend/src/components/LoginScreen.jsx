@@ -3,12 +3,15 @@ import React, { useState } from 'react'
 export default function LoginScreen({ onLogin, isAdmin = false }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [errorType, setErrorType] = useState('error') // 'error' | 'blocked'
   const [loading, setLoading] = useState(false)
+  const [blocked, setBlocked] = useState(false)
 
   async function submit(e) {
     e.preventDefault()
     setLoading(true)
     setError('')
+    setErrorType('error')
     try {
       const endpoint = isAdmin ? '/api/auth/admin/' : '/api/auth/'
       const res = await fetch(endpoint, {
@@ -18,6 +21,10 @@ export default function LoginScreen({ onLogin, isAdmin = false }) {
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) {
+        if (res.status === 429) {
+          setErrorType('blocked')
+          setBlocked(true)
+        }
         setError(j.detail || 'Invalid password')
         setLoading(false)
         return
@@ -59,11 +66,14 @@ export default function LoginScreen({ onLogin, isAdmin = false }) {
           }}
         />
         {error && (
-          <div style={{ color: '#f87171', fontSize: 13, marginTop: -8 }}>{error}</div>
+          <div style={{
+            fontSize: 13, marginTop: -8,
+            color: errorType === 'blocked' ? '#fb923c' : '#f87171',
+          }}>{error}</div>
         )}
         <button
           type="submit"
-          disabled={loading || !password}
+          disabled={loading || !password || blocked}
           style={{
             padding: '10px', borderRadius: 6, border: 'none',
             background: isAdmin ? '#7c3aed' : '#3b82f6', color: '#fff', fontSize: 14, fontWeight: 500,

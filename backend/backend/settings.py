@@ -38,7 +38,7 @@ MIDDLEWARE = [
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'backend.cors.SimpleCorsMiddleware',
-    'backend.auth_middleware.SimpleAuthMiddleware',
+    'security.auth_middleware.SimpleAuthMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',

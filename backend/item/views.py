@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 
 from .models import Item, PreviewImage, CharacterGroup
 from .serializers import ItemSerializer, CharacterGroupSerializer
+from security.ssrf_guard import validate_url, SSRFError
 import logging
 import traceback
 import base64
@@ -69,6 +70,11 @@ def _fetch_image_via_requests(url, min_size=None):
     and why to call it (HTML path, renderer path). Keeping it top-level
     makes the network I/O boundary explicit.
     """
+    try:
+        validate_url(url)
+    except SSRFError:
+        return None, None
+
     headers = {'User-Agent': 'fanart-viewer-bot/1.0'}
     try:
         import requests as _requests
@@ -217,6 +223,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         if not target_url:
             return Response({'detail': 'No link available on item'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_url(target_url)
+        except SSRFError as e:
+            return Response({'detail': f'URL not allowed: {e}'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Use the module-level request-based fetch helper for deterministic
         # server-side HTTP fetches. See `_fetch_image_via_requests` defined
@@ -684,6 +695,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         target_url = data.get('url') or request.query_params.get('url')
         if not target_url:
             return Response({'detail': 'No URL provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_url(target_url)
+        except SSRFError as e:
+            return Response({'detail': f'URL not allowed: {e}'}, status=status.HTTP_400_BAD_REQUEST)
 
         item = _find_item_by_url(target_url)
         item_created = False

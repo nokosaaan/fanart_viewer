@@ -13,6 +13,7 @@ fanart-viewer.service
 /backend/item/__pycache__/*.pyc
 /frontend/dist/*
 /backend/staticfiles/
+/backend/security/
 /log/*
 /dump*
 claudeflared
