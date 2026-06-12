@@ -22,56 +22,69 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
     return ()=>{ mountedRef.current = false }
   }, [])
 
-  // load items with optional pagination; for the preview timeline request a
-  // large page so newly-saved previews (which may be far down the list)
-  // are included. This is a pragmatic client-side improvement; a server-side
-  // filter would be preferable for very large datasets.
+  function normalizeNext(next){
+    if(!next) return null
+    try{ const u = new URL(next); return u.pathname + (u.search || '') }catch(e){ return next }
+  }
+
+  function parsePageData(data){
+    if(Array.isArray(data)) return { list: data, next: null }
+    if(Array.isArray(data.results)) return { list: data.results, next: normalizeNext(data.next || null) }
+    return { list: [], next: null }
+  }
+
+  // load items with optional pagination. When replace=true, follows all API
+  // `next` links so the full set is loaded in one go — this prevents the pane
+  // from losing items that were accumulated via lazy scroll-loading after a
+  // full reload (e.g. after deleteCurrentPreview / clearAllPreviews).
   async function loadItems(url='/api/items/?page_size=1000', replace=true){
     try{
       if(replace){ setLoading(true); setNextPageUrl(null) }
       else { setLoadingMore(true) }
-      const r = await fetch(url)
-      if(!r.ok) return []
-      const data = await r.json()
-      let list = []
-      let next = null
-      if(Array.isArray(data)){
-        list = data
-        next = null
-      } else if(Array.isArray(data.results)){
-        list = data.results
-        next = data.next || null
-        // normalize `next` when backend returns an absolute URL that may
-        // reference an internal container hostname (e.g. http://web:8000)
-        try{
-          if(next){
-            const u = new URL(next)
-            next = u.pathname + (u.search || '')
-          }
-        }catch(e){
-          // if parsing fails, leave `next` as-is
+
+      if(replace){
+        // fetch every page and accumulate before updating state
+        let accumulated = []
+        let currentUrl = url
+        while(currentUrl && mountedRef.current){
+          const r = await fetch(currentUrl)
+          if(!r.ok) break
+          const { list, next } = parsePageData(await r.json())
+          accumulated = accumulated.concat(
+            list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
+          )
+          currentUrl = next
         }
-      }
-      const withPreview = list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
-      if(!mountedRef.current) return withPreview
-      if(replace){
-        allLoadedRef.current = withPreview
+        if(!mountedRef.current) return accumulated
+        allLoadedRef.current = accumulated
+        let have = accumulated
+        if(Array.isArray(filteredItems) && filteredItems.length > 0){
+          const allowedIds = new Set(filteredItems.map(it => it.id))
+          have = have.filter(it => allowedIds.has(it.id))
+        }
+        setItems(have)
+        setNextPageUrl(null)
+        // clamp panePageIndex so we never show an empty page after a reload
+        const maxPage = Math.max(0, Math.ceil(have.length / PANE_PAGE_SIZE) - 1)
+        setPanePageIndex(prev => Math.min(prev, maxPage))
+        return have
       } else {
+        // lazy append: load one more page
+        const r = await fetch(url)
+        if(!r.ok) return []
+        const { list, next } = parsePageData(await r.json())
+        const withPreview = list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
+        if(!mountedRef.current) return withPreview
         allLoadedRef.current = (allLoadedRef.current || []).concat(withPreview)
-      }
-      // Apply the same item-level filters as the main list (e.g. R18 hidden for viewer)
-      let have = allLoadedRef.current
-      if(Array.isArray(filteredItems) && filteredItems.length > 0){
-        const allowedIds = new Set(filteredItems.map(it => it.id))
-        have = have.filter(it => allowedIds.has(it.id))
-      }
-      if(replace){
+        let have = allLoadedRef.current
+        if(Array.isArray(filteredItems) && filteredItems.length > 0){
+          const allowedIds = new Set(filteredItems.map(it => it.id))
+          have = have.filter(it => allowedIds.has(it.id))
+        }
         setItems(have)
-      } else {
-        setItems(have)
+        setNextPageUrl(next)
+        return have
       }
-      setNextPageUrl(next)
-      return have
     }catch(e){
       console.error('Failed to load preview items', e)
       if(mountedRef.current && replace) setItems([])
@@ -384,8 +397,12 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
                   <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
                   {!readOnly && (
                     <div style={{marginTop:12}}>
-                      <button className="btn" onClick={deleteCurrentPreview} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete This Preview'}</button>
-                      <button className="btn" style={{marginLeft:8}} onClick={clearAllPreviews} disabled={deleting}>{deleting ? 'Processing...' : 'Clear All Previews'}</button>
+                      <button className="btn" style={{padding:'7px 10px', lineHeight:1}} title="Delete this preview" onClick={deleteCurrentPreview} disabled={deleting}>
+                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>}
+                      </button>
+                      <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear all previews" onClick={clearAllPreviews} disabled={deleting}>
+                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M15 4l-3 3-2.5-.5L3 13l3 3 1-1 1 1 3-3-.5-2.5 3-3z"/><line x1="6" y1="16" x2="4" y2="18"/><line x1="8" y1="18" x2="6" y2="20"/><line x1="10" y1="17" x2="8" y2="19"/></svg>}
+                      </button>
                     </div>
                   )}
                 </div>

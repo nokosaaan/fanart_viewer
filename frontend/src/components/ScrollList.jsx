@@ -72,9 +72,6 @@ function ItemRow({ it, readOnly }){
 
   async function onFetch(e){
     e && e.preventDefault()
-    // confirm that this action will use external APIs / network resources
-    const ok = window.confirm('This will fetch the provided URL and may consume external APIs or network resources. Continue?')
-    if(!ok) return
     setLoading(true)
     // first fetch candidates (preview-only)
     const candRes = await fetchPreviewCandidates(it.id, url, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
@@ -138,31 +135,6 @@ function ItemRow({ it, readOnly }){
     alert('No preview candidates found.')
   }
 
-  async function onAddToPreview(e){
-    e && e.preventDefault()
-    setLoading(true)
-    showToast('プレビューを取得中…')
-    try{
-      const res = await fetchAndSavePreview(it.id, url || it.link, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
-      setLoading(false)
-      if(!res.ok){
-        const detail = res.body && (res.body.detail || res.body.error)
-        showToast('取得失敗' + (detail ? ': ' + detail : ''), 'error')
-        console.warn('addToPreview failed', res.body)
-        return
-      }
-      setHasPreviewLocal(true)
-      setDebugInfo(res.body)
-      try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = res.body }catch(e){}
-      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
-      showToast('プレビューを追加しました ✓', 'success')
-    }catch(e){
-      setLoading(false)
-      console.error(e)
-      showToast('取得失敗: ' + (e && e.message ? e.message : String(e)), 'error')
-    }
-  }
-
   async function saveSelected(){
     if(!candidates) return
     const urls = Array.from(selectedUrls)
@@ -177,13 +149,37 @@ function ItemRow({ it, readOnly }){
       if(resp.ok){
         setHasPreviewLocal(true)
         setShowCandidates(false)
+        setCandidates(null)
+        setSelectedUrls(new Set())
         try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
-        try{ window.alert('Selected previews saved.'); }catch(e){}
+        showToast('プレビューを追加しました ✓', 'success')
       } else {
         console.warn('save_previews failed', j)
-        alert('Save failed. See console.')
+        showToast('追加失敗', 'error')
       }
-    }catch(e){ setLoading(false); console.error(e); alert('Save failed') }
+    }catch(e){ setLoading(false); console.error(e); showToast('追加失敗: '+(e&&e.message?e.message:String(e)), 'error') }
+  }
+
+  async function saveAll(){
+    if(!candidates || candidates.length===0) return
+    setLoading(true)
+    showToast('プレビューを追加中…')
+    try{
+      const images = candidates.map(c => ({url: c.url, data_uri: c.data_uri}))
+      const resp = await fetch(`/api/items/${it.id}/save_previews/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({images})})
+      const j = await resp.json().catch(()=>({}))
+      setLoading(false)
+      if(resp.ok){
+        setHasPreviewLocal(true)
+        setShowCandidates(false)
+        setCandidates(null)
+        setSelectedUrls(new Set())
+        try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+        showToast('プレビューを追加しました ✓', 'success')
+      } else {
+        showToast('追加失敗', 'error')
+      }
+    }catch(e){ setLoading(false); showToast('追加失敗: '+(e&&e.message?e.message:String(e)), 'error') }
   }
 
   return (
@@ -292,11 +288,12 @@ function ItemRow({ it, readOnly }){
               <option value="api">Use API</option>
               <option value="playwright">Use Browser (Playwright)</option>
             </select>
-            <button className="btn" type="button" onClick={onFetch} disabled={loading}>{loading? 'Fetching...' : 'Fetch Preview'}</button>
+            <button className="btn" type="button" onClick={onFetch} disabled={loading} style={{padding:'7px 12px', lineHeight:1, fontSize:24}} title="候補を取得してプレビューに追加">
+              {loading ? '…' : '+'}
+            </button>
           </div>
         )}
-        {!readOnly && <button className="btn" style={{marginLeft:8}} onClick={onAddToPreview} disabled={loading}>{loading? 'Adding...' : 'Add to Preview'}</button>}
-        {!readOnly && <button className="btn" style={{marginLeft:8}} onClick={async ()=>{
+        {!readOnly && <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear previews" onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
           if(!ok) return
           try{
@@ -306,9 +303,11 @@ function ItemRow({ it, readOnly }){
             try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
             alert('Previews cleared.')
           }catch(e){ console.error(e); alert('Failed to clear previews') }
-        }}>Clear Previews</button>}
+        }}>
+          <svg width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M15 4l-3 3-2.5-.5L3 13l3 3 1-1 1 1 3-3-.5-2.5 3-3z"/><line x1="6" y1="16" x2="4" y2="18"/><line x1="8" y1="18" x2="6" y2="20"/><line x1="10" y1="17" x2="8" y2="19"/></svg>
+        </button>}
         {!readOnly && <>
-          <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff'}} onClick={async ()=>{
+          <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff', padding:'7px 10px', lineHeight:1}} title="Delete item" onClick={async ()=>{
             const ok = window.confirm('Delete this item from the database? This will remove its previews too.')
             if(!ok) return
             try{
@@ -317,8 +316,17 @@ function ItemRow({ it, readOnly }){
               try{ window.dispatchEvent(new CustomEvent('item-deleted', { detail: { id: it.id } })) }catch(e){}
               alert('Item deleted.')
             }catch(e){ console.error(e); alert('Failed to delete item') }
-          }}>Delete Item</button>
-          <button className="btn" style={{marginLeft:8}} onClick={()=>setShowEditor(true)}>Edit fields</button>
+          }}>
+            <svg width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+              <path d="M10 11v6M14 11v6"/>
+              <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+            </svg>
+          </button>
+          <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Edit fields" onClick={()=>setShowEditor(true)}>
+            <svg width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>
         </>}
         {/* fetch debug is stored internally; use `window.showFetchDebug(id)` in the console to inspect */}
       </div>
@@ -326,34 +334,40 @@ function ItemRow({ it, readOnly }){
 
       {/* Candidate selection modal */}
       {showCandidates && candidates && (
-        <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:1200}} onClick={()=>setShowCandidates(false)}>
-          <div style={{width:'80%', maxWidth:900, margin:'5% auto', background:'#fff', padding:16}} onClick={e=>e.stopPropagation()}>
-            <h3>Select images to save</h3>
-            <div style={{display:'flex', gap:12, flexWrap:'wrap', maxHeight:400, overflow:'auto'}}>
+        <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.7)', zIndex:1200}} onClick={()=>setShowCandidates(false)}>
+          <div style={{width:'80%', maxWidth:900, margin:'5% auto', background:'#1e293b', borderRadius:10, padding:20, boxShadow:'0 8px 40px rgba(0,0,0,0.6)'}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16}}>
+              <span style={{color:'#f8fafc', fontWeight:600, fontSize:15}}>{candidates.length} 件の候補</span>
+              <button className="btn" style={{padding:'2px 10px'}} onClick={()=>setShowCandidates(false)}>✕</button>
+            </div>
+            <div style={{display:'flex', gap:12, flexWrap:'wrap', maxHeight:420, overflow:'auto'}}>
               {candidates.map((img, i)=> (
-                <label key={i} style={{width:160, border:'1px solid #ddd', padding:8}}>
-                  <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#f6f6f6'}}>
+                <label key={i} style={{width:160, border: selectedUrls.has(img.url) ? '2px solid #3b82f6' : '2px solid #334155', borderRadius:6, padding:8, cursor:'pointer', background:'#0f172a'}}>
+                  <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#1e293b', borderRadius:4}}>
                     {img.data_uri ? (
-                      <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%'}} />
+                      <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%', borderRadius:3}} />
                     ) : (
-                      <div style={{fontSize:12, color:'#666'}}>No preview</div>
+                      <div style={{fontSize:12, color:'#64748b'}}>No preview</div>
                     )}
                   </div>
-                  <div style={{marginTop:6}}>
-                    <input type="checkbox" onChange={e=>{
+                  <div style={{marginTop:6, display:'flex', alignItems:'center', gap:6}}>
+                    <input type="checkbox" checked={selectedUrls.has(img.url)} onChange={e=>{
                       const s = new Set(selectedUrls)
                       if(e.target.checked) s.add(img.url)
                       else s.delete(img.url)
                       setSelectedUrls(s)
-                    }} /> <span style={{fontSize:12}}>{img.size} bytes</span>
+                    }} />
+                    <span style={{fontSize:11, color:'#94a3b8'}}>{img.size ? Math.round(img.size/1024)+'KB' : ''}</span>
+                    <a href={img.url} target="_blank" rel="noreferrer" style={{fontSize:11, color:'#60a5fa', marginLeft:'auto'}} onClick={e=>e.stopPropagation()}>↗</a>
                   </div>
-                  <div style={{fontSize:11, wordBreak:'break-all', marginTop:6}}><a href={img.url} target="_blank" rel="noreferrer">open</a></div>
                 </label>
               ))}
             </div>
-            <div style={{marginTop:12}}>
-              <button className="btn" onClick={saveSelected} disabled={loading}>Save selected</button>
-              <button className="btn" style={{marginLeft:8}} onClick={()=>setShowCandidates(false)}>Cancel</button>
+            <div style={{marginTop:16, display:'flex', gap:8, alignItems:'center'}}>
+              <button className="btn" style={{background:'#3b82f6', color:'#fff'}} onClick={saveAll} disabled={loading}>全選択して追加</button>
+              <button className="btn" onClick={saveSelected} disabled={loading || selectedUrls.size===0}>選択した {selectedUrls.size} 件を追加</button>
+              <button className="btn" style={{marginLeft:'auto'}} onClick={()=>{ setSelectedUrls(new Set(candidates.map(c=>c.url))) }}>全選択</button>
+              <button className="btn" onClick={()=>setSelectedUrls(new Set())}>選択解除</button>
             </div>
           </div>
         </div>
