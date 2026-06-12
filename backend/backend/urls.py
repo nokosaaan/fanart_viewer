@@ -1,5 +1,4 @@
 from django.urls import path, include, re_path
-from django.contrib import admin
 from django.conf import settings
 from django.http import FileResponse, Http404
 import os
@@ -15,7 +14,6 @@ def spa_fallback(request, path=''):
 
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
     path('api/auth/', include('item.auth_urls')),
     path('api/', include('item.urls')),
     re_path(r'^.*$', spa_fallback),

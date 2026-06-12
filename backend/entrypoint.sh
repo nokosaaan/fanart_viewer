@@ -9,9 +9,6 @@ if [ -n "$DATABASE_HOST" ]; then
   done
 fi
 
-echo "Making migrations (if needed)..."
-python manage.py makemigrations --noinput || true
-
 echo "Running migrations..."
 python manage.py migrate --noinput
 

@@ -15,11 +15,19 @@ try:
 except ImportError:
     pass
 
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
-
+_raw_secret_key = os.environ.get('DJANGO_SECRET_KEY', 'change-me')
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
-ALLOWED_HOSTS = ['*']
+if not DEBUG and _raw_secret_key in ('change-me', '', 'dev-secret'):
+    raise RuntimeError(
+        'DJANGO_SECRET_KEY must be set to a strong random value in production. '
+        'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+    )
+
+SECRET_KEY = _raw_secret_key
+
+_allowed_hosts_env = os.environ.get('DJANGO_ALLOWED_HOSTS', '')
+ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()] or ['*']
 
 INSTALLED_APPS = [
     'django.contrib.admin',

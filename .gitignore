@@ -2,7 +2,6 @@
 .renderignore
 .venv/*
 .github/*
-fanart-viewer.service
 /scripts/*
 /backend/data/*.json
 # /backend/backend/data/*.json

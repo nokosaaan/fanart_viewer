@@ -1,0 +1,14 @@
+[Unit]
+Description=fanart_viewer (production)
+After=docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/home/noko/GitSandbox/fanart_viewer
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml up
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml down
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
