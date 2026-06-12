@@ -8,5 +8,7 @@
 /backend/backup/*.json
 /backend/data_filtered/*.json
 /backend/item/__pycache__/*.pyc
+/frontend/dist/*
 /log/*
 /dump*
+claudeflared

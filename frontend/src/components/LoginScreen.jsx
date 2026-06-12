@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-export default function LoginScreen({ onLogin }) {
+export default function LoginScreen({ onLogin, isAdmin = false }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -10,7 +10,8 @@ export default function LoginScreen({ onLogin }) {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('/api/auth/', {
+      const endpoint = isAdmin ? '/api/auth/admin/' : '/api/auth/'
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
@@ -42,6 +43,7 @@ export default function LoginScreen({ onLogin }) {
       }}>
         <h2 style={{ color: '#f8fafc', margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: 0.5 }}>
           fanart viewer
+          {isAdmin && <span style={{ fontSize: 13, color: '#a78bfa', marginLeft: 8 }}>管理者</span>}
         </h2>
         <input
           type="password"
@@ -64,7 +66,7 @@ export default function LoginScreen({ onLogin }) {
           disabled={loading || !password}
           style={{
             padding: '10px', borderRadius: 6, border: 'none',
-            background: '#3b82f6', color: '#fff', fontSize: 14, fontWeight: 500,
+            background: isAdmin ? '#7c3aed' : '#3b82f6', color: '#fff', fontSize: 14, fontWeight: 500,
             cursor: loading || !password ? 'default' : 'pointer',
             opacity: loading || !password ? 0.6 : 1,
             transition: 'opacity 0.15s',

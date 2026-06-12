@@ -422,6 +422,8 @@ function AppMain({ role, onLogout }){
   )
 }
 
+const ADMIN_PATH = import.meta.env.VITE_ADMIN_PATH || ''
+
 // Thin auth wrapper — handles login state and renders AppMain once authenticated.
 export default function App() {
   const [role, setRole] = useState(null) // null=checking, 'login', 'admin', 'viewer', 'none'
@@ -453,6 +455,9 @@ export default function App() {
   }
 
   if (role === null) return null
-  if (role === 'login') return <LoginScreen onLogin={handleLogin} />
+  if (role === 'login') {
+    const isAdminLogin = Boolean(ADMIN_PATH) && window.location.pathname === `/${ADMIN_PATH}`
+    return <LoginScreen onLogin={handleLogin} isAdmin={isAdminLogin} />
+  }
   return <AppMain role={role} onLogout={handleLogout} />
 }
