@@ -4,7 +4,7 @@ This Chrome/Edge extension watches X/Twitter bookmark clicks and forwards the cu
 
 ## How it works
 
-- The content script runs on `x.com` and `twitter.com`.
+- The content script runs on `x.com`, `twitter.com`, `www.pixiv.net`, and `poipiku.com(partly)`.
 - When the bookmark button is clicked on a tweet page, it sends the current page URL to the background service worker.
 - The background worker POSTs the URL to `http://localhost:8000/api/items/bookmark_fetch/`.
 - fanart_viewer resolves the matching Item and stores fetched preview images in the DB.
