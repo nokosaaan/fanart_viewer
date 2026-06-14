@@ -1,4 +1,5 @@
-const DEFAULT_BACKEND_ORIGIN = 'http://localhost:8000'
+// const DEFAULT_BACKEND_ORIGIN = 'http://localhost:8000'
+const DEFAULT_BACKEND_ORIGIN = 'https://psi-friendly-moves-literally.trycloudflare.com'
 const REQUEST_TIMEOUT_MS = 20000
 
 function normalizeOrigin(value) {
