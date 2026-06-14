@@ -123,6 +123,37 @@ def _extract_media_urls(tweet_obj: dict) -> list[str]:
     return urls
 
 
+def _unwrap_tweet(tweet_obj: dict) -> dict:
+    """TweetWithVisibilityResults 等のラッパーを剥がして tweet dict を返す。"""
+    return tweet_obj.get("tweet", tweet_obj)
+
+
+def _get_rest_id(tweet_obj: dict) -> str | None:
+    """tweet result から tweet ID を返す。"""
+    t = _unwrap_tweet(tweet_obj)
+    return t.get("rest_id") or t.get("legacy", {}).get("id_str")
+
+
+def _get_author_id(tweet_obj: dict) -> str | None:
+    """tweet result から投稿者の user_id_str を返す。"""
+    t = _unwrap_tweet(tweet_obj)
+    return t.get("legacy", {}).get("user_id_str")
+
+
+def _collect_all_tweet_results(obj, results: list):
+    """GQL レスポンス全体を再帰走査して tweet result オブジェクトを収集する。"""
+    if isinstance(obj, dict):
+        if "tweet_results" in obj:
+            result = (obj["tweet_results"] or {}).get("result")
+            if result:
+                results.append(result)
+        for v in obj.values():
+            _collect_all_tweet_results(v, results)
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_all_tweet_results(item, results)
+
+
 def _walk_for_media(obj, collected: list):
     """GQL レスポンス全体を再帰的に走査して tweet_results を見つける。"""
     if isinstance(obj, dict):
@@ -196,8 +227,26 @@ def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> list[st
         if code in (32, 64, 135, 326):  # Bad/suspended/expired auth codes
             raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
 
+    # Collect all tweet result objects from the thread/conversation
+    all_results: list[dict] = []
+    _collect_all_tweet_results(data, all_results)
+
+    # Find the main tweet to identify the author
+    main_author_id: str | None = None
+    for r in all_results:
+        if _get_rest_id(r) == tweet_id:
+            main_author_id = _get_author_id(r)
+            break
+
+    # Collect media from main tweet + same-author thread continuations only
     media_urls: list[str] = []
-    _walk_for_media(data, media_urls)
+    for r in all_results:
+        if main_author_id is None or _get_author_id(r) == main_author_id:
+            media_urls.extend(_extract_media_urls(r))
+
+    if not media_urls and not all_results:
+        # Fallback: walk the raw response (old behaviour) in case structure changed
+        _walk_for_media(data, media_urls)
 
     # deduplicate while preserving order
     return list(dict.fromkeys(media_urls))

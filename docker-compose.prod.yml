@@ -32,7 +32,7 @@ services:
       - ./backend:/app:ro
       - ./backend/data:/app/data
       - staticfiles:/app/staticfiles
-      - ./frontend/dist:/app/frontend_dist:ro
+      - ./frontend/dist:/frontend_dist:ro
     env_file:
       - .env
     environment:
@@ -40,7 +40,7 @@ services:
       - DATABASE_PORT=5432
       - HEADLESS_ALLOWED=1
       - DJANGO_DEBUG=0
-      - FRONTEND_DIST=/app/frontend_dist
+      - FRONTEND_DIST=/frontend_dist
     depends_on:
       - db
     # No ports exposed — cloudflared routes traffic internally via Docker network.
@@ -58,15 +58,22 @@ services:
     profiles:
       - build
 
-  # Cloudflare Tunnel — exposes the app at your configured public hostname
-  # without requiring any port forwarding on the router.
-  # Configure the tunnel's Public Hostname in Zero Trust dashboard to: http://web:8000
+  # Cloudflare Tunnel — exposes the app at a public URL without port forwarding.
+  #
+  # Quick Tunnel mode (no domain/token required):
+  #   Uses trycloudflare.com — URL changes on every restart.
+  #   Check the URL in logs: docker compose -f docker-compose.prod.yml logs cloudflared
+  #
+  # Named Tunnel mode (fixed URL, requires Cloudflare domain + token):
+  #   Set CLOUDFLARE_TUNNEL_TOKEN in .env and change command to:
+  #   command: tunnel --no-autoupdate run
+  #   Then uncomment the environment section below.
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: always
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate --url http://web:8000
+    # environment:
+    #   - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - web
 
