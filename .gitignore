@@ -11,6 +11,8 @@
 /backend/backup/*.json
 /backend/data_filtered/*.json
 /backend/item/__pycache__/*.pyc
+/backend/security/__pycache__/*.pyc
+/backend/backend/__pycache__/*.pyc
 /frontend/dist/*
 /backend/staticfiles/
 /log/*
