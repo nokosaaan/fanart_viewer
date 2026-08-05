@@ -20,13 +20,16 @@ export default function CharacterGroupManager({ onClose }) {
   const [addCharTarget, setAddCharTarget] = useState(null)  // groupId
   const [addCharInput, setAddCharInput] = useState('')
   const [moveState, setMoveState] = useState(null)   // {char, fromGroupId}
+  const [query, setQuery] = useState('')
 
   const load = useCallback(async () => {
     const [gr, ch] = await Promise.all([
       fetch('/api/character-groups/').then(r => r.json()).catch(() => []),
       fetch('/api/items/all_characters/').then(r => r.json()).catch(() => []),
     ])
-    setGroups(Array.isArray(gr) ? gr : (gr.results || []))
+    const list = Array.isArray(gr) ? gr : (gr.results || [])
+    setGroups(list)
+    setCollapsed(Object.fromEntries(list.map(g => [g.id, true])))
     setAllChars(Array.isArray(ch) ? ch : [])
   }, [])
 
@@ -120,6 +123,12 @@ export default function CharacterGroupManager({ onClose }) {
 
   const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name))
 
+  const q = query.trim().toLowerCase()
+  const searching = q.length > 0
+  const visibleGroups = sortedGroups.filter(g =>
+    !searching || g.name.toLowerCase().includes(q) || (g.characters || []).some(c => c.toLowerCase().includes(q))
+  )
+
   return (
     <div className="cgm-panel-backdrop" onClick={onClose}>
       <div className="cgm-panel" onClick={e => e.stopPropagation()}>
@@ -128,11 +137,23 @@ export default function CharacterGroupManager({ onClose }) {
           <button className="cgm-panel-close" onClick={onClose}>✕</button>
         </div>
 
+        <div className="cgm-panel-search">
+          <input
+            className="cgm-search-input"
+            placeholder="グループ名・キャラクター名で検索"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+          />
+        </div>
+
         <div className="cgm-panel-body">
           {/* Groups */}
-          {sortedGroups.map(g => {
+          {visibleGroups.length === 0 && searching && (
+            <div className="cgm-empty-hint">一致するグループ・キャラクターがありません</div>
+          )}
+          {visibleGroups.map(g => {
             const chars = g.characters || []
-            const isCollapsed = collapsed[g.id]
+            const isCollapsed = searching ? false : collapsed[g.id]
             return (
               <div key={g.id} className="cgm-panel-group">
                 <div className="cgm-panel-group-header">
@@ -194,13 +215,16 @@ export default function CharacterGroupManager({ onClose }) {
           })}
 
           {/* Ungrouped */}
-          {ungrouped.length > 0 && (
+          {(() => {
+            const shownUngrouped = ungrouped.filter(c => !searching || c.toLowerCase().includes(q))
+            if (shownUngrouped.length === 0) return null
+            return (
             <div className="cgm-panel-group cgm-panel-ungrouped">
               <div className="cgm-panel-group-header">
-                <span className="cgm-panel-group-name" style={{ color: '#9ca3af' }}>未分類 ({ungrouped.length})</span>
+                <span className="cgm-panel-group-name" style={{ color: '#9ca3af' }}>未分類 ({shownUngrouped.length})</span>
               </div>
               <div className="cgm-panel-chips">
-                {ungrouped.map(char => (
+                {shownUngrouped.map(char => (
                   <span key={char} className="cgm-panel-chip cgm-panel-chip-ungrouped">
                     {char}
                     <button className="cgm-chip-btn" title="グループに割り当て"
@@ -209,7 +233,8 @@ export default function CharacterGroupManager({ onClose }) {
                 ))}
               </div>
             </div>
-          )}
+            )
+          })()}
 
           {/* New group */}
           <div className="cgm-new-group-row">

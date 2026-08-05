@@ -6,8 +6,7 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
   const [groups, setGroups] = useState([])
   const [collapsed, setCollapsed] = useState({})
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState(true)
-  const [newCharInput, setNewCharInput] = useState('')
-  const [showNewInput, setShowNewInput] = useState(false)
+  const [query, setQuery] = useState('')
 
   const loadGroups = useCallback(async () => {
     try {
@@ -32,12 +31,11 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
     }
   }
 
-  function addNew() {
-    const t = newCharInput.trim()
+  function addNew(raw) {
+    const t = raw.trim()
     if (!t) return
     if (!charList.includes(t)) setCharList(prev => [...prev, t])
-    setNewCharInput('')
-    setShowNewInput(false)
+    setQuery('')
   }
 
   function groupOf(char) {
@@ -53,17 +51,34 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
   // Characters that exist but aren't in any group
   const ungrouped = allKnown.filter(c => !groupedChars.has(c))
 
-  // Filter suggestions for new input
-  const suggestions = allKnown.filter(c =>
-    newCharInput && c.toLowerCase().includes(newCharInput.toLowerCase()) && !charList.includes(c)
-  ).slice(0, 8)
+  const q = query.trim().toLowerCase()
+  const searching = q.length > 0
+  const exactExists = searching && allKnown.some(c => c.toLowerCase() === q)
+
+  function filterChars(chars) {
+    if (!searching) return chars
+    return chars.filter(c => c.toLowerCase().includes(q))
+  }
 
   return (
     <div className="cp-root">
+      <div className="cp-search-row">
+        <input
+          className="cp-search-input"
+          placeholder="キャラクター名で検索 / 新規追加"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && searching && !exactExists) addNew(query) }}
+        />
+        {searching && !exactExists && (
+          <button className="btn" onClick={() => addNew(query)}>＋ 追加</button>
+        )}
+      </div>
+
       {groups.map(g => {
-        const chars = Array.isArray(g.characters) ? g.characters : []
+        const chars = filterChars(Array.isArray(g.characters) ? g.characters : [])
         if (chars.length === 0) return null
-        const isCollapsed = collapsed[g.id]
+        const isCollapsed = searching ? false : collapsed[g.id]
         const selectedInGroup = chars.filter(c => charList.includes(c)).length
         return (
           <div key={g.id} className="cp-group">
@@ -87,52 +102,32 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
         )
       })}
 
-      {ungrouped.length > 0 && (
-        <div className="cp-group">
-          <button className="cp-group-header" onClick={() => setUngroupedCollapsed(p => !p)}>
-            <span className="cp-toggle">{ungroupedCollapsed ? '▶' : '▼'}</span>
-            <span className="cp-group-name" style={{ color: '#6b7280' }}>グループなし</span>
-            {charList.filter(c => ungrouped.includes(c)).length > 0 &&
-              <span className="cp-selected-badge">{charList.filter(c => ungrouped.includes(c)).length}</span>}
-          </button>
-          {!ungroupedCollapsed && (
-            <div className="cp-chips">
-              {ungrouped.map(char => (
-                <button
-                  key={char}
-                  className={`cp-chip${charList.includes(char) ? ' cp-chip-on' : ''}`}
-                  onClick={() => toggle(char)}
-                >{char}</button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* New character */}
-      {showNewInput ? (
-        <div className="cp-new-row">
-          <input
-            className="cp-new-input"
-            placeholder="キャラクター名"
-            value={newCharInput}
-            onChange={e => setNewCharInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') addNew(); if (e.key === 'Escape') { setShowNewInput(false); setNewCharInput('') } }}
-            autoFocus
-          />
-          <button className="btn" onClick={addNew}>追加</button>
-          <button className="btn" onClick={() => { setShowNewInput(false); setNewCharInput('') }}>×</button>
-          {suggestions.length > 0 && (
-            <div className="cp-suggestions">
-              {suggestions.map(s => (
-                <button key={s} className="cp-suggestion" onClick={() => { toggle(s); setShowNewInput(false); setNewCharInput('') }}>{s}</button>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : (
-        <button className="cp-add-btn" onClick={() => setShowNewInput(true)}>＋ キャラクターを追加</button>
-      )}
+      {(() => {
+        const shownUngrouped = filterChars(ungrouped)
+        if (shownUngrouped.length === 0) return null
+        const isCollapsed = searching ? false : ungroupedCollapsed
+        return (
+          <div className="cp-group">
+            <button className="cp-group-header" onClick={() => setUngroupedCollapsed(p => !p)}>
+              <span className="cp-toggle">{isCollapsed ? '▶' : '▼'}</span>
+              <span className="cp-group-name" style={{ color: '#6b7280' }}>グループなし</span>
+              {charList.filter(c => shownUngrouped.includes(c)).length > 0 &&
+                <span className="cp-selected-badge">{charList.filter(c => shownUngrouped.includes(c)).length}</span>}
+            </button>
+            {!isCollapsed && (
+              <div className="cp-chips">
+                {shownUngrouped.map(char => (
+                  <button
+                    key={char}
+                    className={`cp-chip${charList.includes(char) ? ' cp-chip-on' : ''}`}
+                    onClick={() => toggle(char)}
+                  >{char}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Selected summary (characters not in any group) */}
       {charList.filter(c => !allKnown.includes(c)).length > 0 && (
