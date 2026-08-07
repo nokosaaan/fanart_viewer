@@ -29,7 +29,6 @@ services:
     command: /app/entrypoint.sh
     restart: always
     volumes:
-      - ./backend:/app:ro
       - ./backend/data:/app/data
       - staticfiles:/app/staticfiles
       - ./frontend/dist:/frontend_dist:ro
