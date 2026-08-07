@@ -15,7 +15,9 @@ clobbering an already-populated database via DDL, matching its intended use:
 pulling data onto a freshly set-up host, not overwriting a live one.
 """
 
+import gzip
 import os
+import re
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -31,6 +33,17 @@ BACKUP_FOLDER_NAME = 'fanart_viewer_backups'
 
 class DriveBackupError(Exception):
     """Raised for any backup/restore failure with a user-facing message."""
+
+
+class ExistingDataError(DriveBackupError):
+    """Raised by restore_backup() when the DB already has data and the
+    caller didn't pass overwrite=True. Carries row counts for both sides
+    so the caller can show the user a comparison before deciding."""
+
+    def __init__(self, current: dict, backup: dict):
+        self.current = current
+        self.backup = backup
+        super().__init__('データベースに既存データがあります。内容を比較の上、上書きするか選択してください。')
 
 
 def _db_params():
@@ -156,6 +169,34 @@ def create_backup() -> dict:
         os.unlink(dump_path)
 
 
+_COPY_RE = re.compile(r'^COPY public\.(\w+) \(')
+
+
+def _count_dump_rows(dump_path: str, is_gz: bool) -> dict:
+    """Count data rows per table in a data-only SQL dump by scanning its
+    COPY ... FROM stdin; ... \\. blocks, without touching the database.
+
+    Streams the (possibly gzipped) file line by line — cheap enough even
+    for the several-GB dumps this app produces — so it's safe to call just
+    to preview a restore before committing to it.
+    """
+    opener = gzip.open if is_gz else open
+    counts = {}
+    current_table = None
+    with opener(dump_path, 'rt', encoding='utf-8', errors='replace') as fh:
+        for line in fh:
+            if current_table is None:
+                m = _COPY_RE.match(line)
+                if m and m.group(1) in BACKUP_TABLES:
+                    current_table = m.group(1)
+                    counts[current_table] = 0
+            elif line.rstrip('\n') == '\\.':
+                current_table = None
+            else:
+                counts[current_table] += 1
+    return counts
+
+
 def list_backups() -> list:
     service = get_drive_service()
     folder_id = _get_or_create_backup_folder(service)
@@ -168,20 +209,20 @@ def list_backups() -> list:
     return resp.get('files', [])
 
 
-def restore_backup(file_id: str) -> None:
+def restore_backup(file_id: str, overwrite: bool = False) -> None:
     """Download the given Drive backup and load it into the database.
 
-    Raises DriveBackupError if the database already has data — restore is
-    only intended for populating a freshly migrated, empty database on a
-    new host.
+    If the database already has data and `overwrite` is False, raises
+    ExistingDataError with row counts for both the current DB and the
+    backup instead of touching anything — the caller is expected to show
+    the user that comparison and re-call with overwrite=True to proceed.
+    When overwrite=True, existing rows in the app's own tables are cleared
+    first (TRUNCATE ... CASCADE) so the backup's rows can be loaded without
+    primary-key collisions.
     """
-    from .models import Item, CharacterGroup
+    from .models import Item, CharacterGroup, PreviewImage
 
-    if Item.objects.exists() or CharacterGroup.objects.exists():
-        raise DriveBackupError(
-            'データベースに既存データがあるため復元を中止しました。'
-            'この機能はデバイス移行時の空DBへの初回投入専用です。'
-        )
+    has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
 
     service = get_drive_service()
     params = _db_params()
@@ -198,6 +239,16 @@ def restore_backup(file_id: str) -> None:
         with open(dump_path, 'rb') as fh:
             is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename
 
+        if has_existing and not overwrite:
+            raise ExistingDataError(
+                current={
+                    'item_charactergroup': CharacterGroup.objects.count(),
+                    'item_item': Item.objects.count(),
+                    'item_previewimage': PreviewImage.objects.count(),
+                },
+                backup=_count_dump_rows(dump_path, is_gz),
+            )
+
         env = {**os.environ, 'PGPASSWORD': params['password']}
         psql_cmd = [
             'psql',
@@ -207,6 +258,17 @@ def restore_backup(file_id: str) -> None:
             '-d', params['dbname'],
             '-v', 'ON_ERROR_STOP=1',
         ]
+
+        if has_existing and overwrite:
+            # item_previewimage FKs to item_item, so CASCADE covers it too.
+            truncate = subprocess.run(
+                psql_cmd + ['-c', 'TRUNCATE item_previewimage, item_item, item_charactergroup RESTART IDENTITY CASCADE;'],
+                env=env, capture_output=True, timeout=60,
+            )
+            if truncate.returncode != 0:
+                stderr = truncate.stderr.decode('utf-8', errors='replace').strip()
+                raise DriveBackupError(f'既存データの削除に失敗: {stderr[:500]}')
+
         if is_gz:
             gunzip_proc = subprocess.Popen(['gunzip', '-c', dump_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             result = subprocess.run(psql_cmd, env=env, stdin=gunzip_proc.stdout, capture_output=True, timeout=DUMP_TIMEOUT)

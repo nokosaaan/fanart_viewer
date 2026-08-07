@@ -5,7 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from security.token_utils import verify_token
-from .drive_backup import create_backup, list_backups, restore_backup, DriveBackupError
+from .drive_backup import create_backup, list_backups, restore_backup, DriveBackupError, ExistingDataError
 
 
 def _admin_only(request):
@@ -65,11 +65,18 @@ def backup_restore_view(request):
     except Exception:
         data = {}
     file_id = data.get('file_id', '')
+    overwrite = bool(data.get('overwrite', False))
     if not file_id:
         return JsonResponse({'detail': 'file_idが必要です'}, status=400)
 
     try:
-        restore_backup(file_id)
+        restore_backup(file_id, overwrite=overwrite)
+    except ExistingDataError as e:
+        return JsonResponse({
+            'needs_confirmation': True,
+            'current': e.current,
+            'backup': e.backup,
+        }, status=409)
     except DriveBackupError as e:
         return JsonResponse({'detail': str(e)}, status=409)
     return JsonResponse({'ok': True})
