@@ -95,6 +95,12 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# save_previews accepts full-res images as base64 JSON; the client chunks
+# batches to ~60MB but the base64+JSON overhead needs headroom above that.
+# Default (2.5MB) is far too small and makes Django itself 400 the request
+# with RequestDataTooBig before it ever reaches the view.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024
+
 # Serve the built React frontend via WhiteNoise.
 # In production, run `npm run build` in frontend/ first; the dist/ directory
 # is mounted (or copied) into the container at /app/frontend_dist/.
