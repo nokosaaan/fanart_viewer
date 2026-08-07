@@ -176,10 +176,7 @@ def restore_backup(file_id: str) -> None:
     service = get_drive_service()
     params = _db_params()
 
-    meta = service.files().get(fileId=file_id, fields='name').execute()
-    is_gz = meta.get('name', '').endswith('.gz')  # older backups predate gzip and are plain .sql
-
-    fd, dump_path = tempfile.mkstemp(suffix='.sql.gz' if is_gz else '.sql')
+    fd, dump_path = tempfile.mkstemp(suffix='.download')
     try:
         request = service.files().get_media(fileId=file_id)
         with os.fdopen(fd, 'wb') as fh:
@@ -187,6 +184,9 @@ def restore_backup(file_id: str) -> None:
             done = False
             while not done:
                 _, done = downloader.next_chunk()
+
+        with open(dump_path, 'rb') as fh:
+            is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename
 
         env = {**os.environ, 'PGPASSWORD': params['password']}
         psql_cmd = [
@@ -199,13 +199,17 @@ def restore_backup(file_id: str) -> None:
         ]
         if is_gz:
             gunzip_proc = subprocess.Popen(['gunzip', '-c', dump_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            result = subprocess.run(psql_cmd, env=env, stdin=gunzip_proc.stdout, capture_output=True, text=True, timeout=DUMP_TIMEOUT)
+            result = subprocess.run(psql_cmd, env=env, stdin=gunzip_proc.stdout, capture_output=True, timeout=DUMP_TIMEOUT)
             gunzip_proc.stdout.close()
             gunzip_proc.wait()
         else:
-            with open(dump_path, 'r') as fh:
-                result = subprocess.run(psql_cmd, env=env, stdin=fh, capture_output=True, text=True, timeout=DUMP_TIMEOUT)
+            with open(dump_path, 'rb') as fh:
+                result = subprocess.run(psql_cmd, env=env, stdin=fh, capture_output=True, timeout=DUMP_TIMEOUT)
         if result.returncode != 0:
-            raise DriveBackupError(f'復元失敗: {result.stderr.strip()[:500]}')
+            # decode leniently: psql/pg error text isn't guaranteed to be valid UTF-8
+            # (e.g. it can echo back raw bytes from malformed input), and text=True
+            # would crash on that instead of surfacing the actual error.
+            stderr = result.stderr.decode('utf-8', errors='replace').strip()
+            raise DriveBackupError(f'復元失敗: {stderr[:500]}')
     finally:
         os.unlink(dump_path)
