@@ -789,15 +789,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):
-        """Accepts client-provided images (data_uri) and persists them as PreviewImage."""
+        """Accepts client-provided images (data_uri) and persists them as PreviewImage.
+
+        Supports chunked uploads (the frontend splits large/many images across
+        several requests to stay under Cloudflare's ~100MB body limit):
+        - `clear_existing` (default True): delete this item's existing previews
+          before saving. Pass False for every chunk after the first so later
+          chunks don't wipe out earlier ones.
+        - `start_index`: offset added to each image's position to keep `order`
+          correct across chunks (chunk 2 continues where chunk 1 left off).
+        """
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
         images = data.get('images') or []
         if not isinstance(images, list) or not images:
             return Response({'detail': 'No images provided'}, status=status.HTTP_400_BAD_REQUEST)
-        PreviewImage.objects.filter(item=item).delete()
+        clear_existing = data.get('clear_existing', True)
+        try:
+            start_index = int(data.get('start_index') or 0)
+        except (TypeError, ValueError):
+            start_index = 0
+        if clear_existing:
+            PreviewImage.objects.filter(item=item).delete()
         saved = []
-        local_entries = []
         for idx, img in enumerate(images):
             data_uri = img.get('data_uri') if isinstance(img, dict) else None
             url = img.get('url') if isinstance(img, dict) else None
@@ -808,9 +822,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     body = base64.b64decode(b64)
                     m = re.match(r'data:([^;]+);base64', header)
                     ctype = m.group(1) if m else 'application/octet-stream'
-                    PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
-                    saved.append({'index': idx, 'url': url, 'size': len(body), 'content_type': ctype})
-                    local_entries.append((url, body, ctype))
+                    order = start_index + idx
+                    PreviewImage.objects.create(item=item, order=order, data=body, content_type=ctype)
+                    saved.append({'index': order, 'url': url, 'size': len(body), 'content_type': ctype})
                 except Exception:
                     continue
         if not saved:
