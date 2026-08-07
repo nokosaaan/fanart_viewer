@@ -5,12 +5,14 @@ once, out-of-band, with `scripts/google_drive_auth.py` run on a machine
 with a browser). Runtime code only ever refreshes an access token from
 that stored refresh token — no interactive consent happens here.
 
-Backups are *data-only* SQL dumps (no CREATE TABLE/DDL): restoring assumes
-the target database already has an up-to-date, empty schema (i.e. the app
-was just deployed and `migrate` has run, but no data exists yet). This
-keeps restore_backup() incapable of clobbering an already-populated
-database via DDL, matching its intended use: pulling data onto a freshly
-set-up host, not overwriting a live one.
+Backups are *data-only* SQL dumps (no CREATE TABLE/DDL) scoped to the item
+app's own tables (see BACKUP_TABLES) — not Django's internal auth/contenttype/
+session tables, which `migrate` repopulates on its own and would otherwise
+collide on restore. Restoring assumes the target database already has an
+up-to-date, empty schema (i.e. the app was just deployed and `migrate` has
+run, but no data exists yet). This keeps restore_backup() incapable of
+clobbering an already-populated database via DDL, matching its intended use:
+pulling data onto a freshly set-up host, not overwriting a live one.
 """
 
 import os
@@ -82,6 +84,13 @@ def _get_or_create_backup_folder(service):
 
 DUMP_TIMEOUT = 1800  # item_previewimage stores images as bytea and runs several GB; the Pi is slow
 
+# Only the item app's own tables — NOT django_content_type / auth_* / django_session /
+# django_admin_log. Those are Django-internal bookkeeping that `migrate` recreates with
+# its own rows (e.g. django_content_type id=1) on a freshly migrated target database, so
+# dumping them causes primary-key collisions on restore. The app's own IDs don't collide
+# because those tables start out empty on a fresh migrate.
+BACKUP_TABLES = ['item_charactergroup', 'item_item', 'item_previewimage']
+
 
 def create_backup() -> dict:
     """Run `pg_dump --data-only`, gzip it, and upload the result to Google Drive.
@@ -115,6 +124,7 @@ def create_backup() -> dict:
                     '--data-only',
                     '--no-owner',
                     '--format=plain',
+                    *[f'--table={t}' for t in BACKUP_TABLES],
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
