@@ -1,6 +1,7 @@
 from rest_framework.routers import DefaultRouter
 from .views import ItemViewSet, CharacterGroupViewSet
 from .views import items_from_db
+from .backup_views import backup_create_view, backup_list_view, backup_restore_view
 from django.urls import path, include
 
 router = DefaultRouter()
@@ -10,4 +11,7 @@ router.register(r'character-groups', CharacterGroupViewSet, basename='character-
 urlpatterns = [
     path('', include(router.urls)),
     path('items_from_db/', items_from_db),
+    path('backup/create/', backup_create_view),
+    path('backup/list/', backup_list_view),
+    path('backup/restore/', backup_restore_view),
 ]

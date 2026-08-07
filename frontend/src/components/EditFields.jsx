@@ -16,28 +16,27 @@ const chipStyle = {
   padding:'5px 10px', fontSize:13, display:'inline-flex', alignItems:'center', gap:6,
 }
 
-function TagField({ label, hint, list, setList, allOptions, setAllOptions, selectPlaceholder, newInputPlaceholder }){
-  const [showNew, setShowNew] = useState(false)
-  const [newInput, setNewInput] = useState('')
+function TagField({ label, hint, list, setList, allOptions, setAllOptions, selectPlaceholder }){
+  const [query, setQuery] = useState('')
+  const [focused, setFocused] = useState(false)
 
-  function handleSelect(e){
-    const val = e.target.value
-    if(!val) return
-    if(val === '__new__'){ setShowNew(true); e.target.value = ''; return }
-    if(!list.includes(val)) setList(prev=>[...prev, val])
-    e.target.value = ''
+  const available = allOptions.filter(t=>!list.includes(t))
+  const q = query.trim().toLowerCase()
+  const filtered = q ? available.filter(t=>t.toLowerCase().includes(q)) : available
+  const exactExists = q && [...available, ...list].some(t=>t.toLowerCase()===q)
+
+  function addExisting(t){
+    if(!list.includes(t)) setList(prev=>[...prev, t])
+    setQuery('')
   }
 
   function addNew(){
-    const t = newInput.trim()
+    const t = query.trim()
     if(!t) return
     if(!list.includes(t)) setList(prev=>[...prev, t])
     if(!allOptions.includes(t)) setAllOptions(prev=>[...prev, t].sort())
-    setNewInput('')
-    setShowNew(false)
+    setQuery('')
   }
-
-  const available = allOptions.filter(t=>!list.includes(t))
 
   return (
     <div style={SECTION.wrap}>
@@ -54,30 +53,46 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
             </span>
           ))}
       </div>
-      <select
-        style={{width:'100%', background:'#1e293b', color:'#f1f5f9', border:'1px solid #334155',
-          borderRadius:6, padding:'9px 12px', fontSize:14, cursor:'pointer'}}
-        onChange={handleSelect} defaultValue=""
-      >
-        <option value="" disabled>{selectPlaceholder}</option>
-        {available.map(t=><option key={t} value={t}>{t}</option>)}
-        <option value="__new__">＋ 新規作成...</option>
-      </select>
-      {showNew && (
-        <div style={{display:'flex', gap:6, marginTop:8}}>
-          <input
-            style={{flex:1, background:'#1e293b', color:'#f1f5f9', border:'1px solid #334155',
-              borderRadius:6, padding:'8px 12px', fontSize:14}}
-            placeholder={newInputPlaceholder}
-            value={newInput}
-            onChange={e=>setNewInput(e.target.value)}
-            onKeyDown={e=>{ if(e.key==='Enter') addNew() }}
-            autoFocus
-          />
-          <button className="btn" onClick={addNew}>追加</button>
-          <button className="btn" onClick={()=>{ setShowNew(false); setNewInput('') }}>×</button>
-        </div>
-      )}
+      <div style={{position:'relative'}}>
+        <input
+          style={{width:'100%', background:'#1e293b', color:'#f1f5f9', border:'1px solid #334155',
+            borderRadius:6, padding:'9px 12px', fontSize:14, boxSizing:'border-box'}}
+          placeholder={selectPlaceholder}
+          value={query}
+          onChange={e=>setQuery(e.target.value)}
+          onFocus={()=>setFocused(true)}
+          onBlur={()=>setTimeout(()=>setFocused(false), 150)}
+          onKeyDown={e=>{
+            if(e.key!=='Enter') return
+            if(filtered.length===1) addExisting(filtered[0])
+            else if(q && !exactExists) addNew()
+          }}
+        />
+        {focused && (
+          <div style={{position:'absolute', top:'100%', left:0, right:0, marginTop:4, background:'#1e293b',
+            border:'1px solid #334155', borderRadius:6, maxHeight:180, overflowY:'auto', zIndex:10,
+            boxShadow:'0 8px 24px rgba(0,0,0,0.4)'}}>
+            {filtered.slice(0, 30).map(t=>(
+              <button key={t} onMouseDown={e=>e.preventDefault()} onClick={()=>addExisting(t)}
+                style={{display:'block', width:'100%', textAlign:'left', background:'none', border:'none',
+                  color:'#f1f5f9', padding:'8px 12px', fontSize:14, cursor:'pointer'}}
+                onMouseEnter={e=>e.currentTarget.style.background='#334155'}
+                onMouseLeave={e=>e.currentTarget.style.background='none'}
+              >{t}</button>
+            ))}
+            {q && !exactExists && (
+              <button onMouseDown={e=>e.preventDefault()} onClick={addNew}
+                style={{display:'block', width:'100%', textAlign:'left', background:'none', border:'none',
+                  borderTop: filtered.length>0 ? '1px solid #334155' : 'none',
+                  color:'#93c5fd', padding:'8px 12px', fontSize:14, cursor:'pointer'}}
+              >＋ 「{query.trim()}」を新規作成</button>
+            )}
+            {filtered.length===0 && !q && (
+              <div style={{padding:'8px 12px', fontSize:13, color:'#64748b'}}>候補なし</div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -158,8 +173,7 @@ export default function EditFields({ item, onClose, onSaved }){
           hint="このイラストの作品名・シリーズ名を選択してください"
           list={titleList} setList={setTitleList}
           allOptions={allTitles} setAllOptions={setAllTitles}
-          selectPlaceholder="— タイトルを選択（必須）—"
-          newInputPlaceholder="新しいタイトルを入力"
+          selectPlaceholder="タイトルを検索、または新規入力（必須）"
         />
 
         <div style={SECTION.wrap}>

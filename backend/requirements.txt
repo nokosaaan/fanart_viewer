@@ -9,3 +9,5 @@ python-dotenv
 gallery-dl
 gunicorn
 whitenoise
+google-auth
+google-api-python-client
