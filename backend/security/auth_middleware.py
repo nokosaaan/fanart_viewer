@@ -22,8 +22,16 @@ class SimpleAuthMiddleware:
         if not viewer_pass and not admin_pass:
             return self.get_response(request)
 
-        # CORS preflight and the auth endpoint itself never require a token
-        if request.method == 'OPTIONS' or request.path.startswith('/api/auth/'):
+        # Only the /api/ surface is gated. The SPA shell and static assets
+        # (served by the catch-all spa_fallback view for any non-API path)
+        # must stay public: the React app has to load its JS bundle and call
+        # /api/auth/ before it can even show a login form, so gating page
+        # loads themselves would make the app un-loadable for anyone who
+        # doesn't already have a valid token — precisely the visitor this
+        # login screen exists for.
+        if (request.method == 'OPTIONS'
+                or not request.path.startswith('/api/')
+                or request.path.startswith('/api/auth/')):
             return self.get_response(request)
 
         auth_header = request.headers.get('Authorization', '')
