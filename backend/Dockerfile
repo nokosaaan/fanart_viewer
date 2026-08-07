@@ -16,9 +16,16 @@ ENV TZ=Etc/UTC
 
 # Install minimal OS packages needed by the entrypoint and DB client
 # so that `pg_isready` (used by `entrypoint.sh`) is available.
+# postgresql-client comes from the PGDG repo (not Ubuntu's default repo)
+# so its major version matches the postgres:15 server image — pg_dump/psql
+# refuse to talk to a newer server than themselves.
 RUN apt-get update \
+	&& apt-get install -y --no-install-recommends wget gnupg2 ca-certificates lsb-release \
+	&& wget -q -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+	&& echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+	&& apt-get update \
 	&& apt-get install -y --no-install-recommends \
-		postgresql-client \
+		postgresql-client-15 \
 		netcat-openbsd \
 		tzdata \
 	&& ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime \

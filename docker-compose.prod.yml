@@ -40,6 +40,10 @@ services:
       - HEADLESS_ALLOWED=1
       - DJANGO_DEBUG=0
       - FRONTEND_DIST=/frontend_dist
+      # Drive backup/restore run pg_dump/psql over the full item_previewimage
+      # table (several GB of bytea) on Pi hardware; give gunicorn workers
+      # enough room to outlast drive_backup.DUMP_TIMEOUT (1800s) plus upload time.
+      - GUNICORN_TIMEOUT=1900
     depends_on:
       - db
     # No ports exposed — cloudflared routes traffic internally via Docker network.

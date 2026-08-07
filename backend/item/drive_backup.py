@@ -80,8 +80,16 @@ def _get_or_create_backup_folder(service):
     return folder['id']
 
 
+DUMP_TIMEOUT = 1800  # item_previewimage stores images as bytea and runs several GB; the Pi is slow
+
+
 def create_backup() -> dict:
-    """Run `pg_dump --data-only` and upload the result to Google Drive.
+    """Run `pg_dump --data-only`, gzip it, and upload the result to Google Drive.
+
+    Piping pg_dump directly into gzip (rather than writing the plain dump to
+    disk first) avoids ever needing the full uncompressed size (several GB,
+    since bytea columns roughly double in the text dump format) as free disk
+    space on the Pi.
 
     Returns the created Drive file's metadata (id, name, createdTime, size).
     """
@@ -90,33 +98,44 @@ def create_backup() -> dict:
 
     params = _db_params()
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    filename = f'fanart_backup_{timestamp}.sql'
+    filename = f'fanart_backup_{timestamp}.sql.gz'
 
-    fd, dump_path = tempfile.mkstemp(suffix='.sql')
+    fd, dump_path = tempfile.mkstemp(suffix='.sql.gz')
     os.close(fd)
     try:
         env = {**os.environ, 'PGPASSWORD': params['password']}
-        result = subprocess.run(
-            [
-                'pg_dump',
-                '-h', params['host'],
-                '-p', str(params['port']),
-                '-U', params['user'],
-                '-d', params['dbname'],
-                '--data-only',
-                '--no-owner',
-                '--format=plain',
-                '-f', dump_path,
-            ],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            raise DriveBackupError(f'pg_dump失敗: {result.stderr.strip()[:500]}')
+        with open(dump_path, 'wb') as out_f:
+            pg_proc = subprocess.Popen(
+                [
+                    'pg_dump',
+                    '-h', params['host'],
+                    '-p', str(params['port']),
+                    '-U', params['user'],
+                    '-d', params['dbname'],
+                    '--data-only',
+                    '--no-owner',
+                    '--format=plain',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            gzip_proc = subprocess.Popen(['gzip', '-c'], stdin=pg_proc.stdout, stdout=out_f, stderr=subprocess.PIPE)
+            pg_proc.stdout.close()
+            try:
+                _, gzip_err = gzip_proc.communicate(timeout=DUMP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                pg_proc.kill()
+                gzip_proc.kill()
+                raise DriveBackupError(f'pg_dumpがタイムアウトしました({DUMP_TIMEOUT}秒)')
+            _, pg_err = pg_proc.communicate()
 
-        media = MediaFileUpload(dump_path, mimetype='application/sql', resumable=False)
+        if pg_proc.returncode != 0:
+            raise DriveBackupError(f'pg_dump失敗: {pg_err.decode(errors="replace").strip()[:500]}')
+        if gzip_proc.returncode != 0:
+            raise DriveBackupError(f'gzip失敗: {gzip_err.decode(errors="replace").strip()[:500]}')
+
+        media = MediaFileUpload(dump_path, mimetype='application/gzip', resumable=True)
         uploaded = service.files().create(
             body={'name': filename, 'parents': [folder_id]},
             media_body=media,
@@ -157,7 +176,10 @@ def restore_backup(file_id: str) -> None:
     service = get_drive_service()
     params = _db_params()
 
-    fd, dump_path = tempfile.mkstemp(suffix='.sql')
+    meta = service.files().get(fileId=file_id, fields='name').execute()
+    is_gz = meta.get('name', '').endswith('.gz')  # older backups predate gzip and are plain .sql
+
+    fd, dump_path = tempfile.mkstemp(suffix='.sql.gz' if is_gz else '.sql')
     try:
         request = service.files().get_media(fileId=file_id)
         with os.fdopen(fd, 'wb') as fh:
@@ -167,22 +189,22 @@ def restore_backup(file_id: str) -> None:
                 _, done = downloader.next_chunk()
 
         env = {**os.environ, 'PGPASSWORD': params['password']}
-        with open(dump_path, 'r') as fh:
-            result = subprocess.run(
-                [
-                    'psql',
-                    '-h', params['host'],
-                    '-p', str(params['port']),
-                    '-U', params['user'],
-                    '-d', params['dbname'],
-                    '-v', 'ON_ERROR_STOP=1',
-                ],
-                env=env,
-                stdin=fh,
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
+        psql_cmd = [
+            'psql',
+            '-h', params['host'],
+            '-p', str(params['port']),
+            '-U', params['user'],
+            '-d', params['dbname'],
+            '-v', 'ON_ERROR_STOP=1',
+        ]
+        if is_gz:
+            gunzip_proc = subprocess.Popen(['gunzip', '-c', dump_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            result = subprocess.run(psql_cmd, env=env, stdin=gunzip_proc.stdout, capture_output=True, text=True, timeout=DUMP_TIMEOUT)
+            gunzip_proc.stdout.close()
+            gunzip_proc.wait()
+        else:
+            with open(dump_path, 'r') as fh:
+                result = subprocess.run(psql_cmd, env=env, stdin=fh, capture_output=True, text=True, timeout=DUMP_TIMEOUT)
         if result.returncode != 0:
             raise DriveBackupError(f'復元失敗: {result.stderr.strip()[:500]}')
     finally:
