@@ -268,7 +268,11 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
           setSituationState(newItem.situation || '')
           setArtistState(newItem.artist || '')
           setShowEditor(false)
-          try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id } })) }catch(e){}
+          // Carry the full updated item (update_fields returns it fully
+          // serialized) so App.jsx can merge it into the shared items list —
+          // otherwise reopening the editor later reads the stale pre-edit
+          // object and the user has to re-enter everything from scratch.
+          try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id, item: newItem } })) }catch(e){}
         }} />
       )}
 

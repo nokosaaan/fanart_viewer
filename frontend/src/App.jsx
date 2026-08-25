@@ -144,8 +144,21 @@ function AppMain({ role, onLogout }){
       }catch(e){/* ignore */}
     }
     window.addEventListener('item-deleted', onItemDeleted)
+    // Merge an edited item (from EditFields) back into the shared items list.
+    // Without this, only the editing row's own local display state updated —
+    // the underlying item object here stayed stale, so reopening the editor
+    // later showed pre-edit values and the user had to redo the whole edit.
+    function onItemUpdated(ev){
+      try{
+        const updated = ev && ev.detail && ev.detail.item
+        if(!updated || updated.id == null) return
+        setItems(prev => Array.isArray(prev) ? prev.map(it => it.id === updated.id ? { ...it, ...updated } : it) : prev)
+      }catch(e){/* ignore */}
+    }
+    window.addEventListener('item-updated', onItemUpdated)
     return ()=>{
       window.removeEventListener('item-deleted', onItemDeleted)
+      window.removeEventListener('item-updated', onItemUpdated)
     }
   }, [])
 
