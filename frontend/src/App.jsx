@@ -5,6 +5,7 @@ import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
 import BackupManager from './components/BackupManager'
+import FetchQueueManager from './components/FetchQueueManager'
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
@@ -17,6 +18,19 @@ function AppMain({ role, onLogout }){
   const [previewOpen, setPreviewOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  // Mailbox-style queue: fetching an item's image candidates (ScrollList)
+  // appends here instead of popping an inline modal, so accidentally
+  // clicking outside a modal backdrop can no longer discard results that
+  // would otherwise require re-fetching. Reviewed/processed from the header
+  // "取得キュー" button (FetchQueueManager). In-memory only — cleared on reload.
+  const [fetchQueue, setFetchQueue] = useState([])
+  const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
+  function enqueueFetchResult({ itemId, images }){
+    setFetchQueue(prev => [...prev, { id: `${itemId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, itemId, images, fetchedAt: Date.now() }])
+  }
+  function removeFromFetchQueue(entryId){
+    setFetchQueue(prev => prev.filter(e => e.id !== entryId))
+  }
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
@@ -347,6 +361,11 @@ function AppMain({ role, onLogout }){
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
           {!readOnly && <button type="button" className="btn" onClick={()=>setCharGroupOpen(true)} style={{fontSize:12}}>キャラクターグループ</button>}
           {!readOnly && <button type="button" className="btn" onClick={()=>setBackupOpen(true)} style={{fontSize:12}}>バックアップ</button>}
+          {!readOnly && (
+            <button type="button" className="btn" onClick={()=>setFetchQueueOpen(true)} style={{fontSize:12}}>
+              取得キュー{fetchQueue.length > 0 ? ` (${fetchQueue.length})` : ''}
+            </button>
+          )}
           <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
             Preview Timeline
           </button>
@@ -374,7 +393,7 @@ function AppMain({ role, onLogout }){
         setTitleMissingOnly={setTitleMissingOnly}
         readOnly={readOnly}
       />
-      <ScrollList items={paginatedItems} readOnly={readOnly} />
+      <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} />
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
           <button className="btn" onClick={loadNextPage} disabled={loadingPages}>{loadingPages ? 'Loading…' : 'Load more pages'}</button>
@@ -416,6 +435,13 @@ function AppMain({ role, onLogout }){
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
+      {fetchQueueOpen && (
+        <FetchQueueManager
+          queue={fetchQueue}
+          onRemove={removeFromFetchQueue}
+          onClose={()=>setFetchQueueOpen(false)}
+        />
+      )}
     </div>
   )
 }

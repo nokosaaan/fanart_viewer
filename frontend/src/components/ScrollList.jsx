@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import EditFields from './EditFields'
 
 async function fetchAndSavePreview(id, url, options = {}){
@@ -39,46 +39,7 @@ async function fetchPreviewCandidates(id, url, options = {}){
   }catch(e){ console.error(e); return { ok: false, body: {error: e.message} } }
 }
 
-// Cloudflare (and most reverse proxies) cap request body size around 100MB.
-// Several full-res images as base64 in one JSON payload can blow past that,
-// so split into chunks and upload sequentially, keeping order consistent
-// across chunks via start_index (only the first chunk clears old previews).
-const MAX_BATCH_CHARS = 60 * 1024 * 1024
-
-async function saveImagesChunked(itemId, images){
-  const batches = []
-  let current = []
-  let currentSize = 0
-  for(const img of images){
-    const size = (img.data_uri || '').length
-    if(current.length > 0 && currentSize + size > MAX_BATCH_CHARS){
-      batches.push(current)
-      current = []
-      currentSize = 0
-    }
-    current.push(img)
-    currentSize += size
-  }
-  if(current.length > 0) batches.push(current)
-  if(batches.length === 0) return { ok:false, body:{ detail:'No images provided' } }
-
-  let startIndex = 0
-  let totalSaved = 0
-  for(let i=0; i<batches.length; i++){
-    const batch = batches[i]
-    const resp = await fetch(`/api/items/${itemId}/save_previews/`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ images: batch, clear_existing: i===0, start_index: startIndex }),
-    })
-    const j = await resp.json().catch(()=>({}))
-    if(!resp.ok) return { ok:false, body:j }
-    totalSaved += j.count || 0
-    startIndex += batch.length
-  }
-  return { ok:true, body:{ status:'saved', count: totalSaved } }
-}
-
-function ItemRow({ it, readOnly }){
+function ItemRow({ it, readOnly, onEnqueueFetch }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
@@ -87,10 +48,7 @@ function ItemRow({ it, readOnly }){
   const [debugInfo, setDebugInfo] = useState(null)
   // debugInfo is kept for internal use; we do not render it in the UI.
   // Keep fetch debug objects available on `window.__fv_fetch_debug` and expose a helper to show them.
-  const [candidates, setCandidates] = useState(null)
-  const [showCandidates, setShowCandidates] = useState(false)
   const [fetchMethod, setFetchMethod] = useState('html')
-  const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [showEditor, setShowEditor] = useState(false)
   const [titlesState, setTitlesState] = useState(it.titles || [])
   const [charsState, setCharsState] = useState(it.characters || [])
@@ -108,6 +66,18 @@ function ItemRow({ it, readOnly }){
   const [situationState, setSituationState] = useState(it.situation || '')
   const [artistState, setArtistState] = useState(it.artist || '')
   const [copied, setCopied] = useState(false)
+
+  // Saving now happens from the fetch queue (see FetchQueueManager), which is
+  // a separate component from whichever ItemRow originally fetched the
+  // candidates — so this row needs to hear about it after the fact to flip
+  // its own preview thumbnail on.
+  useEffect(()=>{
+    function onPreviewUpdated(ev){
+      if(ev && ev.detail && ev.detail.id === it.id) setHasPreviewLocal(true)
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
+  }, [it.id])
 
   async function onFetch(e){
     e && e.preventDefault()
@@ -135,10 +105,9 @@ function ItemRow({ it, readOnly }){
               return
             }
             if(body2.preview_only && Array.isArray(body2.images) && body2.images.length>0){
-              setCandidates(body2.images)
-              setSelectedUrls(new Set())
-              setShowCandidates(true)
+              onEnqueueFetch({ itemId: it.id, images: body2.images })
               try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = body2 }catch(e){}
+              showToast(`取得キューに追加しました(${body2.images.length}件) ✓`, 'success')
               return
             }
           }
@@ -160,63 +129,18 @@ function ItemRow({ it, readOnly }){
       return
     }
 
-    // if preview_only returned images, show selection UI
+    // if preview_only returned images, queue them for later review instead of
+    // popping a modal — see FetchQueueManager (opened from the app header).
     if(body.preview_only && Array.isArray(body.images) && body.images.length>0){
-      setCandidates(body.images)
-      setSelectedUrls(new Set())
-      setShowCandidates(true)
+      onEnqueueFetch({ itemId: it.id, images: body.images })
       // save debug info globally for console inspection
       try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = body }catch(e){}
       try{ if(!window.showFetchDebug) window.showFetchDebug = id => console.log(window.__fv_fetch_debug?.[id] || 'no debug for id '+id) }catch(e){}
+      showToast(`取得キューに追加しました(${body.images.length}件) ✓`, 'success')
       return
     }
 
     alert('No preview candidates found.')
-  }
-
-  async function saveSelected(){
-    if(!candidates) return
-    const urls = Array.from(selectedUrls)
-    if(urls.length===0){ alert('Select at least one image to save'); return }
-    setLoading(true)
-    try{
-      // build images payload including data_uri when available to ensure saving
-      const images = candidates.filter(c=> urls.includes(c.url)).map(c=> ({url: c.url, data_uri: c.data_uri}))
-      const { ok: respOk, body: j } = await saveImagesChunked(it.id, images)
-      setLoading(false)
-      if(respOk){
-        setHasPreviewLocal(true)
-        setShowCandidates(false)
-        setCandidates(null)
-        setSelectedUrls(new Set())
-        try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
-        showToast('プレビューを追加しました ✓', 'success')
-      } else {
-        console.warn('save_previews failed', j)
-        showToast('追加失敗', 'error')
-      }
-    }catch(e){ setLoading(false); console.error(e); showToast('追加失敗: '+(e&&e.message?e.message:String(e)), 'error') }
-  }
-
-  async function saveAll(){
-    if(!candidates || candidates.length===0) return
-    setLoading(true)
-    showToast('プレビューを追加中…')
-    try{
-      const images = candidates.map(c => ({url: c.url, data_uri: c.data_uri}))
-      const { ok: respOk } = await saveImagesChunked(it.id, images)
-      setLoading(false)
-      if(respOk){
-        setHasPreviewLocal(true)
-        setShowCandidates(false)
-        setCandidates(null)
-        setSelectedUrls(new Set())
-        try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
-        showToast('プレビューを追加しました ✓', 'success')
-      } else {
-        showToast('追加失敗', 'error')
-      }
-    }catch(e){ setLoading(false); showToast('追加失敗: '+(e&&e.message?e.message:String(e)), 'error') }
   }
 
   return (
@@ -369,47 +293,6 @@ function ItemRow({ it, readOnly }){
       </div>
       
 
-      {/* Candidate selection modal */}
-      {showCandidates && candidates && (
-        <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.7)', zIndex:1200}} onClick={()=>setShowCandidates(false)}>
-          <div style={{width:'80%', maxWidth:900, margin:'5% auto', background:'#1e293b', borderRadius:10, padding:20, boxShadow:'0 8px 40px rgba(0,0,0,0.6)'}} onClick={e=>e.stopPropagation()}>
-            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16}}>
-              <span style={{color:'#f8fafc', fontWeight:600, fontSize:15}}>{candidates.length} 件の候補</span>
-              <button className="btn" style={{padding:'2px 10px'}} onClick={()=>setShowCandidates(false)}>✕</button>
-            </div>
-            <div style={{display:'flex', gap:12, flexWrap:'wrap', maxHeight:420, overflow:'auto'}}>
-              {candidates.map((img, i)=> (
-                <label key={i} style={{width:160, border: selectedUrls.has(img.url) ? '2px solid #3b82f6' : '2px solid #334155', borderRadius:6, padding:8, cursor:'pointer', background:'#0f172a'}}>
-                  <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#1e293b', borderRadius:4}}>
-                    {img.data_uri ? (
-                      <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%', borderRadius:3}} />
-                    ) : (
-                      <div style={{fontSize:12, color:'#64748b'}}>No preview</div>
-                    )}
-                  </div>
-                  <div style={{marginTop:6, display:'flex', alignItems:'center', gap:6}}>
-                    <input type="checkbox" checked={selectedUrls.has(img.url)} onChange={e=>{
-                      const s = new Set(selectedUrls)
-                      if(e.target.checked) s.add(img.url)
-                      else s.delete(img.url)
-                      setSelectedUrls(s)
-                    }} />
-                    <span style={{fontSize:11, color:'#94a3b8'}}>{img.size ? Math.round(img.size/1024)+'KB' : ''}</span>
-                    <a href={img.url} target="_blank" rel="noreferrer" style={{fontSize:11, color:'#60a5fa', marginLeft:'auto'}} onClick={e=>e.stopPropagation()}>↗</a>
-                  </div>
-                </label>
-              ))}
-            </div>
-            <div style={{marginTop:16, display:'flex', gap:8, alignItems:'center'}}>
-              <button className="btn" style={{background:'#3b82f6', color:'#fff'}} onClick={saveAll} disabled={loading}>全選択して追加</button>
-              <button className="btn" onClick={saveSelected} disabled={loading || selectedUrls.size===0}>選択した {selectedUrls.size} 件を追加</button>
-              <button className="btn" style={{marginLeft:'auto'}} onClick={()=>{ setSelectedUrls(new Set(candidates.map(c=>c.url))) }}>全選択</button>
-              <button className="btn" onClick={()=>setSelectedUrls(new Set())}>選択解除</button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* EditFields component is hidden by default. To restore inline editing,
           uncomment the block below. Keep it commented to avoid showing edit UI on the page. */}
       {
@@ -439,11 +322,11 @@ function ItemRow({ it, readOnly }){
   )
 }
 
-export default function ScrollList({items, readOnly=false}){
+export default function ScrollList({items, readOnly=false, onEnqueueFetch}){
   return (
     <div className="scroll-list">
       {items.map(it=> (
-        <ItemRow it={it} key={it.id} readOnly={readOnly} />
+        <ItemRow it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch} />
       ))}
     </div>
   )
