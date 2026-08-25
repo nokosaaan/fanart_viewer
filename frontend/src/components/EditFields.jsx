@@ -178,7 +178,7 @@ export default function EditFields({ item, onClose, onSaved }){
 
         <div style={SECTION.wrap}>
           <label style={SECTION.label}>Characters</label>
-          <CharacterPicker charList={charList} setCharList={setCharList} allChars={allChars} />
+          <CharacterPicker charList={charList} setCharList={setCharList} allChars={allChars} titles={titleList} />
         </div>
 
         <div style={SECTION.wrap}>

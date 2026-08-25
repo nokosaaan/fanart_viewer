@@ -12,6 +12,7 @@ const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('
 export default function CharacterGroupManager({ onClose }) {
   const [groups, setGroups] = useState([])
   const [allChars, setAllChars] = useState([])
+  const [allTitles, setAllTitles] = useState([])
   const [collapsed, setCollapsed] = useState({})
   const [newGroupName, setNewGroupName] = useState('')
   const [addingGroup, setAddingGroup] = useState(false)
@@ -19,18 +20,22 @@ export default function CharacterGroupManager({ onClose }) {
   const [renameVal, setRenameVal] = useState('')
   const [addCharTarget, setAddCharTarget] = useState(null)  // groupId
   const [addCharInput, setAddCharInput] = useState('')
+  const [addTitleTarget, setAddTitleTarget] = useState(null)  // groupId
+  const [addTitleInput, setAddTitleInput] = useState('')
   const [moveState, setMoveState] = useState(null)   // {char, fromGroupId}
   const [query, setQuery] = useState('')
 
   const load = useCallback(async () => {
-    const [gr, ch] = await Promise.all([
+    const [gr, ch, ti] = await Promise.all([
       fetch('/api/character-groups/').then(r => r.json()).catch(() => []),
       fetch('/api/items/all_characters/').then(r => r.json()).catch(() => []),
+      fetch('/api/items/all_titles/').then(r => r.json()).catch(() => []),
     ])
     const list = Array.isArray(gr) ? gr : (gr.results || [])
     setGroups(list)
     setCollapsed(Object.fromEntries(list.map(g => [g.id, true])))
     setAllChars(Array.isArray(ch) ? ch : [])
+    setAllTitles(Array.isArray(ti) ? ti : [])
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -113,6 +118,27 @@ export default function CharacterGroupManager({ onClose }) {
     } catch (e) { alert('追加失敗: ' + e.message) }
   }
 
+  async function addTitleToGroup(title, groupId) {
+    const trimmed = title.trim()
+    if (!trimmed) return
+    const g = groups.find(x => x.id === groupId)
+    if (!g || (g.titles || []).includes(trimmed)) { setAddTitleTarget(null); setAddTitleInput(''); return }
+    try {
+      await apiCall(`/api/character-groups/${groupId}/`, 'PATCH', { titles: [...(g.titles || []), trimmed] })
+      setAddTitleTarget(null); setAddTitleInput('')
+      load()
+    } catch (e) { alert('タイトルの紐づけに失敗: ' + e.message) }
+  }
+
+  async function removeTitleFromGroup(title, groupId) {
+    const g = groups.find(x => x.id === groupId)
+    if (!g) return
+    try {
+      await apiCall(`/api/character-groups/${groupId}/`, 'PATCH', { titles: (g.titles || []).filter(t => t !== title) })
+      load()
+    } catch (e) { alert('タイトルの解除に失敗: ' + e.message) }
+  }
+
   const suggestions = (addCharInput
     ? allChars.filter(c => c.toLowerCase().includes(addCharInput.toLowerCase()))
     : allChars
@@ -121,12 +147,22 @@ export default function CharacterGroupManager({ onClose }) {
     return g ? !g.characters.includes(c) : true
   }).slice(0, 10)
 
+  const titleSuggestions = (addTitleInput
+    ? allTitles.filter(t => t.toLowerCase().includes(addTitleInput.toLowerCase()))
+    : allTitles
+  ).filter(t => {
+    const g = groups.find(x => x.id === addTitleTarget)
+    return g ? !(g.titles || []).includes(t) : true
+  }).slice(0, 10)
+
   const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name))
 
   const q = query.trim().toLowerCase()
   const searching = q.length > 0
   const visibleGroups = sortedGroups.filter(g =>
-    !searching || g.name.toLowerCase().includes(q) || (g.characters || []).some(c => c.toLowerCase().includes(q))
+    !searching || g.name.toLowerCase().includes(q)
+    || (g.characters || []).some(c => c.toLowerCase().includes(q))
+    || (g.titles || []).some(t => t.toLowerCase().includes(q))
   )
 
   return (
@@ -183,6 +219,32 @@ export default function CharacterGroupManager({ onClose }) {
                     onClick={() => { setRenaming(g.id); setRenameVal(g.name) }}>✎</button>
                   <button className="cgm-icon-btn cgm-icon-delete" title="グループを削除"
                     onClick={() => deleteGroup(g)}>🗑</button>
+                </div>
+
+                {/* Titles this group belongs to — always visible (not gated by
+                    collapse) so inconsistent/missing links are easy to spot
+                    and fix while scanning the full list. */}
+                <div className="cgm-panel-titles">
+                  {(g.titles || []).map(t => (
+                    <span key={t} className="cgm-title-chip">
+                      {t}
+                      <button className="cgm-chip-btn cgm-chip-del" title="このタイトルとの紐づけを解除"
+                        onClick={() => removeTitleFromGroup(t, g.id)}>×</button>
+                    </span>
+                  ))}
+                  <button className="cgm-icon-btn" title="タイトルを紐づけ"
+                    onClick={() => { setAddTitleTarget(g.id); setAddTitleInput('') }}>＋タイトル</button>
+                  {(g.titles || []).length === 0 && <span className="cgm-empty-hint">タイトル未設定</span>}
+                  {addTitleTarget === g.id && (
+                    <AddCharPopover
+                      placeholder="タイトル名"
+                      input={addTitleInput}
+                      setInput={setAddTitleInput}
+                      suggestions={titleSuggestions}
+                      onAdd={t => addTitleToGroup(t, g.id)}
+                      onClose={() => { setAddTitleTarget(null); setAddTitleInput('') }}
+                    />
+                  )}
                 </div>
 
                 {!isCollapsed && (
@@ -285,12 +347,12 @@ export default function CharacterGroupManager({ onClose }) {
   )
 }
 
-function AddCharPopover({ input, setInput, suggestions, onAdd, onClose }) {
+function AddCharPopover({ input, setInput, suggestions, onAdd, onClose, placeholder = 'キャラクター名' }) {
   return (
     <div className="cgm-add-popover">
       <input
         className="cgm-add-input"
-        placeholder="キャラクター名"
+        placeholder={placeholder}
         value={input}
         onChange={e => setInput(e.target.value)}
         onKeyDown={e => {

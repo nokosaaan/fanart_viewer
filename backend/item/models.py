@@ -35,6 +35,12 @@ class PreviewImage(models.Model):
 class CharacterGroup(models.Model):
     name = models.CharField(max_length=200, unique=True)
     characters = models.JSONField(default=list, blank=True)
+    # Freeform title strings this group belongs to (mirrors Item.titles —
+    # there's no separate Title model, titles are just strings). Used to
+    # restrict which groups are offered when editing an item with a given
+    # title selected, so character-group naming doesn't drift independently
+    # of title naming.
+    titles = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

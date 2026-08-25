@@ -171,6 +171,9 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .cp-chip-remove{ background:none; border:none; cursor:pointer; padding:0 0 0 4px; font-size:12px; color:#9ca3af }
 .cp-chip-remove:hover{ color:#ef4444 }
 .cp-extra{ display:flex; flex-wrap:wrap; gap:4px; padding:2px 0 }
+.cp-hint{ font-size:12px; color:#9ca3af; padding:2px 4px 4px }
+.cp-add-group-btn{ background:none; border:1px dashed #d1d5db; border-radius:4px; padding:4px 8px; font-size:12px; color:#6b7280; cursor:pointer; text-align:center; margin:2px 0 }
+.cp-add-group-btn:hover{ border-color:#6b7280; color:#374151 }
 
 /* CharacterGroupManager panel (global, modal) */
 .cgm-panel-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1500; display:flex; align-items:center; justify-content:center }
@@ -195,6 +198,8 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .cgm-panel-chips{ display:flex; flex-wrap:wrap; gap:4px; padding:4px 10px 8px }
 .cgm-panel-chip{ display:inline-flex; align-items:center; gap:2px; background:#e0e7ff; border-radius:4px; padding:2px 4px 2px 8px; font-size:12px }
 .cgm-panel-chip-ungrouped{ background:#f3f4f6 }
+.cgm-panel-titles{ display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:0 10px 6px; position:relative }
+.cgm-title-chip{ display:inline-flex; align-items:center; gap:2px; background:#fef3c7; color:#92400e; border-radius:4px; padding:2px 4px 2px 8px; font-size:11px }
 .cgm-chip-btn{ background:none; border:none; cursor:pointer; padding:0 3px; font-size:12px; color:#6b7280; line-height:1 }
 .cgm-chip-btn:hover{ color:#2563eb }
 .cgm-chip-del:hover{ color:#ef4444 }

@@ -35,4 +35,4 @@ class PreviewSerializer(serializers.Serializer):
 class CharacterGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = CharacterGroup
-        fields = ('id', 'name', 'characters', 'created_at')
+        fields = ('id', 'name', 'characters', 'titles', 'created_at')

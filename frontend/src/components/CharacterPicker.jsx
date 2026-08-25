@@ -1,12 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react'
 
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+  return m ? m.pop() : ''
+}
+
 // Per-item character picker. Shows characters organized by group.
-// Does NOT modify groups — group management is in CharacterGroupManager.
-export default function CharacterPicker({ charList, setCharList, allChars }) {
+// When `titles` (the item's currently selected titles) is non-empty, the
+// group list is restricted to groups linked to one of those titles — and a
+// new group can be created inline, pre-linked to them — so character-group
+// naming stays tied to title naming instead of drifting independently.
+export default function CharacterPicker({ charList, setCharList, allChars, titles }) {
   const [groups, setGroups] = useState([])
   const [collapsed, setCollapsed] = useState({})
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState(true)
   const [query, setQuery] = useState('')
+  const [creatingGroup, setCreatingGroup] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
 
   const loadGroups = useCallback(async () => {
     try {
@@ -38,17 +48,41 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
     setQuery('')
   }
 
-  function groupOf(char) {
-    return groups.find(g => Array.isArray(g.characters) && g.characters.includes(char)) || null
+  const selectedTitles = Array.isArray(titles) ? titles.filter(Boolean) : []
+  const scoped = selectedTitles.length > 0
+
+  const visibleGroups = scoped
+    ? groups.filter(g => (g.titles || []).some(t => selectedTitles.includes(t)))
+    : groups
+
+  async function createGroupForTitle() {
+    const name = newGroupName.trim()
+    if (!name) return
+    try {
+      const r = await fetch('/api/character-groups/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        credentials: 'same-origin',
+        body: JSON.stringify({ name, characters: [], titles: selectedTitles }),
+      })
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}))
+        throw new Error(j.detail || j.name || r.status)
+      }
+      setNewGroupName('')
+      setCreatingGroup(false)
+      loadGroups()
+    } catch (e) {
+      alert('グループ作成に失敗: ' + e.message)
+    }
   }
 
   // All characters known (union of group members + allChars prop)
   const allGroupChars = groups.flatMap(g => g.characters || [])
   const allKnown = Array.from(new Set([...allGroupChars, ...(allChars || [])]))
 
-  // Characters in groups
-  const groupedChars = new Set(allGroupChars)
   // Characters that exist but aren't in any group
+  const groupedChars = new Set(allGroupChars)
   const ungrouped = allKnown.filter(c => !groupedChars.has(c))
 
   const q = query.trim().toLowerCase()
@@ -59,6 +93,16 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
     if (!searching) return chars
     return chars.filter(c => c.toLowerCase().includes(q))
   }
+
+  // Characters actually rendered as a clickable chip somewhere below — used
+  // to catch already-selected characters that fall outside the current
+  // title-scoped group list (or the active search filter) so they don't
+  // silently vanish from view with no way to deselect them.
+  const shownChars = new Set([
+    ...visibleGroups.flatMap(g => filterChars(Array.isArray(g.characters) ? g.characters : [])),
+    ...filterChars(ungrouped),
+  ])
+  const hiddenSelected = charList.filter(c => !shownChars.has(c))
 
   return (
     <div className="cp-root">
@@ -75,7 +119,11 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
         )}
       </div>
 
-      {groups.map(g => {
+      {!scoped && (
+        <div className="cp-hint">タイトルを選択すると、そのタイトルのキャラクターグループに絞り込まれます</div>
+      )}
+
+      {visibleGroups.map(g => {
         const chars = filterChars(Array.isArray(g.characters) ? g.characters : [])
         if (chars.length === 0) return null
         const isCollapsed = searching ? false : collapsed[g.id]
@@ -101,6 +149,27 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
           </div>
         )
       })}
+
+      {scoped && (
+        creatingGroup ? (
+          <div className="cp-new-group-form" style={{ display: 'flex', gap: 6, margin: '4px 0' }}>
+            <input
+              className="cp-search-input"
+              placeholder="新しいグループ名"
+              value={newGroupName}
+              onChange={e => setNewGroupName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') createGroupForTitle(); if (e.key === 'Escape') { setCreatingGroup(false); setNewGroupName('') } }}
+              autoFocus
+            />
+            <button className="btn" onClick={createGroupForTitle}>作成</button>
+            <button className="btn" onClick={() => { setCreatingGroup(false); setNewGroupName('') }}>×</button>
+          </div>
+        ) : (
+          <button className="cp-add-group-btn" onClick={() => setCreatingGroup(true)}>
+            ＋ このタイトル用のグループを新規作成
+          </button>
+        )
+      )}
 
       {(() => {
         const shownUngrouped = filterChars(ungrouped)
@@ -129,10 +198,11 @@ export default function CharacterPicker({ charList, setCharList, allChars }) {
         )
       })()}
 
-      {/* Selected summary (characters not in any group) */}
-      {charList.filter(c => !allKnown.includes(c)).length > 0 && (
+      {/* Selected characters not currently shown above (hidden by title
+          scoping or the active search) — always reachable to deselect. */}
+      {hiddenSelected.length > 0 && (
         <div className="cp-extra">
-          {charList.filter(c => !allKnown.includes(c)).map(c => (
+          {hiddenSelected.map(c => (
             <span key={c} className="cp-chip cp-chip-on" style={{ cursor: 'default' }}>
               {c}
               <button className="cp-chip-remove" onClick={() => setCharList(prev => prev.filter(x => x !== c))}>×</button>
