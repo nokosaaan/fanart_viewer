@@ -6,6 +6,8 @@ import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
 import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
+import EditQueueManager from './components/EditQueueManager'
+import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 
 function AppMain({ role, onLogout }){
@@ -31,6 +33,7 @@ function AppMain({ role, onLogout }){
   // "取得キュー" button (FetchQueueManager). In-memory only — cleared on reload.
   const [fetchQueue, setFetchQueue] = useState([])
   const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
+  const [editQueueOpen, setEditQueueOpen] = useState(false)
   function enqueueFetchResult({ itemId, images }){
     setFetchQueue(prev => [...prev, { id: `${itemId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, itemId, images, fetchedAt: Date.now() }])
   }
@@ -393,19 +396,20 @@ function AppMain({ role, onLogout }){
         <h1>Fanart Viewer</h1>
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
-          {!readOnly && <button type="button" className="btn" onClick={()=>setCharGroupOpen(true)} style={{fontSize:12}}>キャラクターグループ</button>}
-          {!readOnly && <button type="button" className="btn" onClick={()=>setBackupOpen(true)} style={{fontSize:12}}>バックアップ</button>}
-          {!readOnly && (
-            <button type="button" className="btn" onClick={()=>setFetchQueueOpen(true)} style={{fontSize:12}}>
-              取得キュー{fetchQueue.length > 0 ? ` (${fetchQueue.length})` : ''}
-            </button>
-          )}
-          <button type="button" className="preview-toggle header-preview-btn" onClick={()=>setPreviewOpen(!previewOpen)}>
-            Preview Timeline
-          </button>
-          {role !== 'none' && (
-            <button type="button" className="btn" onClick={onLogout} style={{fontSize:12}}>ログアウト</button>
-          )}
+          <HeaderMenu items={[
+            { label: 'Preview Timeline', onClick: () => setPreviewOpen(p => !p), active: previewOpen },
+            ...(readOnly ? [] : [
+              { divider: true },
+              { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
+              { label: '取得キュー', onClick: () => setFetchQueueOpen(true), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
+              { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
+              { label: 'バックアップ', onClick: () => setBackupOpen(true) },
+            ]),
+            ...(role !== 'none' ? [
+              { divider: true },
+              { label: 'ログアウト', onClick: onLogout },
+            ] : []),
+          ]} />
         </div>
       </header>
       <SearchBar
@@ -478,6 +482,7 @@ function AppMain({ role, onLogout }){
           onEnqueueFetch={enqueueFetchResult}
         />
       )}
+      {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} />}
     </div>
   )
 }

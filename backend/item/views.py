@@ -9,6 +9,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
+from django.db.models import Q
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -942,6 +943,35 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     if c and isinstance(c, str):
                         all_chars.add(c.strip())
         return Response(sorted(all_chars))
+
+    @action(detail=False, methods=['get'], url_path='incomplete')
+    def incomplete(self, request):
+        """Items missing one or more metadata fields — feeds the bulk edit
+        queue (mailbox-style review UI), as an alternative to opening
+        EditFields one item at a time.
+
+        Query param `missing`: comma-separated subset of
+        titles,characters,tags,situation. Defaults to all four.
+        """
+        valid_fields = ('titles', 'characters', 'tags', 'situation')
+        requested = (request.GET.get('missing') or ','.join(valid_fields)).split(',')
+        fields = [f.strip() for f in requested if f.strip() in valid_fields] or list(valid_fields)
+
+        q = Q()
+        for f in fields:
+            if f == 'situation':
+                q |= Q(situation='') | Q(situation__isnull=True)
+            else:
+                # JSONField list (titles/characters/tags): empty means [] or null
+                q |= Q(**{f: []}) | Q(**{f'{f}__isnull': True})
+
+        queryset = Item.objects.filter(q).order_by('-id')
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='update_fields')
     def update_fields(self, request, pk=None):

@@ -12,6 +12,14 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .app-header{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px }
 .app-header h1{ margin:0; font-size:20px }
 .header-preview-btn{ font-size:18px; padding:8px 14px; border-radius:8px }
+.header-menu{ position:relative }
+.header-menu-toggle{ font-size:16px; padding:8px 12px; line-height:1 }
+.header-menu-dropdown{ position:absolute; top:calc(100% + 6px); right:0; min-width:220px; background:#fff; border-radius:8px; box-shadow:0 8px 32px rgba(0,0,0,0.18); border:1px solid #e5e7eb; padding:6px; z-index:1400; display:flex; flex-direction:column; gap:2px }
+.header-menu-item{ display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; text-align:left; background:none; border:none; border-radius:6px; padding:9px 10px; font-size:13px; color:#1f2937; cursor:pointer }
+.header-menu-item:hover{ background:#f3f4f6 }
+.header-menu-item.active{ background:#eff6ff; color:#1d4ed8; font-weight:600 }
+.header-menu-badge{ font-size:11px; background:#2563eb; color:#fff; border-radius:10px; padding:1px 7px }
+.header-menu-divider{ height:1px; background:#f3f4f6; margin:4px 2px }
 .searchbar{ margin-bottom: 14px }
 .controls{ display:flex; gap:8px; align-items:center }
 .controls input{ flex:1; padding:10px; border-radius:8px; border:1px solid #e5e7eb }
