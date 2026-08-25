@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { saveImagesChunked } from '../lib/saveImages'
+import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 
 function timeAgo(ts){
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
@@ -16,16 +17,53 @@ function timeAgo(ts){
 // instead of popping an inline modal — so an accidental click outside a modal
 // backdrop can no longer discard results the user has to re-fetch. Entries
 // stay here until explicitly saved or dismissed.
-export default function FetchQueueManager({ queue, onRemove, onClose }){
+export default function FetchQueueManager({ queue, onRemove, onClose, currentPageItems, onEnqueueFetch }){
   const [openId, setOpenId] = useState(queue.length > 0 ? queue[0].id : null)
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [saving, setSaving] = useState(false)
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState(null) // {done, total}
+  const [bulkSummary, setBulkSummary] = useState(null)
 
   const openEntry = queue.find(q => q.id === openId) || null
+
+  // Items on the currently displayed page that don't already have a preview
+  // and have a source link to fetch from — the bulk button's target set.
+  const pendingItems = (currentPageItems || []).filter(it => it && !it.has_preview && it.link)
 
   function openEntryFor(entry){
     setOpenId(entry.id)
     setSelectedUrls(new Set())
+  }
+
+  async function runBulkFetch(){
+    if(bulkRunning || pendingItems.length === 0) return
+    setBulkRunning(true)
+    setBulkSummary(null)
+    let queued = 0, savedDirect = 0, failed = 0
+    for(let i=0; i<pendingItems.length; i++){
+      setBulkProgress({ done: i, total: pendingItems.length })
+      const it = pendingItems[i]
+      try{
+        const res = await fetchPreviewCandidates(it.id, it.link)
+        const body = res.body || {}
+        if(res.ok && body.status === 'saved'){
+          savedDirect++
+          try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(_){}
+        } else if(res.ok && body.preview_only && Array.isArray(body.images) && body.images.length > 0){
+          onEnqueueFetch({ itemId: it.id, images: body.images })
+          queued++
+        } else {
+          failed++
+        }
+      }catch(e){
+        console.error('Bulk fetch failed for item', it.id, e)
+        failed++
+      }
+    }
+    setBulkProgress({ done: pendingItems.length, total: pendingItems.length })
+    setBulkRunning(false)
+    setBulkSummary(`完了: キューに${queued}件追加 / 直接保存${savedDirect}件 / 失敗${failed}件`)
   }
 
   async function save(entry, images){
@@ -57,6 +95,18 @@ export default function FetchQueueManager({ queue, onRemove, onClose }){
         <div className="cgm-panel-header">
           <strong>取得キュー ({queue.length}件)</strong>
           <button className="cgm-panel-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
+          <button className="btn" onClick={runBulkFetch} disabled={bulkRunning || pendingItems.length===0}>
+            {bulkRunning
+              ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
+              : `このページを一括取得 (${pendingItems.length}件)`}
+          </button>
+          {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
+          {!bulkRunning && !bulkSummary && pendingItems.length===0 && (currentPageItems || []).length>0 && (
+            <span style={{fontSize:12, color:'#6b7280'}}>このページは全て取得済みです</span>
+          )}
         </div>
 
         {queue.length === 0 ? (

@@ -1,43 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import EditFields from './EditFields'
-
-async function fetchAndSavePreview(id, url, options = {}){
-  try{
-    const opts = {
-      method: 'POST',
-      headers: {}
-    }
-    if(url){
-      opts.headers['Content-Type'] = 'application/json'
-      const body = { url }
-      if(options.force_method) body.force_method = options.force_method
-      opts.body = JSON.stringify(body)
-    }
-    const resp = await fetch(`/api/items/${id}/fetch_and_save_preview/`, opts)
-    if(!resp.ok) {
-      const j = await resp.json().catch(()=>({}));
-      console.warn('Preview fetch failed', j)
-      return { ok: false, body: j }
-    }
-    return { ok: true, body: await resp.json().catch(()=>({})) }
-  }catch(e){ console.error(e); return { ok: false, body: {error: e.message} } }
-}
-
-async function fetchPreviewCandidates(id, url, options = {}){
-  try{
-    const body = {}
-    if(url) body.url = url
-    body.preview_only = true
-    // only include force_method when explicitly requested by the UI
-    if(options.force_method) body.force_method = options.force_method
-    const resp = await fetch(`/api/items/${id}/fetch_and_save_preview/`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
-    if(!resp.ok) {
-      const j = await resp.json().catch(()=>({}));
-      return { ok: false, body: j }
-    }
-    return { ok: true, body: await resp.json().catch(()=>({})) }
-  }catch(e){ console.error(e); return { ok: false, body: {error: e.message} } }
-}
+import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 
 function ItemRow({ it, readOnly, onEnqueueFetch }){
   const [url, setUrl] = useState(it.link || '')

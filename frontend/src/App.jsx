@@ -440,6 +440,8 @@ function AppMain({ role, onLogout }){
           queue={fetchQueue}
           onRemove={removeFromFetchQueue}
           onClose={()=>setFetchQueueOpen(false)}
+          currentPageItems={paginatedItems}
+          onEnqueueFetch={enqueueFetchResult}
         />
       )}
     </div>
