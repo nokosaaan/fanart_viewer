@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useMemo} from 'react'
+import React, {useEffect, useState, useMemo, useRef} from 'react'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
@@ -25,98 +25,74 @@ function AppMain({ role, onLogout }){
   const [nextPageUrl, setNextPageUrl] = useState(null)
   const [loadingPages, setLoadingPages] = useState(false)
   const [backgroundIndexing, setBackgroundIndexing] = useState(false)
-  // Fetch only the first page by default. For debugging you can call
-  // `window.fetchAllItems()` from the console to fetch all pages.
-  const fetchPage = async (url = '/api/items/') => {
-    try{
+  // Kept in sync with nextPageUrl but readable synchronously mid-async-function,
+  // so a loop of several loadNextPage() calls in a row (see goToNextPage) doesn't
+  // keep re-reading the stale value captured when the loop started.
+  const nextPageUrlRef = useRef(null)
+  useEffect(()=>{ nextPageUrlRef.current = nextPageUrl }, [nextPageUrl])
+  // Same idea for the raw loaded item count — used to decide how many more
+  // backend pages a page-jump needs, without waiting on filtered/totalPages
+  // (a memo, so it can't be read fresh mid-loop either).
+  const itemsCountRef = useRef(0)
+  // Guards the search-triggered full background load so it only ever starts once.
+  const fullIndexStartedRef = useRef(false)
+  const INITIAL_PAGES = 3
+
+  // Fetch backend pages starting at `startUrl`, following `next` up to
+  // `maxPages` times (Infinity = fetch everything). Shared by the initial
+  // fast-path load, the on-demand full index, and the debug fetchAll().
+  async function fetchItemsPages(startUrl, maxPages = Infinity){
+    const collected = []
+    let url = startUrl
+    let pages = 0
+    while(url && pages < maxPages){
       let fetchUrl = url
       try{
         if(typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))){
           const u = new URL(url)
           fetchUrl = u.pathname + (u.search || '')
         }
-      }catch(_){
-        fetchUrl = url
-      }
+      }catch(_){ fetchUrl = url }
 
       const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
       if(!r.ok){
         let bodyText = null
         try{ bodyText = await r.text() }catch(_){ bodyText = null }
         console.error('fetch failed', fetchUrl, r.status, bodyText)
-        return
+        break
       }
-
       let data = null
-      try{
-        data = await r.json()
-      }catch(err){
+      try{ data = await r.json() }catch(err){
         let raw = null
         try{ raw = await r.text() }catch(_){ raw = null }
         console.error('Invalid JSON from', fetchUrl, 'error:', err, 'body:', raw)
-        return
+        break
       }
 
       if(Array.isArray(data)){
-        // not paginated: whole dataset returned
-        setItems(uniqueById(data))
-        setNextPageUrl(null)
-      } else {
-        const results = Array.isArray(data.results) ? data.results : []
-        setItems(uniqueById(results))
-        setNextPageUrl(data.next || null)
+        collected.push(...data)
+        url = null
+        break
       }
-    }catch(err){
-      console.error('Failed to fetch items', err)
-      setItems([])
-      setNextPageUrl(null)
+      const results = Array.isArray(data.results) ? data.results : []
+      collected.push(...results)
+      url = data.next || null
+      pages += 1
     }
+    return { items: collected, nextUrl: url }
   }
 
   // keep the original full-fetch routine available for debugging
   const fetchAll = async () => {
     try{
-      const all = []
-      let url = '/api/items/'
-      while(url){
-        let fetchUrl = url
-        try{
-          if(typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))){
-            const u = new URL(url)
-            fetchUrl = u.pathname + (u.search || '')
-          }
-        }catch(_){
-          fetchUrl = url
-        }
-
-        const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
-        if(!r.ok){
-          let bodyText = null
-          try{ bodyText = await r.text() }catch(_){ bodyText = null }
-          console.error('fetch failed', fetchUrl, r.status, bodyText)
-          break
-        }
-        let data = null
-        try{
-          data = await r.json()
-        }catch(err){
-          let raw = null
-          try{ raw = await r.text() }catch(_){ raw = null }
-          console.error('Invalid JSON from', fetchUrl, 'error:', err, 'body:', raw)
-          break
-        }
-        if(Array.isArray(data)){
-          all.push(...data)
-          break
-        }
-        const results = Array.isArray(data.results) ? data.results : []
-        all.push(...results)
-        url = data.next || null
-      }
-      setItems(uniqueById(all))
+      const { items: all } = await fetchItemsPages('/api/items/')
+      const unique = uniqueById(all)
+      itemsCountRef.current = unique.length
+      setItems(unique)
       setNextPageUrl(null)
     }catch(err){
       console.error('Failed to fetch items', err)
+      itemsCountRef.current = 0
       setItems([])
       setNextPageUrl(null)
     }
@@ -127,70 +103,22 @@ function AppMain({ role, onLogout }){
     if(typeof window !== 'undefined'){
       window.fetchAllItems = fetchAll
     }
-    
-    // fetch the first page by default (guarded to avoid crash if function not available)
-    if(typeof fetchPage === 'function'){
-      fetchPage('/api/items/')
-    }else{
-      console.warn('fetchPage is not a function at mount — skipping initial fetch')
-    }
 
-    // Start background indexing (fetch all pages) so search works across entire dataset.
-    // This runs asynchronously and won't block initial UI rendering.
-    (async ()=>{
+    // Load only the first few backend pages up front for a fast initial paint.
+    // The rest is fetched lazily as the user pages forward (goToNextPage) or
+    // once a search/filter needs the full dataset (see the effect below).
+    ;(async ()=>{
       try{
-        setBackgroundIndexing(true)
-        const all = await (async function(){
-          const collected = []
-          let url = '/api/items/'
-          while(url){
-            let fetchUrl = url
-            try{
-              if(typeof url === 'string' && (url.startsWith('http://') || url.startsWith('https://'))){
-                const u = new URL(url)
-                fetchUrl = u.pathname + (u.search || '')
-              }
-            }catch(_){ fetchUrl = url }
-
-            const r = await fetch(fetchUrl, { headers: { 'Accept': 'application/json' } })
-            if(!r.ok){
-              let bodyText = null
-              try{ bodyText = await r.text() }catch(_){ bodyText = null }
-              console.error('background fetch failed', fetchUrl, r.status, bodyText)
-              break
-            }
-            let data = null
-            try{ data = await r.json() }catch(err){
-              let raw = null
-              try{ raw = await r.text() }catch(_){ raw = null }
-              console.error('Invalid JSON from', fetchUrl, 'error:', err, 'body:', raw)
-              break
-            }
-
-            if(Array.isArray(data)){
-              collected.push(...data)
-              break
-            }
-            const results = Array.isArray(data.results) ? data.results : []
-            collected.push(...results)
-            url = data.next || null
-          }
-          return collected
-        })()
-
-        if(Array.isArray(all) && all.length>0){
-          setItems(uniqueById(all))
-          setNextPageUrl(null)
-          // clamp pageIndex to valid range after full dataset arrives
-          setPageIndex(p=>{
-            const maxPage = Math.max(0, Math.ceil(all.length / PAGE_SIZE) - 1)
-            return Math.min(p, maxPage)
-          })
-        }
+        const { items: initial, nextUrl } = await fetchItemsPages('/api/items/', INITIAL_PAGES)
+        const unique = uniqueById(initial)
+        itemsCountRef.current = unique.length
+        setItems(unique)
+        setNextPageUrl(nextUrl)
       }catch(err){
-        console.error('Background indexing failed', err)
-      }finally{
-        setBackgroundIndexing(false)
+        console.error('Failed to fetch items', err)
+        itemsCountRef.current = 0
+        setItems([])
+        setNextPageUrl(null)
       }
     })()
     // Listen for item-deleted events to remove items from local state
@@ -206,6 +134,35 @@ function AppMain({ role, onLogout }){
       window.removeEventListener('item-deleted', onItemDeleted)
     }
   }, [])
+
+  // Search/filters only see whatever's been loaded so far. The first time the
+  // user actually searches, fetch the rest of the dataset in the background
+  // (once) so results aren't silently incomplete.
+  useEffect(()=>{
+    const searching = query.trim() !== '' || filters.length > 0
+    if(!searching || !nextPageUrl || fullIndexStartedRef.current) return
+    fullIndexStartedRef.current = true
+    let cancelled = false
+    ;(async ()=>{
+      setBackgroundIndexing(true)
+      try{
+        const { items: rest, nextUrl } = await fetchItemsPages(nextPageUrl)
+        if(cancelled) return
+        setItems(prev => {
+          const merged = uniqueById([...(Array.isArray(prev)?prev:[]), ...rest])
+          itemsCountRef.current = merged.length
+          return merged
+        })
+        nextPageUrlRef.current = nextUrl
+        setNextPageUrl(nextUrl)
+      }catch(err){
+        console.error('Background indexing failed', err)
+      }finally{
+        if(!cancelled) setBackgroundIndexing(false)
+      }
+    })()
+    return ()=>{ cancelled = true }
+  }, [query, filters, nextPageUrl])
 
   const suggestions = useMemo(()=>{
     const set = new Set()
@@ -285,11 +242,16 @@ function AppMain({ role, onLogout }){
     setFilters(prev=> prev.filter(p=>p!==value))
   }
 
+  // Returns true if a page was actually fetched. Reads/writes nextPageUrlRef
+  // (not just the nextPageUrl state) so a caller can await this in a loop —
+  // e.g. goToNextPage() below — and see the updated url on the next iteration
+  // instead of the value from whenever the loop started.
   async function loadNextPage(){
-    if(!nextPageUrl || loadingPages) return
+    const url = nextPageUrlRef.current
+    if(!url || loadingPages) return false
     setLoadingPages(true)
     try{
-      let fetchUrl = nextPageUrl
+      let fetchUrl = url
       try{
         if(typeof fetchUrl === 'string' && (fetchUrl.startsWith('http://') || fetchUrl.startsWith('https://'))){
           const u = new URL(fetchUrl)
@@ -302,29 +264,61 @@ function AppMain({ role, onLogout }){
         let bodyText = null
         try{ bodyText = await r.text() }catch(_){ bodyText = null }
         console.error('fetch failed', fetchUrl, r.status, bodyText)
-        return
+        return false
       }
       let data = null
       try{ data = await r.json() }catch(err){
         let raw = null
         try{ raw = await r.text() }catch(_){ raw = null }
         console.error('Invalid JSON from', fetchUrl, 'error:', err, 'body:', raw)
-        return
+        return false
       }
 
-      if(Array.isArray(data)){
-        setItems(prev => uniqueById([...(Array.isArray(prev)?prev:[]), ...data]))
-        setNextPageUrl(null)
-      } else {
-        const results = Array.isArray(data.results) ? data.results : []
-        setItems(prev => uniqueById([...(Array.isArray(prev)?prev:[]), ...results]))
-        setNextPageUrl(data.next || null)
-      }
+      const results = Array.isArray(data) ? data : (Array.isArray(data.results) ? data.results : [])
+      const newNext = Array.isArray(data) ? null : (data.next || null)
+      setItems(prev => {
+        const merged = uniqueById([...(Array.isArray(prev)?prev:[]), ...results])
+        itemsCountRef.current = merged.length
+        return merged
+      })
+      nextPageUrlRef.current = newNext
+      setNextPageUrl(newNext)
+      return true
     }catch(err){
       console.error('Failed to load next page', err)
+      return false
     }finally{
       setLoadingPages(false)
     }
+  }
+
+  // Fetch more backend pages (via loadNextPage, one at a time) until either
+  // enough raw items are loaded for `targetIndex`, the backend runs out of
+  // pages, or `maxFetches` is hit. Uses itemsCountRef/nextPageUrlRef (not
+  // filtered/totalPages) so the loop condition is re-checked fresh each
+  // iteration instead of once against a stale memo.
+  async function ensureItemsFor(targetIndex, maxFetches){
+    let fetches = 0
+    while((targetIndex+1) * PAGE_SIZE > itemsCountRef.current && nextPageUrlRef.current && fetches < maxFetches){
+      const ok = await loadNextPage()
+      if(!ok) break
+      fetches++
+    }
+  }
+
+  // Advance to the next client-side page, transparently fetching more backend
+  // pages first if we're at the edge of what's currently loaded.
+  async function goToNextPage(){
+    await ensureItemsFor(pageIndex+1, 5)
+    setPageIndex(p => p+1)
+  }
+
+  // Jump to an arbitrary page number, fetching ahead if it's beyond what's
+  // currently loaded (higher cap since a manual jump can span further).
+  async function goToPage(targetIndex){
+    await ensureItemsFor(targetIndex, 20)
+    const maxKnownPage = Math.max(0, Math.ceil(itemsCountRef.current / PAGE_SIZE) - 1)
+    setPageIndex(Math.max(0, Math.min(targetIndex, maxKnownPage)))
   }
 
   // helper: ensure array of items is unique by `id` preserving first occurrence order
@@ -400,7 +394,7 @@ function AppMain({ role, onLogout }){
             onKeyDown={e=>{
               if(e.key==='Enter'){
                 const v = parseInt(pageInputVal, 10)
-                if(!isNaN(v)) setPageIndex(Math.max(0, Math.min(totalPages-1, v-1)))
+                if(!isNaN(v)) goToPage(v-1)
                 setPageInputVal('')
                 e.target.blur()
               } else if(e.key==='Escape'){
@@ -412,7 +406,7 @@ function AppMain({ role, onLogout }){
             style={{width:56, textAlign:'center', padding:'2px 4px'}}
           />
           <span style={{margin:'0 8px'}}>/ {totalPages} — {filtered.length} results</span>
-          <button className="btn" onClick={()=>setPageIndex(p=>Math.min(totalPages-1, p+1))} disabled={pageIndex>=totalPages-1}>Next</button>
+          <button className="btn" onClick={goToNextPage} disabled={pageIndex>=totalPages-1 && !nextPageUrl}>Next</button>
         </div>
       )}
       {previewOpen && (

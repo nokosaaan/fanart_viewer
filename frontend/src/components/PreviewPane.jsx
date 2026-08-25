@@ -33,20 +33,27 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
     return { list: [], next: null }
   }
 
-  // load items with optional pagination. When replace=true, follows all API
-  // `next` links so the full set is loaded in one go — this prevents the pane
-  // from losing items that were accumulated via lazy scroll-loading after a
-  // full reload (e.g. after deleteCurrentPreview / clearAllPreviews).
-  async function loadItems(url='/api/items/?page_size=1000', replace=true){
+  // load items with optional pagination.
+  // - replace=true, maxPages=Infinity (default): follows all API `next` links
+  //   so the full set is loaded in one go — used to resync after a mutation
+  //   (deleteCurrentPreview / clearAllPreviews) so we never end up with FEWER
+  //   items loaded than before the resync.
+  // - replace=true, maxPages=N: stops after N chunks and wires the remainder
+  //   into nextPageUrl, so the existing scroll-triggered lazy loader (see the
+  //   onScroll effect below) picks up the rest as the user scrolls — used for
+  //   the initial "pane just opened" load so it doesn't have to fetch the
+  //   entire dataset before showing anything.
+  async function loadItems(url='/api/items/?page_size=1000', replace=true, maxPages=Infinity){
     try{
       if(replace){ setLoading(true); setNextPageUrl(null) }
       else { setLoadingMore(true) }
 
       if(replace){
-        // fetch every page and accumulate before updating state
+        // fetch up to maxPages chunks and accumulate before updating state
         let accumulated = []
         let currentUrl = url
-        while(currentUrl && mountedRef.current){
+        let pages = 0
+        while(currentUrl && mountedRef.current && pages < maxPages){
           const r = await fetch(currentUrl)
           if(!r.ok) break
           const { list, next } = parsePageData(await r.json())
@@ -54,6 +61,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
             list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
           )
           currentUrl = next
+          pages += 1
         }
         if(!mountedRef.current) return accumulated
         allLoadedRef.current = accumulated
@@ -63,7 +71,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
           have = have.filter(it => allowedIds.has(it.id))
         }
         setItems(have)
-        setNextPageUrl(null)
+        setNextPageUrl(currentUrl)
         // clamp panePageIndex so we never show an empty page after a reload
         const maxPage = Math.max(0, Math.ceil(have.length / PANE_PAGE_SIZE) - 1)
         setPanePageIndex(prev => Math.min(prev, maxPage))
@@ -98,7 +106,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
   useEffect(()=>{
     if(!open) return
     setPanePageIndex(0)
-    loadItems('/api/items/?page_size=1000', true)
+    // Fast path: only the first chunk up front; the rest loads lazily as the
+    // user scrolls (see the onScroll effect below), instead of chasing every
+    // `next` link before the timeline can show anything.
+    loadItems('/api/items/?page_size=1000', true, 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
