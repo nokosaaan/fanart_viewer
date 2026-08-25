@@ -6,11 +6,17 @@ import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
 import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
+import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
 
-  const [items, setItems] = useState([])
+  // Lazy-initialize from whatever was cached last session so the list paints
+  // immediately on reload instead of sitting empty until the network fetch
+  // below resolves. The mount effect still fetches fresh data right away and
+  // merges it in, so this is purely a "show something now" optimization —
+  // never the final source of truth.
+  const [items, setItems] = useState(() => loadCachedItems() || [])
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState([])
   const [includeCP, setIncludeCP] = useState(false)
@@ -47,7 +53,7 @@ function AppMain({ role, onLogout }){
   // Same idea for the raw loaded item count — used to decide how many more
   // backend pages a page-jump needs, without waiting on filtered/totalPages
   // (a memo, so it can't be read fresh mid-loop either).
-  const itemsCountRef = useRef(0)
+  const itemsCountRef = useRef(items.length)
   // Guards the search-triggered full background load so it only ever starts once.
   const fullIndexStartedRef = useRef(false)
   const INITIAL_PAGES = 3
@@ -121,18 +127,23 @@ function AppMain({ role, onLogout }){
     // Load only the first few backend pages up front for a fast initial paint.
     // The rest is fetched lazily as the user pages forward (goToNextPage) or
     // once a search/filter needs the full dataset (see the effect below).
+    // `items` may already hold last session's cached list at this point (see
+    // the useState initializer above) — merge rather than overwrite so a slow
+    // or failed fetch doesn't blank out something we already had to show.
     ;(async ()=>{
       try{
         const { items: initial, nextUrl } = await fetchItemsPages('/api/items/', INITIAL_PAGES)
-        const unique = uniqueById(initial)
-        itemsCountRef.current = unique.length
-        setItems(unique)
+        setItems(prev => {
+          const merged = uniqueById([...initial, ...(Array.isArray(prev) ? prev : [])])
+          itemsCountRef.current = merged.length
+          return merged
+        })
         setNextPageUrl(nextUrl)
       }catch(err){
-        console.error('Failed to fetch items', err)
-        itemsCountRef.current = 0
-        setItems([])
-        setNextPageUrl(null)
+        // Leave `items`/`nextPageUrl` as-is (whatever the cache restored, or
+        // empty if there was none) rather than blanking the list on a
+        // transient network error.
+        console.error('Failed to fetch items — keeping cached list, if any', err)
       }
     })()
     // Listen for item-deleted events to remove items from local state
@@ -161,6 +172,16 @@ function AppMain({ role, onLogout }){
       window.removeEventListener('item-updated', onItemUpdated)
     }
   }, [])
+
+  // Keep the on-disk cache in sync with whatever's loaded, so the next
+  // reload can paint from it immediately (see the useState initializer
+  // above). Debounced so rapid-fire updates (e.g. the background full-index
+  // fetch appending page after page) don't serialize the whole list on every
+  // single page.
+  useEffect(()=>{
+    const t = setTimeout(()=>{ saveCachedItems(items) }, 500)
+    return ()=> clearTimeout(t)
+  }, [items])
 
   // Search/filters only see whatever's been loaded so far. The first time the
   // user actually searches, fetch the rest of the dataset in the background
