@@ -112,7 +112,12 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   const [allChars,  setAllChars]  = useState([])
   const [suggesting, setSuggesting] = useState(false)
   const [suggestError, setSuggestError] = useState('')
-  const [suggestionApplied, setSuggestionApplied] = useState(false)
+  // null = not tried yet. Otherwise {added, source, sampleSize} — `added`
+  // specifically tracks whether anything was actually filled in, since a
+  // "checked but found nothing to suggest" result (common for an artist
+  // with no other tagged items yet) is a real, valid outcome and must not
+  // be shown the same way as "suggestion applied" (see applySuggestion).
+  const [suggestionResult, setSuggestionResult] = useState(null)
 
   useEffect(()=>{
     fetch('/api/items/all_titles/')
@@ -133,24 +138,37 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // a bulk-suggested result handed down via `initialSuggestion` (see the
   // effect below) so both paths behave identically.
   function applySuggestion(j){
+    let added = false
+
     // Titles inferred by cross-referencing matched characters' groups (the
     // tagger itself can't suggest titles — its public tag list has no
     // copyright/series tags at all).
     setTitleList(prev => {
       const toAdd = (j.suggested_titles || []).filter(t => !prev.includes(t))
-      return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+      if(toAdd.length === 0) return prev
+      added = true
+      return [...prev, ...toAdd]
     })
     setCharList(prev => {
       const toAdd = (j.characters || []).map(c => c.name).filter(n => !prev.includes(n))
-      return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+      if(toAdd.length === 0) return prev
+      added = true
+      return [...prev, ...toAdd]
     })
     setTags(prev => {
       const existing = parseList(prev)
       const toAdd = (j.tags || []).map(t => t.name).filter(n => !existing.includes(n))
-      return toAdd.length > 0 ? [...existing, ...toAdd].join(', ') : prev
+      if(toAdd.length === 0) return prev
+      added = true
+      return [...existing, ...toAdd].join(', ')
     })
-    setSituation(prev => (j.situation_hint && !prev) ? j.situation_hint : prev)
-    setSuggestionApplied(true)
+    setSituation(prev => {
+      if(!j.situation_hint || prev) return prev
+      added = true
+      return j.situation_hint
+    })
+
+    setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null })
   }
 
   // If EditQueueManager already ran bulk suggestion for this item, apply the
@@ -219,12 +237,27 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
 
       <div style={{marginBottom:16}}>
         <button className="btn" onClick={runSuggest} disabled={suggesting} style={{fontSize:13}}>
-          {suggesting ? '画像を解析中…' : (suggestionApplied ? '🏷 再提案' : '🏷 AIでキャラ・タグを提案')}
+          {suggesting ? '画像を解析中…' : (suggestionResult ? '🏷 再提案' : '🏷 AIでキャラ・タグを提案')}
         </button>
-        <span style={{marginLeft:8, fontSize:11, color:'#64748b'}}>
-          {suggestionApplied
-            ? '提案を反映済み（保存されるまで確定しません。内容は自由に編集できます）'
-            : 'プレビュー画像とキャラ既存データからキャラ・タイトル・タグを提案します（保存されるまで確定しません）'}
+        <span style={{marginLeft:8, fontSize:11, color: suggestionResult && !suggestionResult.added ? '#f59e0b' : '#64748b'}}>
+          {!suggestionResult ? (
+            'プレビュー画像とキャラ既存データからキャラ・タイトル・タグを提案します（保存されるまで確定しません）'
+          ) : suggestionResult.added ? (
+            <>
+              提案を反映済み（保存されるまで確定しません。内容は自由に編集できます）
+              {suggestionResult.source && (
+                <> — {suggestionResult.source === 'db' ? '既存データから'
+                    : suggestionResult.source === 'tagger' ? '画像解析から'
+                    : '既存データ＋画像解析から'}</>
+              )}
+            </>
+          ) : (
+            <>
+              提案できる情報が見つかりませんでした
+              {suggestionResult.sampleSize === 0 && '（この作者の他のアイテムがまだありません）'}
+              {suggestionResult.sampleSize > 0 && '（この作者の他のアイテムから十分な傾向が見つかりませんでした）'}
+            </>
+          )}
         </span>
         {suggestError && <div style={{marginTop:6, fontSize:12, color:'#f87171'}}>{suggestError}</div>}
       </div>

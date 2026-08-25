@@ -202,17 +202,21 @@ export default function EditQueueManager({ onClose }){
               >
                 <div style={{fontSize:13, fontWeight:600}}>
                   #{it.id}
-                  {suggestions[it.id] && suggestions[it.id].source && suggestions[it.id].source !== 'none' && (
-                    <span
-                      title={
-                        suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
-                        : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
-                        : '提案あり（既存データ＋画像解析）'
-                      }
-                      style={{marginLeft:6}}
-                    >
-                      {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
-                    </span>
+                  {suggestions[it.id] && (
+                    suggestions[it.id].source && suggestions[it.id].source !== 'none' ? (
+                      <span
+                        title={
+                          suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
+                          : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
+                          : '提案あり（既存データ＋画像解析）'
+                        }
+                        style={{marginLeft:6}}
+                      >
+                        {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
+                      </span>
+                    ) : (
+                      <span title="確認済み・提案なし" style={{marginLeft:6, color:'#d1d5db', fontWeight:400}}>·</span>
+                    )
                   )}
                 </div>
                 <div style={{fontSize:12, color:'#6b7280'}}>不足: {summarizeMissing(it)}</div>
