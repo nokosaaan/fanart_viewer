@@ -49,11 +49,16 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
   }
 
   const selectedTitles = Array.isArray(titles) ? titles.filter(Boolean) : []
-  const scoped = selectedTitles.length > 0
-
-  const visibleGroups = scoped
+  const matchingGroups = selectedTitles.length > 0
     ? groups.filter(g => (g.titles || []).some(t => selectedTitles.includes(t)))
-    : groups
+    : []
+  // Only actually restrict when it would narrow things down. Most existing
+  // groups haven't been retroactively linked to a title yet (see
+  // CharacterGroupManager) — filtering to zero matches would just make every
+  // existing character invisible/unselectable, which is worse than not
+  // restricting at all.
+  const scoped = selectedTitles.length > 0 && matchingGroups.length > 0
+  const visibleGroups = scoped ? matchingGroups : groups
 
   async function createGroupForTitle() {
     const name = newGroupName.trim()
@@ -119,8 +124,11 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
         )}
       </div>
 
-      {!scoped && (
+      {selectedTitles.length === 0 && (
         <div className="cp-hint">タイトルを選択すると、そのタイトルのキャラクターグループに絞り込まれます</div>
+      )}
+      {selectedTitles.length > 0 && matchingGroups.length === 0 && (
+        <div className="cp-hint">このタイトルに紐づくグループはまだありません（全グループを表示中）。下のボタンから作成できます</div>
       )}
 
       {visibleGroups.map(g => {
@@ -150,7 +158,7 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
         )
       })}
 
-      {scoped && (
+      {selectedTitles.length > 0 && (
         creatingGroup ? (
           <div className="cp-new-group-form" style={{ display: 'flex', gap: 6, margin: '4px 0' }}>
             <input

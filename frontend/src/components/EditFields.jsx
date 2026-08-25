@@ -133,6 +133,13 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // a bulk-suggested result handed down via `initialSuggestion` (see the
   // effect below) so both paths behave identically.
   function applySuggestion(j){
+    // Titles inferred by cross-referencing matched characters' groups (the
+    // tagger itself can't suggest titles — its public tag list has no
+    // copyright/series tags at all).
+    setTitleList(prev => {
+      const toAdd = (j.suggested_titles || []).filter(t => !prev.includes(t))
+      return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+    })
     setCharList(prev => {
       const toAdd = (j.characters || []).map(c => c.name).filter(n => !prev.includes(n))
       return toAdd.length > 0 ? [...prev, ...toAdd] : prev
@@ -217,7 +224,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <span style={{marginLeft:8, fontSize:11, color:'#64748b'}}>
           {suggestionApplied
             ? '提案を反映済み（保存されるまで確定しません。内容は自由に編集できます）'
-            : 'プレビュー画像から候補を提案します（保存されるまで確定しません）'}
+            : 'プレビュー画像とキャラ既存データからキャラ・タイトル・タグを提案します（保存されるまで確定しません）'}
         </span>
         {suggestError && <div style={{marginTop:6, fontSize:12, color:'#f87171'}}>{suggestError}</div>}
       </div>

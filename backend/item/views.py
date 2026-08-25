@@ -172,6 +172,48 @@ def _run_bookmark_fetch_job(item_id, target_url, data=None):
         logging.exception('Background bookmark fetch failed for item %s url=%s', item_id, target_url)
 
 
+def _normalize_char_name(name):
+    return re.sub(r'\s+', ' ', (name or '').strip().lower())
+
+
+def _match_tagger_characters(candidates):
+    """Cross-reference raw tagger character-tag names (Danbooru-style,
+    lowercase/space-separated English) against the app's own character
+    vocabulary, so a match reuses the EXISTING spelling/casing (avoiding
+    near-duplicate strings like "hakurei reimu" vs "Hakurei Reimu") and,
+    when the match belongs to a CharacterGroup linked to one or more
+    titles, surfaces those as title suggestions too — backfilling the
+    tagger's inherent gap (its public tag list has no copyright/series
+    tags at all, so it can never suggest a title on its own).
+
+    Only catches same-spelling matches after normalization — it can't
+    bridge e.g. a Japanese-named existing entry to the tagger's romaji
+    output. `matched` on each returned item tells the caller which is which.
+    """
+    existing_by_norm = {}
+    for group in CharacterGroup.objects.all():
+        for c in (group.characters or []):
+            existing_by_norm.setdefault(_normalize_char_name(c), []).append((c, group))
+    for item in Item.objects.only('characters'):
+        for c in (item.characters or []):
+            if c:
+                existing_by_norm.setdefault(_normalize_char_name(c), []).append((c, None))
+
+    matched, unmatched = [], []
+    suggested_titles = set()
+    for cand in candidates:
+        hits = existing_by_norm.get(_normalize_char_name(cand['name']))
+        if hits:
+            existing_name, group = hits[0]
+            matched.append({'name': existing_name, 'score': cand['score'], 'matched': True})
+            if group:
+                suggested_titles.update(group.titles or [])
+        else:
+            unmatched.append({'name': cand['name'], 'score': cand['score'], 'matched': False})
+
+    return matched + unmatched, sorted(suggested_titles)
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('-id')
@@ -1014,6 +1056,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logging.exception('Tagger inference failed for item %s', item.id)
             return Response({'detail': f'タグ推論に失敗しました: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        result['characters'], result['suggested_titles'] = _match_tagger_characters(result['characters'])
 
         return Response(result)
 
