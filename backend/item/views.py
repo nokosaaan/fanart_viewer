@@ -51,6 +51,11 @@ try:
 except Exception:
     HAVE_POIPIKU = False
 try:
+    from . import tagger
+    HAVE_TAGGER = True
+except Exception:
+    HAVE_TAGGER = False
+try:
     from bs4 import BeautifulSoup
 except Exception:
     BeautifulSoup = None
@@ -972,6 +977,45 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='suggest_tags')
+    def suggest_tags_view(self, request, pk=None):
+        """Run the local WD14-style tagger on this item's saved preview image.
+
+        Returns suggested characters/tags/rating for the client to show as
+        pre-filled (but editable) chips — nothing here is written to the
+        Item; saving still goes through update_fields as normal.
+        """
+        if not HAVE_TAGGER:
+            return Response({'detail': 'タガーが利用できません（依存パッケージ未インストール）'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        item = self.get_object()
+        imgs = list(item.preview_images.order_by('order'))
+        if imgs:
+            image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
+        elif item.preview_data:
+            image_bytes = bytes(item.preview_data)
+        else:
+            return Response({'detail': 'このアイテムにはプレビュー画像がありません'}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            general_threshold = float(data.get('general_threshold', 0.35))
+            character_threshold = float(data.get('character_threshold', 0.85))
+        except (TypeError, ValueError):
+            general_threshold, character_threshold = 0.35, 0.85
+
+        try:
+            result = tagger.suggest_tags(
+                image_bytes,
+                general_threshold=general_threshold,
+                character_threshold=character_threshold,
+            )
+        except Exception as e:
+            logging.exception('Tagger inference failed for item %s', item.id)
+            return Response({'detail': f'タグ推論に失敗しました: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response(result)
 
     @action(detail=True, methods=['post'], url_path='update_fields')
     def update_fields(self, request, pk=None):

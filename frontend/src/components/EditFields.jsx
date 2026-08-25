@@ -101,7 +101,7 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
 // EditFields (wraps it in a fixed-position modal, for the per-row ✎ button)
 // and EditQueueManager (embeds it directly in a mailbox-style bulk review
 // panel, where "cancel" means skip-to-next rather than close-a-modal).
-export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル' }){
+export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null }){
   const [titleList, setTitleList] = useState(item.titles||[])
   const [charList,  setCharList]  = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
@@ -110,6 +110,9 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   const [loading,   setLoading]   = useState(false)
   const [allTitles, setAllTitles] = useState([])
   const [allChars,  setAllChars]  = useState([])
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestError, setSuggestError] = useState('')
+  const [suggestionApplied, setSuggestionApplied] = useState(false)
 
   useEffect(()=>{
     fetch('/api/items/all_titles/')
@@ -121,6 +124,48 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   function parseList(str){
     if(str == null) return []
     return String(str).split(',').map(s=>s.trim()).filter(s=>s.length>0)
+  }
+
+  // Merges a tagger result (characters/tags/situation_hint) into the form as
+  // plain suggestions — nothing here is saved until the user hits 保存, and
+  // every field stays fully editable/removable afterwards (see TagField /
+  // CharacterPicker chip UI). Shared by the manual "AIで提案" button and by
+  // a bulk-suggested result handed down via `initialSuggestion` (see the
+  // effect below) so both paths behave identically.
+  function applySuggestion(j){
+    setCharList(prev => {
+      const toAdd = (j.characters || []).map(c => c.name).filter(n => !prev.includes(n))
+      return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+    })
+    setTags(prev => {
+      const existing = parseList(prev)
+      const toAdd = (j.tags || []).map(t => t.name).filter(n => !existing.includes(n))
+      return toAdd.length > 0 ? [...existing, ...toAdd].join(', ') : prev
+    })
+    setSituation(prev => (j.situation_hint && !prev) ? j.situation_hint : prev)
+    setSuggestionApplied(true)
+  }
+
+  // If EditQueueManager already ran bulk suggestion for this item, apply the
+  // cached result immediately instead of re-running inference (~5s+/image).
+  useEffect(()=>{
+    if(initialSuggestion) applySuggestion(initialSuggestion)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function runSuggest(){
+    setSuggesting(true)
+    setSuggestError('')
+    try{
+      const resp = await fetch(`/api/items/${item.id}/suggest_tags/`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      const j = await resp.json().catch(()=>({}))
+      if(!resp.ok){ setSuggestError(j.detail || `提案の取得に失敗しました (${resp.status})`); return }
+      applySuggestion(j)
+    }catch(e){
+      setSuggestError('提案の取得に失敗しました: ' + (e && e.message ? e.message : String(e)))
+    }finally{
+      setSuggesting(false)
+    }
   }
 
   async function save(){
@@ -163,6 +208,18 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20}}>
         <span style={{color:'#f8fafc', fontWeight:700, fontSize:16}}>Edit #{item.id}</span>
         <button className="btn" style={{padding:'4px 10px'}} onClick={onClose}>✕</button>
+      </div>
+
+      <div style={{marginBottom:16}}>
+        <button className="btn" onClick={runSuggest} disabled={suggesting} style={{fontSize:13}}>
+          {suggesting ? '画像を解析中…' : (suggestionApplied ? '🏷 再提案' : '🏷 AIでキャラ・タグを提案')}
+        </button>
+        <span style={{marginLeft:8, fontSize:11, color:'#64748b'}}>
+          {suggestionApplied
+            ? '提案を反映済み（保存されるまで確定しません。内容は自由に編集できます）'
+            : 'プレビュー画像から候補を提案します（保存されるまで確定しません）'}
+        </span>
+        {suggestError && <div style={{marginTop:6, fontSize:12, color:'#f87171'}}>{suggestError}</div>}
       </div>
 
       <TagField

@@ -11,3 +11,10 @@ gunicorn
 whitenoise
 google-auth
 google-api-python-client
+# Pinned: 1.23+ dropped cp310 wheels entirely (Python 3.10, which the
+# Playwright base image may still use) — 1.22.0 still covers cp310-cp313
+# on both x86_64 and aarch64 (Pi4), so pin rather than risk pip falling
+# back to a source build with no compatible wheel.
+onnxruntime==1.22.0
+numpy
+pillow

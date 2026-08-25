@@ -29,6 +29,12 @@ export default function EditQueueManager({ onClose }){
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [selectedId, setSelectedId] = useState(null)
+  // itemId -> tagger result. Populated by runBulkSuggest so opening an item
+  // later applies it instantly instead of waiting ~5s+/image for a fresh
+  // inference call (see ItemEditForm's initialSuggestion prop).
+  const [suggestions, setSuggestions] = useState({})
+  const [bulkSuggesting, setBulkSuggesting] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState(null) // {done, total, skipped}
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -67,6 +73,37 @@ export default function EditQueueManager({ onClose }){
     }finally{
       setLoadingMore(false)
     }
+  }
+
+  // Sequentially runs the tagger over every currently-loaded queue item that
+  // has a preview image and no cached suggestion yet, caching results as it
+  // goes. Sequential (not parallel) on purpose — each call is a real ~5s+
+  // CPU-bound inference, and hammering it concurrently would just contend
+  // for the same CPU on the Pi4 deployment target for no speed gain.
+  async function runBulkSuggest(){
+    if(bulkSuggesting) return
+    const targets = items.filter(it => it.has_preview && !suggestions[it.id])
+    if(targets.length === 0) return
+    setBulkSuggesting(true)
+    let done = 0, skipped = 0
+    setBulkProgress({ done, total: targets.length, skipped })
+    for(const it of targets){
+      try{
+        const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+        const j = await resp.json().catch(()=>({}))
+        if(resp.ok){
+          setSuggestions(prev => ({ ...prev, [it.id]: j }))
+        } else {
+          skipped++
+        }
+      }catch(e){
+        console.error('Bulk suggest failed for item', it.id, e)
+        skipped++
+      }
+      done++
+      setBulkProgress({ done, total: targets.length, skipped })
+    }
+    setBulkSuggesting(false)
   }
 
   function toggleField(key){
@@ -109,6 +146,22 @@ export default function EditQueueManager({ onClose }){
           ))}
         </div>
 
+        <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
+          <button className="btn" onClick={runBulkSuggest} disabled={bulkSuggesting || items.every(it => !it.has_preview || suggestions[it.id])}>
+            {bulkSuggesting
+              ? `AI提案を実行中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
+              : '🏷 このキューを一括AI提案'}
+          </button>
+          <span style={{fontSize:11, color:'#6b7280'}}>
+            {bulkSuggesting
+              ? '1件あたり数秒〜かかります（Pi等では特に遅くなります）'
+              : '各項目を開いた時点で提案が反映済みの状態になります'}
+          </span>
+          {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
+            <span style={{fontSize:11, color:'#dc2626'}}>({bulkProgress.skipped}件失敗/スキップ)</span>
+          )}
+        </div>
+
         <div style={{display:'flex', minHeight:0, flex:'1 1 auto'}}>
           {/* Queue list (mailbox sidebar) */}
           <div style={{width:260, borderRight:'1px solid #f3f4f6', overflowY:'auto', flexShrink:0}}>
@@ -126,7 +179,9 @@ export default function EditQueueManager({ onClose }){
                   borderBottom:'1px solid #f3f4f6',
                 }}
               >
-                <div style={{fontSize:13, fontWeight:600}}>#{it.id}</div>
+                <div style={{fontSize:13, fontWeight:600}}>
+                  #{it.id}{suggestions[it.id] && <span title="AI提案あり" style={{marginLeft:6}}>🏷</span>}
+                </div>
                 <div style={{fontSize:12, color:'#6b7280'}}>不足: {summarizeMissing(it)}</div>
               </div>
             ))}
@@ -147,6 +202,7 @@ export default function EditQueueManager({ onClose }){
                   key={selected.id}
                   item={selected}
                   closeLabel="スキップ（後で対応）"
+                  initialSuggestion={suggestions[selected.id] || null}
                   onClose={()=>selectNext(selected.id)}
                   onSaved={(newItem)=>{
                     try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: selected.id, item: newItem } })) }catch(_){}
