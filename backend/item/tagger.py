@@ -148,12 +148,18 @@ def _prepare_image(image_bytes, target_size):
     return np.expand_dims(arr, axis=0)
 
 
-def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, model_repo=None):
+def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=5, model_repo=None):
     """Run the tagger on a single image.
 
     Returns {'characters': [...], 'tags': [...], 'rating': str|None,
     'rating_scores': {...}, 'situation_hint': 'R18'|None} — all suggestions
     for a human to accept/edit/reject, never auto-committed.
+
+    `general_limit` caps the general (freeform) tag suggestions to the
+    top-N by confidence — unlike characters, where the model itself is
+    already precision-tuned via a high threshold, general tags can easily
+    return dozens of low-value hits (pose, background, clothing details)
+    that would clutter the item's tags field more than help it.
     """
     repo = model_repo or os.environ.get('TAGGER_MODEL_REPO') or DEFAULT_MODEL_REPO
     state = _load(repo)
@@ -172,7 +178,7 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     general = sorted(
         ((tag_names[i], float(preds[i])) for i in state['general_idx'] if preds[i] > general_threshold),
         key=lambda x: -x[1],
-    )
+    )[:general_limit]
     characters = sorted(
         ((tag_names[i], float(preds[i])) for i in state['character_idx'] if preds[i] > character_threshold),
         key=lambda x: -x[1],

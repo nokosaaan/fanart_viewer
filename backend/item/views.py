@@ -10,6 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
 from django.db.models import Q
+from collections import Counter
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -212,6 +213,57 @@ def _match_tagger_characters(candidates):
             unmatched.append({'name': cand['name'], 'score': cand['score'], 'matched': False})
 
     return matched + unmatched, sorted(suggested_titles)
+
+
+# An artist needs at least this many OTHER tagged items before their history
+# counts as a real pattern rather than noise from one or two data points.
+_ARTIST_HISTORY_MIN_SAMPLES = 2
+# A title/character/situation must show up in at least this fraction of an
+# artist's other tagged items to be suggested — a single one-off elsewhere
+# isn't a strong enough signal.
+_ARTIST_HISTORY_MIN_SHARE = 0.3
+
+
+def _suggest_from_existing_data(item):
+    """Suggest titles/characters/situation purely from the DB — no image
+    analysis. Looks at this item's OTHER same-artist items that already
+    have metadata filled in, and suggests whichever titles/characters/
+    situation recur often enough among them (most artists repeatedly draw
+    a small set of series/characters, so their own history is a strong,
+    free prior). This is the primary suggestion source; the tagger model
+    is only invoked as a fallback when this yields too little (see
+    suggest_tags_view).
+    """
+    empty = {'titles': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
+    if not item.artist:
+        return empty
+
+    siblings = list(Item.objects.filter(artist=item.artist).exclude(pk=item.pk).only('titles', 'characters', 'situation'))
+    if len(siblings) < _ARTIST_HISTORY_MIN_SAMPLES:
+        return empty
+
+    title_counter, char_counter, situation_counter = Counter(), Counter(), Counter()
+    for sib in siblings:
+        title_counter.update(set(sib.titles or []))
+        char_counter.update(set(sib.characters or []))
+        if sib.situation:
+            situation_counter[sib.situation] += 1
+
+    # floor of 2, not 1 — a single stray mention among an artist's other
+    # items isn't a real pattern, it's noise (this matters a lot for small
+    # sample sizes, where share*n rounds down to 1 otherwise)
+    min_count = max(2, round(len(siblings) * _ARTIST_HISTORY_MIN_SHARE))
+    suggested_titles = [t for t, n in title_counter.most_common(5) if n >= min_count]
+    suggested_characters = [c for c, n in char_counter.most_common(10) if n >= min_count]
+    top_situation = situation_counter.most_common(1)
+    suggested_situation = top_situation[0][0] if top_situation and top_situation[0][1] >= min_count else None
+
+    return {
+        'titles': suggested_titles,
+        'characters': suggested_characters,
+        'situation_hint': suggested_situation,
+        'sample_size': len(siblings),
+    }
 
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1022,44 +1074,76 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='suggest_tags')
     def suggest_tags_view(self, request, pk=None):
-        """Run the local WD14-style tagger on this item's saved preview image.
+        """Suggest titles/characters/tags/situation for this item.
 
-        Returns suggested characters/tags/rating for the client to show as
-        pre-filled (but editable) chips — nothing here is written to the
-        Item; saving still goes through update_fields as normal.
+        Primary source: this item's artist's OTHER already-tagged items —
+        a pure DB lookup (see _suggest_from_existing_data), near-instant,
+        no image analysis. The image tagger only runs as a fallback when
+        that yields too little (no titles or no characters), since it's a
+        ~5s+ CPU-bound operation per image and the DB signal, when it's
+        available at all, is usually both faster and more precise (it's
+        drawn from what this user already curated, not a model's guess).
+
+        Nothing here is written to the Item — saving still goes through
+        update_fields as normal.
         """
-        if not HAVE_TAGGER:
-            return Response({'detail': 'タガーが利用できません（依存パッケージ未インストール）'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
         item = self.get_object()
-        imgs = list(item.preview_images.order_by('order'))
-        if imgs:
-            image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
-        elif item.preview_data:
-            image_bytes = bytes(item.preview_data)
-        else:
-            return Response({'detail': 'このアイテムにはプレビュー画像がありません'}, status=status.HTTP_404_NOT_FOUND)
+        db = _suggest_from_existing_data(item)
 
-        data = request.data if isinstance(request.data, dict) else {}
-        try:
-            general_threshold = float(data.get('general_threshold', 0.35))
-            character_threshold = float(data.get('character_threshold', 0.85))
-        except (TypeError, ValueError):
-            general_threshold, character_threshold = 0.35, 0.85
+        titles = list(db['titles'])
+        characters = [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
+        tags = []
+        situation_hint = db['situation_hint']
+        source = 'db' if (titles or characters) else 'none'
 
-        try:
-            result = tagger.suggest_tags(
-                image_bytes,
-                general_threshold=general_threshold,
-                character_threshold=character_threshold,
-            )
-        except Exception as e:
-            logging.exception('Tagger inference failed for item %s', item.id)
-            return Response({'detail': f'タグ推論に失敗しました: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        needs_tagger = not titles or not characters
+        if needs_tagger and HAVE_TAGGER:
+            imgs = list(item.preview_images.order_by('order'))
+            if imgs:
+                image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
+            elif item.preview_data:
+                image_bytes = bytes(item.preview_data)
+            else:
+                image_bytes = None
 
-        result['characters'], result['suggested_titles'] = _match_tagger_characters(result['characters'])
+            if image_bytes is not None:
+                data = request.data if isinstance(request.data, dict) else {}
+                try:
+                    general_threshold = float(data.get('general_threshold', 0.35))
+                    character_threshold = float(data.get('character_threshold', 0.85))
+                except (TypeError, ValueError):
+                    general_threshold, character_threshold = 0.35, 0.85
 
-        return Response(result)
+                try:
+                    tagger_result = tagger.suggest_tags(
+                        image_bytes,
+                        general_threshold=general_threshold,
+                        character_threshold=character_threshold,
+                    )
+                except Exception:
+                    logging.exception('Tagger inference failed for item %s', item.id)
+                    tagger_result = None
+
+                if tagger_result is not None:
+                    source = 'tagger' if source == 'none' else 'db+tagger'
+                    if not characters:
+                        matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
+                        characters = matched_chars
+                        for t in tagger_titles:
+                            if t not in titles:
+                                titles.append(t)
+                    tags = tagger_result['tags']
+                    if not situation_hint:
+                        situation_hint = tagger_result['situation_hint']
+
+        return Response({
+            'characters': characters,
+            'tags': tags,
+            'situation_hint': situation_hint,
+            'suggested_titles': titles,
+            'source': source,
+            'sample_size': db['sample_size'],
+        })
 
     @action(detail=True, methods=['post'], url_path='update_fields')
     def update_fields(self, request, pk=None):

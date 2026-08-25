@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ItemEditForm } from './EditFields'
 
 const MISSING_FIELDS = [
@@ -29,12 +29,64 @@ export default function EditQueueManager({ onClose }){
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [selectedId, setSelectedId] = useState(null)
-  // itemId -> tagger result. Populated by runBulkSuggest so opening an item
-  // later applies it instantly instead of waiting ~5s+/image for a fresh
-  // inference call (see ItemEditForm's initialSuggestion prop).
+  // itemId -> suggestion result. Populated by runSuggestFor so opening an
+  // item later applies it instantly instead of waiting on a fresh request
+  // (see ItemEditForm's initialSuggestion prop). Mirrored into a ref so
+  // runSuggestFor can check "already have this one" without needing
+  // `suggestions` in its own dependency list (see bulkSuggestingRef below
+  // for why that matters).
   const [suggestions, setSuggestions] = useState({})
+  const suggestionsRef = useRef({})
+  useEffect(()=>{ suggestionsRef.current = suggestions }, [suggestions])
+
   const [bulkSuggesting, setBulkSuggesting] = useState(false)
+  // Guards runSuggestFor against overlapping runs. Deliberately a ref, not
+  // just the `bulkSuggesting` state: if runSuggestFor closed over the state
+  // value directly, calling setBulkSuggesting inside it would redefine the
+  // function (were it in a useCallback dep list), which would redefine
+  // `load` below (since load calls runSuggestFor), which would re-fire the
+  // `useEffect(()=>{load()},[load])` mount effect — reloading the whole
+  // queue mid-suggestion-run and resetting selectedId out from under
+  // whatever the user was doing.
+  const bulkSuggestingRef = useRef(false)
   const [bulkProgress, setBulkProgress] = useState(null) // {done, total, skipped}
+
+  // Sequentially requests a suggestion for every item in `targetItems` that
+  // doesn't already have a cached one, caching results as it goes.
+  // Sequential (not parallel) on purpose: the DB-only case resolves near
+  // instantly, but any item that falls back to the image tagger server-side
+  // is a real ~5s+ CPU-bound call, and hammering several concurrently would
+  // just contend for the same CPU on the Pi4 deployment target for no speed
+  // gain.
+  const runSuggestFor = useCallback(async (targetItems) => {
+    if(bulkSuggestingRef.current) return
+    const targets = targetItems.filter(it => !suggestionsRef.current[it.id])
+    if(targets.length === 0) return
+
+    bulkSuggestingRef.current = true
+    setBulkSuggesting(true)
+    let done = 0, skipped = 0
+    setBulkProgress({ done, total: targets.length, skipped })
+    for(const it of targets){
+      try{
+        const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+        const j = await resp.json().catch(()=>({}))
+        if(resp.ok){
+          suggestionsRef.current = { ...suggestionsRef.current, [it.id]: j }
+          setSuggestions(suggestionsRef.current)
+        } else {
+          skipped++
+        }
+      }catch(e){
+        console.error('Suggest failed for item', it.id, e)
+        skipped++
+      }
+      done++
+      setBulkProgress({ done, total: targets.length, skipped })
+    }
+    bulkSuggestingRef.current = false
+    setBulkSuggesting(false)
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -47,13 +99,14 @@ export default function EditQueueManager({ onClose }){
       setItems(list)
       setCount(Array.isArray(data) ? list.length : (data.count ?? list.length))
       setNextUrl(Array.isArray(data) ? null : (data.next || null))
+      runSuggestFor(list) // fire and forget — don't block the loading spinner on this
     }catch(e){
       console.error('Failed to load incomplete items', e)
       setItems([]); setCount(0); setNextUrl(null)
     }finally{
       setLoading(false)
     }
-  }, [activeFields])
+  }, [activeFields, runSuggestFor])
 
   useEffect(()=>{ load() }, [load])
 
@@ -68,42 +121,12 @@ export default function EditQueueManager({ onClose }){
       const list = Array.isArray(data) ? data : (data.results || [])
       setItems(prev => [...prev, ...list])
       setNextUrl(Array.isArray(data) ? null : (data.next || null))
+      runSuggestFor(list)
     }catch(e){
       console.error('Failed to load more incomplete items', e)
     }finally{
       setLoadingMore(false)
     }
-  }
-
-  // Sequentially runs the tagger over every currently-loaded queue item that
-  // has a preview image and no cached suggestion yet, caching results as it
-  // goes. Sequential (not parallel) on purpose — each call is a real ~5s+
-  // CPU-bound inference, and hammering it concurrently would just contend
-  // for the same CPU on the Pi4 deployment target for no speed gain.
-  async function runBulkSuggest(){
-    if(bulkSuggesting) return
-    const targets = items.filter(it => it.has_preview && !suggestions[it.id])
-    if(targets.length === 0) return
-    setBulkSuggesting(true)
-    let done = 0, skipped = 0
-    setBulkProgress({ done, total: targets.length, skipped })
-    for(const it of targets){
-      try{
-        const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
-        const j = await resp.json().catch(()=>({}))
-        if(resp.ok){
-          setSuggestions(prev => ({ ...prev, [it.id]: j }))
-        } else {
-          skipped++
-        }
-      }catch(e){
-        console.error('Bulk suggest failed for item', it.id, e)
-        skipped++
-      }
-      done++
-      setBulkProgress({ done, total: targets.length, skipped })
-    }
-    setBulkSuggesting(false)
   }
 
   function toggleField(key){
@@ -147,16 +170,14 @@ export default function EditQueueManager({ onClose }){
         </div>
 
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
-          <button className="btn" onClick={runBulkSuggest} disabled={bulkSuggesting || items.every(it => !it.has_preview || suggestions[it.id])}>
+          <span style={{fontSize:12, color: bulkSuggesting ? '#2563eb' : '#6b7280'}}>
             {bulkSuggesting
-              ? `AI提案を実行中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
-              : '🏷 このキューを一括AI提案'}
-          </button>
-          <span style={{fontSize:11, color:'#6b7280'}}>
-            {bulkSuggesting
-              ? '1件あたり数秒〜かかります（Pi等では特に遅くなります）'
-              : '各項目を開いた時点で提案が反映済みの状態になります'}
+              ? `🏷 自動提案を準備中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
+              : '🏷 各項目は開いた時点で提案(DBの傾向・必要なら画像解析)が反映済みの状態になります'}
           </span>
+          <button className="btn" style={{fontSize:12}} onClick={()=>runSuggestFor(items)} disabled={bulkSuggesting || items.every(it => suggestions[it.id])}>
+            未処理分を再提案
+          </button>
           {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
             <span style={{fontSize:11, color:'#dc2626'}}>({bulkProgress.skipped}件失敗/スキップ)</span>
           )}
@@ -180,7 +201,19 @@ export default function EditQueueManager({ onClose }){
                 }}
               >
                 <div style={{fontSize:13, fontWeight:600}}>
-                  #{it.id}{suggestions[it.id] && <span title="AI提案あり" style={{marginLeft:6}}>🏷</span>}
+                  #{it.id}
+                  {suggestions[it.id] && suggestions[it.id].source && suggestions[it.id].source !== 'none' && (
+                    <span
+                      title={
+                        suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
+                        : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
+                        : '提案あり（既存データ＋画像解析）'
+                      }
+                      style={{marginLeft:6}}
+                    >
+                      {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
+                    </span>
+                  )}
                 </div>
                 <div style={{fontSize:12, color:'#6b7280'}}>不足: {summarizeMissing(it)}</div>
               </div>
