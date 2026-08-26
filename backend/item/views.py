@@ -1076,27 +1076,42 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     def suggest_tags_view(self, request, pk=None):
         """Suggest titles/characters/tags/situation for this item.
 
-        Primary source: this item's artist's OTHER already-tagged items —
-        a pure DB lookup (see _suggest_from_existing_data), near-instant,
-        no image analysis. The image tagger only runs as a fallback when
-        that yields too little (no titles or no characters), since it's a
-        ~5s+ CPU-bound operation per image and the DB signal, when it's
-        available at all, is usually both faster and more precise (it's
-        drawn from what this user already curated, not a model's guess).
+        Fields the item ALREADY has filled in are left alone entirely — not
+        even queried for — regardless of what DB history or the tagger
+        might otherwise offer for them. "Already filled" uses the exact
+        same emptiness check as the `incomplete` action's missing-field
+        filter, so a field this item isn't missing never gets touched here.
+
+        Among the fields actually wanted: the primary source is this item's
+        artist's OTHER already-tagged items — a pure DB lookup (see
+        _suggest_from_existing_data), near-instant, no image analysis. The
+        image tagger only runs as a fallback for whichever wanted fields DB
+        history didn't cover, since it's a ~5s+ CPU-bound operation per
+        image and the DB signal, when available, is usually both faster and
+        more precise (it's drawn from what this user already curated, not a
+        model's guess).
 
         Nothing here is written to the Item — saving still goes through
         update_fields as normal.
         """
         item = self.get_object()
-        db = _suggest_from_existing_data(item)
+        want_titles = not (item.titles or [])
+        want_characters = not (item.characters or [])
+        want_tags = not (item.tags or [])
+        want_situation = not item.situation
 
-        titles = list(db['titles'])
-        characters = [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
+        db = _suggest_from_existing_data(item) if (want_titles or want_characters or want_situation) else None
+
+        titles = list(db['titles']) if (want_titles and db) else []
+        characters = (
+            [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
+            if (want_characters and db) else []
+        )
         tags = []
-        situation_hint = db['situation_hint']
+        situation_hint = db['situation_hint'] if (want_situation and db) else None
         source = 'db' if (titles or characters) else 'none'
 
-        needs_tagger = not titles or not characters
+        needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
         if needs_tagger and HAVE_TAGGER:
             imgs = list(item.preview_images.order_by('order'))
             if imgs:
@@ -1126,14 +1141,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
                 if tagger_result is not None:
                     source = 'tagger' if source == 'none' else 'db+tagger'
-                    if not characters:
+                    if want_characters and not characters:
                         matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
                         characters = matched_chars
-                        for t in tagger_titles:
-                            if t not in titles:
-                                titles.append(t)
-                    tags = tagger_result['tags']
-                    if not situation_hint:
+                        if want_titles:
+                            for t in tagger_titles:
+                                if t not in titles:
+                                    titles.append(t)
+                    if want_tags:
+                        tags = tagger_result['tags']
+                    if want_situation and not situation_hint:
                         situation_hint = tagger_result['situation_hint']
 
         return Response({
@@ -1142,7 +1159,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'situation_hint': situation_hint,
             'suggested_titles': titles,
             'source': source,
-            'sample_size': db['sample_size'],
+            'sample_size': db['sample_size'] if db else 0,
         })
 
     @action(detail=True, methods=['post'], url_path='update_fields')

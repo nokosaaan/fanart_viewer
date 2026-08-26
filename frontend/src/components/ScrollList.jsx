@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import EditFields from './EditFields'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
+import { notify } from '../lib/crossWindowSync'
 
 function ItemRow({ it, readOnly, onEnqueueFetch }){
   const [url, setUrl] = useState(it.link || '')
@@ -63,7 +64,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
             if(body2.status === 'saved'){
               setHasPreviewLocal(true)
               try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = body2 }catch(e){}
-              try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+              notify('item-preview-updated', { id: it.id })
               try{ window.alert('Preview saved via API.'); }catch(e){}
               return
             }
@@ -87,7 +88,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
       // store debug info globally for console inspection
       try{ window.__fv_fetch_debug = window.__fv_fetch_debug || {}; window.__fv_fetch_debug[it.id] = body }catch(e){}
       try{ if(!window.showFetchDebug) window.showFetchDebug = id => console.log(window.__fv_fetch_debug?.[id] || 'no debug for id '+id) }catch(e){}
-      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+      notify('item-preview-updated', { id: it.id })
       try{ window.alert('Preview saved.'); }catch(e){}
       return
     }
@@ -224,7 +225,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
             const resp = await fetch(`/api/items/${it.id}/previews/`, {method:'DELETE'})
             if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to clear previews: '+(j.detail||j.error||resp.status)); return }
             setHasPreviewLocal(false)
-            try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+            notify('item-preview-updated', { id: it.id })
             alert('Previews cleared.')
           }catch(e){ console.error(e); alert('Failed to clear previews') }
         }}>
@@ -237,7 +238,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
             try{
               const resp = await fetch(`/api/items/${it.id}/delete_item/`, {method:'DELETE'})
               if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to delete item: '+(j.detail||j.error||resp.status)); return }
-              try{ window.dispatchEvent(new CustomEvent('item-deleted', { detail: { id: it.id } })) }catch(e){}
+              notify('item-deleted', { id: it.id })
               alert('Item deleted.')
             }catch(e){ console.error(e); alert('Failed to delete item') }
           }}>
@@ -272,7 +273,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
           // serialized) so App.jsx can merge it into the shared items list —
           // otherwise reopening the editor later reads the stale pre-edit
           // object and the user has to re-enter everything from scratch.
-          try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: it.id, item: newItem } })) }catch(e){}
+          notify('item-updated', { id: it.id, item: newItem })
         }} />
       )}
 

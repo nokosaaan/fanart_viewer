@@ -1,4 +1,5 @@
 import React, {useEffect, useState, useRef} from 'react'
+import { notify } from '../lib/crossWindowSync'
 
 const PANE_PAGE_SIZE = 50
 
@@ -254,7 +255,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
       }
       // reload previews for this item and refresh items list
       await loadPreviewsForIndex(selectedIndex)
-      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+      notify('item-preview-updated', { id: it.id })
       alert('Preview deleted.')
     }catch(e){ console.error(e); alert('Failed to delete preview') }
     finally{ setDeleting(false) }
@@ -274,7 +275,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
       await loadItems('/api/items/?page_size=1000', true)
       setPreviews([])
       setCurrentPreviewIdx(0)
-      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(e){}
+      notify('item-preview-updated', { id: it.id })
       alert('All previews cleared.')
     }catch(e){ console.error(e); alert('Failed to clear previews') }
     finally{ setDeleting(false) }

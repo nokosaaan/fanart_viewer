@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { saveImagesChunked } from '../lib/saveImages'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
+import { notify, postSync, onSync } from '../lib/crossWindowSync'
 
 function timeAgo(ts){
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
@@ -17,7 +18,36 @@ function timeAgo(ts){
 // instead of popping an inline modal — so an accidental click outside a modal
 // backdrop can no longer discard results the user has to re-fetch. Entries
 // stay here until explicitly saved or dismissed.
-export default function FetchQueueManager({ queue, onRemove, onClose, currentPageItems, onEnqueueFetch }){
+//
+// `standalone`: rendered as a popped-out window instead of an overlay in the
+// main window. The fetch queue's actual data lives in App.jsx's React state
+// (it's ephemeral/in-memory only, unlike the edit queue which fetches its
+// own data from the server) — a separate window has no access to that state
+// via props, so in standalone mode this mirrors it over BroadcastChannel
+// instead: request the current queue on mount, apply every subsequent sync,
+// and route removals back through the main window (the source of truth)
+// rather than mutating local state directly. The per-page bulk-fetch button
+// is hidden in standalone mode since "current page" is a main-window-only
+// concept.
+export default function FetchQueueManager({ queue: queueProp, onRemove: onRemoveProp, onClose, currentPageItems, onEnqueueFetch, standalone = false }){
+  const [mirroredQueue, setMirroredQueue] = useState([])
+  useEffect(() => {
+    if(!standalone) return
+    postSync('fetchQueue:request', null)
+    return onSync('fetchQueue:sync', (payload) => setMirroredQueue(Array.isArray(payload) ? payload : []))
+  }, [standalone])
+
+  const queue = standalone ? mirroredQueue : queueProp
+
+  function removeEntry(entryId){
+    if(standalone){
+      setMirroredQueue(prev => prev.filter(q => q.id !== entryId)) // optimistic; fetchQueue:sync reconciles shortly after
+      postSync('fetchQueue:remove', entryId)
+    } else {
+      onRemoveProp(entryId)
+    }
+  }
+
   const [openId, setOpenId] = useState(queue.length > 0 ? queue[0].id : null)
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [saving, setSaving] = useState(false)
@@ -49,7 +79,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
         const body = res.body || {}
         if(res.ok && body.status === 'saved'){
           savedDirect++
-          try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: it.id } })) }catch(_){}
+          notify('item-preview-updated', { id: it.id })
         } else if(res.ok && body.preview_only && Array.isArray(body.images) && body.images.length > 0){
           onEnqueueFetch({ itemId: it.id, images: body.images })
           queued++
@@ -77,8 +107,8 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
         alert('保存に失敗しました: ' + (body && body.detail ? body.detail : JSON.stringify(body)))
         return
       }
-      try{ window.dispatchEvent(new CustomEvent('item-preview-updated', { detail: { id: entry.itemId } })) }catch(_){}
-      onRemove(entry.id)
+      notify('item-preview-updated', { id: entry.itemId })
+      removeEntry(entry.id)
       setSelectedUrls(new Set())
       const remaining = queue.filter(q => q.id !== entry.id)
       setOpenId(remaining.length > 0 ? remaining[0].id : null)
@@ -89,14 +119,14 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
     }
   }
 
-  return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
-      <div className="cgm-panel" style={{width:820}} onClick={e=>e.stopPropagation()}>
-        <div className="cgm-panel-header">
-          <strong>取得キュー ({queue.length}件)</strong>
-          <button className="cgm-panel-close" onClick={onClose}>✕</button>
-        </div>
+  const content = (
+    <>
+      <div className="cgm-panel-header">
+        <strong>取得キュー ({queue.length}件)</strong>
+        <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+      </div>
 
+      {!standalone && (
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
           <button className="btn" onClick={runBulkFetch} disabled={bulkRunning || pendingItems.length===0}>
             {bulkRunning
@@ -108,6 +138,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
             <span style={{fontSize:12, color:'#6b7280'}}>このページは全て取得済みです</span>
           )}
         </div>
+      )}
 
         {queue.length === 0 ? (
           <div className="cgm-panel-body">
@@ -132,7 +163,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
                   <button
                     className="cgm-icon-btn cgm-icon-delete"
                     title="キューから削除"
-                    onClick={e=>{ e.stopPropagation(); onRemove(entry.id); if(entry.id===openId){ const rest = queue.filter(q=>q.id!==entry.id); setOpenId(rest.length>0?rest[0].id:null) } }}
+                    onClick={e=>{ e.stopPropagation(); removeEntry(entry.id); if(entry.id===openId){ const rest = queue.filter(q=>q.id!==entry.id); setOpenId(rest.length>0?rest[0].id:null) } }}
                     style={{float:'right', marginTop:-2}}
                   >🗑</button>
                 </div>
@@ -186,7 +217,16 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
             </div>
           </div>
         )}
-      </div>
+    </>
+  )
+
+  if(standalone){
+    return <div className="cgm-panel" style={{width:'100%', height:'100vh', maxHeight:'100vh', borderRadius:0}}>{content}</div>
+  }
+
+  return (
+    <div className="cgm-panel-backdrop" onClick={onClose}>
+      <div className="cgm-panel" style={{width:820}} onClick={e=>e.stopPropagation()}>{content}</div>
     </div>
   )
 }

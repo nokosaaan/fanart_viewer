@@ -28,6 +28,7 @@ something to run in a tight loop over many items.
 """
 import io
 import os
+import re
 import threading
 
 import numpy as np
@@ -43,6 +44,39 @@ _KAOMOJIS = {
     '0_0', '(o)_(o)', '+_+', '+_-', '._.', '<o>_<o>', '<|>_<|>', '=_=',
     '>_<', '3_3', '6_9', '>_o', '@_@', '^_^', 'o_o', 'u_u', 'x_x', '|_|', '||_||',
 }
+
+_COUNT_TAG_RE = re.compile(r'^(\d+)\+?girls$')
+
+
+def _situation_hint(rating, general_tag_names):
+    """Derive a single situation_hint from the rating + booru people-count
+    tags. Checked against the FULL general-tag set (before it's capped to
+    general_limit for the returned `tags` field) so a low-ranked-but-present
+    count tag still counts — these are usually very high-confidence in
+    practice, but the cap is about avoiding tag clutter, not about hiding
+    structural signals from this logic.
+
+    R18 takes priority when the rating implies it — `situation` is a single
+    value in this app's model, and content warning takes precedence over
+    composition. Only "1girl"+"solo" -> SOLO and "multiple girls" / an
+    explicit 3+ count tag -> MULTIPLE are mapped; 2-person compositions
+    (which could plausibly mean CP/pairing) are deliberately left unmapped
+    since that's a judgment call, not something the tags settle on their own.
+    """
+    if rating in RATING_TO_SITUATION_HINT:
+        return RATING_TO_SITUATION_HINT[rating]
+
+    names = set(general_tag_names)
+    if 'solo' in names and '1girl' in names:
+        return 'SOLO'
+    if 'multiple girls' in names:
+        return 'MULTIPLE'
+    for name in names:
+        m = _COUNT_TAG_RE.match(name)
+        if m and int(m.group(1)) >= 3:
+            return 'MULTIPLE'
+    return None
+
 
 RATING_TO_SITUATION_HINT = {
     'explicit': 'R18',
@@ -175,10 +209,10 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     ratings = {tag_names[i]: float(preds[i]) for i in state['rating_idx']}
     rating = max(ratings, key=ratings.get) if ratings else None
 
-    general = sorted(
+    general_full = sorted(
         ((tag_names[i], float(preds[i])) for i in state['general_idx'] if preds[i] > general_threshold),
         key=lambda x: -x[1],
-    )[:general_limit]
+    )
     characters = sorted(
         ((tag_names[i], float(preds[i])) for i in state['character_idx'] if preds[i] > character_threshold),
         key=lambda x: -x[1],
@@ -186,8 +220,8 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
 
     return {
         'characters': [{'name': n, 'score': round(s, 4)} for n, s in characters],
-        'tags': [{'name': n, 'score': round(s, 4)} for n, s in general],
+        'tags': [{'name': n, 'score': round(s, 4)} for n, s in general_full[:general_limit]],
         'rating': rating,
         'rating_scores': {k: round(v, 4) for k, v in ratings.items()},
-        'situation_hint': RATING_TO_SITUATION_HINT.get(rating),
+        'situation_hint': _situation_hint(rating, (n for n, _ in general_full)),
     }

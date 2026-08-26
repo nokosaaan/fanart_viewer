@@ -9,6 +9,7 @@ import FetchQueueManager from './components/FetchQueueManager'
 import EditQueueManager from './components/EditQueueManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
+import { postSync, onSync } from './lib/crossWindowSync'
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
@@ -34,12 +35,32 @@ function AppMain({ role, onLogout }){
   const [fetchQueue, setFetchQueue] = useState([])
   const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
   const [editQueueOpen, setEditQueueOpen] = useState(false)
+  // Opens a queue manager as its own browser window (same origin, so
+  // cookies/localStorage — and thus auth — carry over automatically) instead
+  // of an overlay in this one, so the two can sit side by side. See
+  // StandaloneQueueWindow below and the panel=... check in App() for the
+  // other end of this.
+  function openStandaloneWindow(panel){
+    window.open(`?panel=${panel}`, `fv-${panel}`, 'width=1100,height=760')
+  }
   function enqueueFetchResult({ itemId, images }){
     setFetchQueue(prev => [...prev, { id: `${itemId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, itemId, images, fetchedAt: Date.now() }])
   }
   function removeFromFetchQueue(entryId){
     setFetchQueue(prev => prev.filter(e => e.id !== entryId))
   }
+  // fetchQueue only ever lives here (App.jsx) — it's ephemeral/in-memory,
+  // there's no server copy to independently re-fetch. A popped-out
+  // standalone FetchQueueManager window (see HeaderMenu below) has no props
+  // access to this state at all, so it mirrors it over BroadcastChannel:
+  // broadcast on every change, and honor "give me the current state" /
+  // "remove this entry" requests from that window.
+  useEffect(()=>{ postSync('fetchQueue:sync', fetchQueue) }, [fetchQueue])
+  useEffect(()=>{
+    const unsubRequest = onSync('fetchQueue:request', () => postSync('fetchQueue:sync', fetchQueue))
+    const unsubRemove = onSync('fetchQueue:remove', (entryId) => removeFromFetchQueue(entryId))
+    return () => { unsubRequest(); unsubRemove() }
+  }, [fetchQueue])
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
@@ -402,7 +423,9 @@ function AppMain({ role, onLogout }){
               { divider: true },
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
               { label: '取得キュー', onClick: () => setFetchQueueOpen(true), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
+              { label: '取得キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('fetchQueue') },
               { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
+              { label: '編集キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('editQueue') },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),
             ...(role !== 'none' ? [
@@ -482,7 +505,7 @@ function AppMain({ role, onLogout }){
           onEnqueueFetch={enqueueFetchResult}
         />
       )}
-      {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} />}
+      {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} currentPageItems={paginatedItems} />}
     </div>
   )
 }
@@ -524,5 +547,17 @@ export default function App() {
     const isAdminLogin = Boolean(ADMIN_PATH) && window.location.pathname === `/${ADMIN_PATH}`
     return <LoginScreen onLogin={handleLogin} isAdmin={isAdminLogin} />
   }
+
+  // Same-origin popped-out queue window (see openStandaloneWindow in
+  // AppMain) — cookies/localStorage are shared automatically, so auth above
+  // this point already applies unchanged; only the rendered content differs.
+  const standalonePanel = new URLSearchParams(window.location.search).get('panel')
+  if (standalonePanel === 'editQueue') {
+    return <EditQueueManager standalone onClose={() => window.close()} />
+  }
+  if (standalonePanel === 'fetchQueue') {
+    return <FetchQueueManager standalone queue={[]} onRemove={() => {}} onClose={() => window.close()} />
+  }
+
   return <AppMain role={role} onLogout={handleLogout} />
 }

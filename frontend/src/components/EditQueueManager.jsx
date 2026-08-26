@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ItemEditForm } from './EditFields'
+import { notify } from '../lib/crossWindowSync'
 
 const MISSING_FIELDS = [
   { key: 'titles', label: 'タイトル' },
@@ -8,12 +9,18 @@ const MISSING_FIELDS = [
   { key: 'situation', label: 'シチュエーション' },
 ]
 
+function isFieldMissing(it, field){
+  if (field === 'situation') return !it.situation
+  const v = it[field]
+  return !Array.isArray(v) || v.length === 0
+}
+
 function summarizeMissing(it){
   const missing = []
-  if (!Array.isArray(it.titles) || it.titles.length === 0) missing.push('タイトル')
-  if (!Array.isArray(it.characters) || it.characters.length === 0) missing.push('キャラ')
-  if (!Array.isArray(it.tags) || it.tags.length === 0) missing.push('タグ')
-  if (!it.situation) missing.push('状況')
+  if (isFieldMissing(it, 'titles')) missing.push('タイトル')
+  if (isFieldMissing(it, 'characters')) missing.push('キャラ')
+  if (isFieldMissing(it, 'tags')) missing.push('タグ')
+  if (isFieldMissing(it, 'situation')) missing.push('状況')
   return missing.join('・') || '—'
 }
 
@@ -21,8 +28,20 @@ function summarizeMissing(it){
 // EditFields one row at a time from the main list. Reuses the same edit
 // form (ItemEditForm) embedded in a right-hand detail pane; the left
 // sidebar is the queue of items still needing attention.
-export default function EditQueueManager({ onClose }){
+// `standalone`: rendered as a popped-out browser window (see HeaderMenu's
+// "別ウィンドウで開く" / StandaloneEditQueue in App.jsx) instead of an
+// overlay in the main window. Fills the viewport instead of floating as a
+// centered panel; onSaved broadcasts via BroadcastChannel (crossWindowSync)
+// so the main window's item list stays live-synced either way.
+// `currentPageItems`: the main list's currently-displayed page (App.jsx's
+// paginatedItems) — lets the "現在のページのみ対象" toggle below scope the
+// queue to just that, mirroring FetchQueueManager's page-scoped bulk-fetch
+// button. Not available in standalone mode (a popped-out window has no
+// access to the main window's pagination state), so the toggle is hidden
+// there.
+export default function EditQueueManager({ onClose, standalone = false, currentPageItems = null }){
   const [activeFields, setActiveFields] = useState(() => new Set(MISSING_FIELDS.map(f => f.key)))
+  const [currentPageOnly, setCurrentPageOnly] = useState(false)
   const [items, setItems] = useState([])
   const [count, setCount] = useState(0)
   const [nextUrl, setNextUrl] = useState(null)
@@ -89,8 +108,21 @@ export default function EditQueueManager({ onClose }){
   }, [])
 
   const load = useCallback(async () => {
-    setLoading(true)
     setSelectedId(null)
+
+    // Current-page mode: currentPageItems is already fully loaded data (no
+    // request needed), so just filter it client-side by the same
+    // missing-field criteria the server-side `incomplete` action uses.
+    if(currentPageOnly && currentPageItems){
+      const list = currentPageItems.filter(it => Array.from(activeFields).some(f => isFieldMissing(it, f)))
+      setItems(list)
+      setCount(list.length)
+      setNextUrl(null)
+      runSuggestFor(list)
+      return
+    }
+
+    setLoading(true)
     try{
       const missing = Array.from(activeFields).join(',') || MISSING_FIELDS.map(f=>f.key).join(',')
       const r = await fetch(`/api/items/incomplete/?missing=${encodeURIComponent(missing)}`)
@@ -106,7 +138,7 @@ export default function EditQueueManager({ onClose }){
     }finally{
       setLoading(false)
     }
-  }, [activeFields, runSuggestFor])
+  }, [activeFields, runSuggestFor, currentPageOnly, currentPageItems])
 
   useEffect(()=>{ load() }, [load])
 
@@ -151,15 +183,14 @@ export default function EditQueueManager({ onClose }){
 
   const selected = items.find(it => it.id === selectedId) || null
 
-  return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
-      <div className="cgm-panel" style={{width:900}} onClick={e=>e.stopPropagation()}>
-        <div className="cgm-panel-header">
-          <strong>編集キュー — 未設定アイテム ({count}件)</strong>
-          <button className="cgm-panel-close" onClick={onClose}>✕</button>
-        </div>
+  const content = (
+    <>
+      <div className="cgm-panel-header">
+        <strong>編集キュー — 未設定アイテム ({count}件)</strong>
+        <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+      </div>
 
-        <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:14}}>
+      <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:14}}>
           <span style={{fontSize:12, color:'#6b7280'}}>未設定とみなす項目:</span>
           {MISSING_FIELDS.map(f => (
             <label key={f.key} style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
@@ -167,6 +198,12 @@ export default function EditQueueManager({ onClose }){
               {f.label}
             </label>
           ))}
+          {!standalone && currentPageItems && (
+            <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer', marginLeft:'auto'}}>
+              <input type="checkbox" checked={currentPageOnly} onChange={()=>setCurrentPageOnly(v=>!v)} />
+              現在のページのみ対象
+            </label>
+          )}
         </div>
 
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
@@ -242,7 +279,7 @@ export default function EditQueueManager({ onClose }){
                   initialSuggestion={suggestions[selected.id] || null}
                   onClose={()=>selectNext(selected.id)}
                   onSaved={(newItem)=>{
-                    try{ window.dispatchEvent(new CustomEvent('item-updated', { detail: { id: selected.id, item: newItem } })) }catch(_){}
+                    notify('item-updated', { id: selected.id, item: newItem })
                     selectNext(selected.id)
                   }}
                 />
@@ -250,7 +287,16 @@ export default function EditQueueManager({ onClose }){
             )}
           </div>
         </div>
-      </div>
+    </>
+  )
+
+  if(standalone){
+    return <div className="cgm-panel" style={{width:'100%', height:'100vh', maxHeight:'100vh', borderRadius:0}}>{content}</div>
+  }
+
+  return (
+    <div className="cgm-panel-backdrop" onClick={onClose}>
+      <div className="cgm-panel" style={{width:900}} onClick={e=>e.stopPropagation()}>{content}</div>
     </div>
   )
 }
