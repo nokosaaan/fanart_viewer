@@ -326,18 +326,20 @@ export default function CharacterGroupManager({ onClose }) {
           <div className="cgm-move-overlay" onClick={() => setMoveState(null)}>
             <div className="cgm-move-popup" onClick={e => e.stopPropagation()}>
               <div className="cgm-move-title">「{moveState.char}」を移動</div>
-              {sortedGroups.filter(g => g.id !== moveState.fromGroupId).map(g => (
-                <button key={g.id} className="cgm-move-option"
-                  onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, g.id)}>
-                  {g.name}
-                </button>
-              ))}
-              {moveState.fromGroupId !== null && (
-                <button className="cgm-move-option cgm-move-ungrouped"
-                  onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, null)}>
-                  未分類に移動
-                </button>
-              )}
+              <div className="cgm-move-options">
+                {sortedGroups.filter(g => g.id !== moveState.fromGroupId).map(g => (
+                  <button key={g.id} className="cgm-move-option"
+                    onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, g.id)}>
+                    {g.name}
+                  </button>
+                ))}
+                {moveState.fromGroupId !== null && (
+                  <button className="cgm-move-option cgm-move-ungrouped"
+                    onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, null)}>
+                    未分類に移動
+                  </button>
+                )}
+              </div>
               <button className="cgm-move-cancel" onClick={() => setMoveState(null)}>キャンセル</button>
             </div>
           </div>

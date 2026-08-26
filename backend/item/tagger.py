@@ -221,6 +221,12 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     return {
         'characters': [{'name': n, 'score': round(s, 4)} for n, s in characters],
         'tags': [{'name': n, 'score': round(s, 4)} for n, s in general_full[:general_limit]],
+        # Uncapped general tags (still threshold-filtered) — kept separate
+        # from `tags` above so callers can use the full set for DB
+        # similarity matching (more tags = a more specific, reliable match)
+        # without also cluttering what's shown to the user as suggested
+        # tags in the edit form, which is what general_limit is actually for.
+        'tags_full': [n for n, _ in general_full],
         'rating': rating,
         'rating_scores': {k: round(v, 4) for k, v in ratings.items()},
         'situation_hint': _situation_hint(rating, (n for n, _ in general_full)),

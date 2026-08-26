@@ -266,6 +266,74 @@ def _suggest_from_existing_data(item):
     }
 
 
+# Minimum number of overlapping tags between this item and a DB item before
+# that DB item counts as "similar enough" to factor into tag-based
+# suggestion — a couple of generic shared tags (e.g. "1girl", "solo") isn't
+# a meaningful match, only a genuinely overlapping, specific combination is.
+# Deliberately uses the UNCAPPED tag list (tagger.py's `tags_full`, not the
+# 5-tag `tags` shown to the user) — matching on more tags is a more
+# specific, more reliable signal, and this list is never shown as-is, so
+# there's no UI-clutter reason to cap it here the way general_limit does.
+_TAG_SIMILARITY_MIN_OVERLAP = 4
+_TAG_SIMILARITY_MIN_SAMPLES = 2
+_TAG_SIMILARITY_MIN_SHARE = 0.3
+
+
+def _suggest_from_similar_tags(tag_names, exclude_pk):
+    """Suggest titles/characters/situation from OTHER items whose tags
+    overlap substantially with `tag_names`. Complements
+    _suggest_from_existing_data's artist-based prior: an artist who draws
+    many different things won't get a useful suggestion from "their other
+    items", but items sharing a specific combination of visual tags
+    (a character's distinctive outfit/hairstyle/etc — not just generic tags
+    like "1girl") plausibly depict the same character/series regardless of
+    who drew them.
+    """
+    empty = {'titles': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
+    tag_set = {t for t in (tag_names or []) if t}
+    if len(tag_set) < _TAG_SIMILARITY_MIN_OVERLAP:
+        return empty
+
+    q = Q()
+    for t in tag_set:
+        q |= Q(tags__contains=[t])
+    candidates = Item.objects.filter(q).exclude(pk=exclude_pk).only('tags', 'titles', 'characters', 'situation')
+
+    siblings = [c for c in candidates if len(tag_set & set(c.tags or [])) >= _TAG_SIMILARITY_MIN_OVERLAP]
+    if len(siblings) < _TAG_SIMILARITY_MIN_SAMPLES:
+        return empty
+
+    title_counter, char_counter, situation_counter = Counter(), Counter(), Counter()
+    for sib in siblings:
+        title_counter.update(set(sib.titles or []))
+        char_counter.update(set(sib.characters or []))
+        if sib.situation:
+            situation_counter[sib.situation] += 1
+
+    min_count = max(2, round(len(siblings) * _TAG_SIMILARITY_MIN_SHARE))
+    suggested_titles = [t for t, n in title_counter.most_common(5) if n >= min_count]
+    suggested_characters = [c for c, n in char_counter.most_common(10) if n >= min_count]
+    top_situation = situation_counter.most_common(1)
+    suggested_situation = top_situation[0][0] if top_situation and top_situation[0][1] >= min_count else None
+
+    return {
+        'titles': suggested_titles,
+        'characters': suggested_characters,
+        'situation_hint': suggested_situation,
+        'sample_size': len(siblings),
+    }
+
+
+def _merge_unique(*lists):
+    seen, out = set(), []
+    for lst in lists:
+        for x in lst:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+    return out
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('-id')
@@ -1109,7 +1177,35 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         )
         tags = []
         situation_hint = db['situation_hint'] if (want_situation and db) else None
-        source = 'db' if (titles or characters) else 'none'
+        used_tag_similarity = False
+
+        def _merge_tag_similarity_result(sim):
+            """Folds a _suggest_from_similar_tags() result into
+            titles/characters/situation_hint (only for fields still wanted
+            and not already resolved by the artist-based db suggestion
+            above), and records whether it actually contributed anything.
+            """
+            nonlocal titles, characters, situation_hint, used_tag_similarity
+            if want_titles and sim['titles']:
+                titles = _merge_unique(titles, sim['titles'])
+                used_tag_similarity = True
+            if want_characters and not characters and sim['characters']:
+                characters = [{'name': c, 'score': None, 'matched': True, 'source': 'tag'} for c in sim['characters']]
+                used_tag_similarity = True
+            if want_situation and not situation_hint and sim['situation_hint']:
+                situation_hint = sim['situation_hint']
+                used_tag_similarity = True
+
+        # Tag-based similarity, attempt 1: with whatever tags this item
+        # already has (if any), before ever invoking the tagger — an item
+        # that already has tags but is missing title/characters gets this
+        # signal for free. Complements the artist-based prior above: it
+        # catches "different artist, same character" cases that "this
+        # artist's other work" can never see.
+        if not want_tags and (want_titles or (want_characters and not characters) or (want_situation and not situation_hint)):
+            _merge_tag_similarity_result(_suggest_from_similar_tags(item.tags or [], exclude_pk=item.pk))
+
+        source = 'db' if (titles or characters or used_tag_similarity) else 'none'
 
         needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
         if needs_tagger and HAVE_TAGGER:
@@ -1145,13 +1241,21 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
                         characters = matched_chars
                         if want_titles:
-                            for t in tagger_titles:
-                                if t not in titles:
-                                    titles.append(t)
+                            titles = _merge_unique(titles, tagger_titles)
                     if want_tags:
                         tags = tagger_result['tags']
                     if want_situation and not situation_hint:
                         situation_hint = tagger_result['situation_hint']
+
+                    # Tag-based similarity, attempt 2: now that this item has
+                    # freshly-inferred tags (uncapped — general_limit only
+                    # bounds what's shown as suggested `tags`, not what's used
+                    # here for matching), retry whatever's still unresolved.
+                    if (want_titles and not titles) or (want_characters and not characters) or (want_situation and not situation_hint):
+                        before = used_tag_similarity
+                        _merge_tag_similarity_result(_suggest_from_similar_tags(tagger_result['tags_full'], exclude_pk=item.pk))
+                        if used_tag_similarity and not before and source == 'tagger':
+                            source = 'db+tagger'
 
         return Response({
             'characters': characters,

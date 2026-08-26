@@ -226,9 +226,10 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .cgm-add-cancel{ background:none; border:none; color:#9ca3af; font-size:12px; cursor:pointer; text-align:left; padding:2px 8px }
 /* Move popup */
 .cgm-move-overlay{ position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.2) }
-.cgm-move-popup{ background:#fff; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:8px; min-width:180px; display:flex; flex-direction:column; gap:2px }
-.cgm-move-title{ font-size:11px; color:#6b7280; padding:2px 8px 6px; border-bottom:1px solid #f3f4f6; margin-bottom:2px }
-.cgm-move-option{ background:none; border:none; text-align:left; padding:5px 10px; border-radius:4px; cursor:pointer; font-size:13px }
+.cgm-move-popup{ background:#fff; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:8px; min-width:180px; max-height:70vh; display:flex; flex-direction:column; gap:2px }
+.cgm-move-title{ font-size:11px; color:#6b7280; padding:2px 8px 6px; border-bottom:1px solid #f3f4f6; margin-bottom:2px; flex-shrink:0 }
+.cgm-move-options{ flex:1 1 auto; overflow-y:auto; display:flex; flex-direction:column; gap:2px; min-height:0 }
+.cgm-move-option{ background:none; border:none; text-align:left; padding:5px 10px; border-radius:4px; cursor:pointer; font-size:13px; flex-shrink:0 }
 .cgm-move-option:hover{ background:#eff6ff }
 .cgm-move-ungrouped{ color:#6b7280 }
-.cgm-move-cancel{ background:none; border-top:1px solid #f3f4f6; margin-top:4px; padding:5px 10px; color:#9ca3af; font-size:12px; cursor:pointer; text-align:left }
+.cgm-move-cancel{ background:none; border-top:1px solid #f3f4f6; margin-top:4px; padding:5px 10px; color:#9ca3af; font-size:12px; cursor:pointer; text-align:left; flex-shrink:0 }
