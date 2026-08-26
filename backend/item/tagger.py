@@ -182,7 +182,7 @@ def _prepare_image(image_bytes, target_size):
     return np.expand_dims(arr, axis=0)
 
 
-def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=5, model_repo=None):
+def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=15, model_repo=None):
     """Run the tagger on a single image.
 
     Returns {'characters': [...], 'tags': [...], 'rating': str|None,

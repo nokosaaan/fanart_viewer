@@ -130,7 +130,10 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
                 )}
               </>
             ) : (
-              <div className="empty">—</div>
+              <div style={{display:'inline-flex', alignItems:'center', gap:4}}>
+                <span className="empty">—</span>
+                {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{padding:'6px'}} title="Open link"><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
+              </div>
             )}
             {showTitles && Array.isArray(titlesState) && (
               <div className="chip-dropdown">
