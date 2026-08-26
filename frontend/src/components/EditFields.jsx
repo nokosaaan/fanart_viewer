@@ -118,6 +118,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // with no other tagged items yet) is a real, valid outcome and must not
   // be shown the same way as "suggestion applied" (see applySuggestion).
   const [suggestionResult, setSuggestionResult] = useState(null)
+  // Low-confidence title options — offered as one-click picks, never
+  // auto-applied like the rest of applySuggestion (see suggest_tags_view's
+  // title_candidates: returned only when nothing was confident enough to
+  // suggest outright, so guessing wrong here is a real risk worth avoiding).
+  const [titleCandidates, setTitleCandidates] = useState([])
 
   useEffect(()=>{
     fetch('/api/items/all_titles/')
@@ -168,7 +173,14 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       return j.situation_hint
     })
 
+    setTitleCandidates(j.title_candidates || [])
+
     setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null })
+  }
+
+  function acceptTitleCandidate(t){
+    setTitleList(prev => prev.includes(t) ? prev : [...prev, t])
+    setTitleCandidates(prev => prev.filter(x => x !== t))
   }
 
   // If EditQueueManager already ran bulk suggestion for this item, apply the
@@ -269,6 +281,21 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         allOptions={allTitles} setAllOptions={setAllTitles}
         selectPlaceholder="タイトルを検索、または新規入力（必須）"
       />
+
+      {titleCandidates.length > 0 && (
+        <div style={{marginTop:-10, marginBottom:16, padding:'0 14px'}}>
+          <div style={{fontSize:11, color:'#f59e0b', marginBottom:6}}>
+            確信度は低いですが、候補です(クリックで追加):
+          </div>
+          <div style={{display:'flex', flexWrap:'wrap', gap:6}}>
+            {titleCandidates.map(t => (
+              <button key={t} className="btn" style={{fontSize:12, background:'#78350f', color:'#fef3c7'}} onClick={()=>acceptTitleCandidate(t)}>
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={SECTION.wrap}>
         <label style={SECTION.label}>Characters</label>

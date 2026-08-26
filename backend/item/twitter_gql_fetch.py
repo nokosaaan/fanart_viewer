@@ -123,6 +123,28 @@ def _extract_media_urls(tweet_obj: dict) -> list[str]:
     return urls
 
 
+def _extract_full_text(tweet_obj: dict) -> str:
+    """tweet_results.result から本文テキストを返す。
+
+    140字超のツイートは legacy.full_text が切り詰められ、本文全体は
+    note_tweet.note_tweet_results.result.text 側に入る（longform notetweets)。
+    ハッシュタグ判定に使うので、あれば note_tweet を優先する。
+    """
+    if "tweet" in tweet_obj:
+        tweet_obj = tweet_obj["tweet"]
+
+    note_text = (
+        ((tweet_obj.get("note_tweet") or {}).get("note_tweet_results") or {})
+        .get("result", {})
+        .get("text")
+    )
+    if note_text:
+        return note_text
+
+    legacy = tweet_obj.get("legacy") or {}
+    return legacy.get("full_text") or ""
+
+
 def _unwrap_tweet(tweet_obj: dict) -> dict:
     """TweetWithVisibilityResults 等のラッパーを剥がして tweet dict を返す。"""
     return tweet_obj.get("tweet", tweet_obj)
@@ -167,9 +189,12 @@ def _walk_for_media(obj, collected: list):
             _walk_for_media(item, collected)
 
 
-def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> list[str]:
+def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> tuple[list[str], str]:
     """
-    ツイートURLから画像/動画のURLリストを返す。
+    ツイートURLから (画像/動画のURLリスト, 本文テキスト) を返す。
+
+    本文テキストは主ツイート（スレッドの起点、tweet_id に一致するもの）のみ。
+    ハッシュタグ抽出等に使うので、見つからなければ空文字列。
 
     センシティブコンテンツも含む。
     pbs.twimg.com の URL は CDN なので認証なしにダウンロード可能。
@@ -231,11 +256,13 @@ def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> list[st
     all_results: list[dict] = []
     _collect_all_tweet_results(data, all_results)
 
-    # Find the main tweet to identify the author
+    # Find the main tweet to identify the author + capture its body text
     main_author_id: str | None = None
+    description = ""
     for r in all_results:
         if _get_rest_id(r) == tweet_id:
             main_author_id = _get_author_id(r)
+            description = _extract_full_text(r)
             break
 
     # Collect media from main tweet + same-author thread continuations only
@@ -249,12 +276,12 @@ def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> list[st
         _walk_for_media(data, media_urls)
 
     # deduplicate while preserving order
-    return list(dict.fromkeys(media_urls))
+    return list(dict.fromkeys(media_urls)), description
 
 
-def fetch_twitter_media(tweet_url: str) -> list[tuple[bytes, str]]:
+def fetch_twitter_media(tweet_url: str) -> tuple[list[tuple[bytes, str]], str]:
     """
-    ツイートURLから (画像バイト, MIMEタイプ) のリストを返す。
+    ツイートURLから ([(画像バイト, MIMEタイプ), ...], 本文テキスト) を返す。
 
     views.py から呼び出すメインエントリポイント。
     TWITTER_AUTH_TOKEN / TWITTER_CT0 環境変数を使う。
@@ -271,10 +298,10 @@ def fetch_twitter_media(tweet_url: str) -> list[tuple[bytes, str]]:
     if not ct0:
         raise RuntimeError("TWITTER_CT0 が設定されていません")
 
-    media_urls = fetch_tweet_media_urls(tweet_url, auth_token, ct0)
+    media_urls, description = fetch_tweet_media_urls(tweet_url, auth_token, ct0)
     if not media_urls:
         logger.warning("twitter_gql_fetch: No media URLs found for %s", tweet_url)
-        return []
+        return [], description
 
     dl_headers = {
         "User-Agent": (
@@ -299,7 +326,7 @@ def fetch_twitter_media(tweet_url: str) -> list[tuple[bytes, str]]:
         except requests.RequestException as e:
             logger.warning("twitter_gql_fetch: download failed %s: %s", url, e)
 
-    return results
+    return results, description
 
 
 def verify_credentials() -> dict:

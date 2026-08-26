@@ -11,6 +11,12 @@ class Item(models.Model):
     artist = models.CharField(max_length=255, blank=True)
     link = models.URLField(blank=True)
     tags = models.JSONField(null=True, blank=True)
+    # Raw post body/caption text from the source (Twitter/pixiv/poipiku),
+    # captured alongside the image when the fetcher supports it. Hashtags in
+    # here are the most reliable signal available for title/character
+    # suggestion (see item.views._extract_hashtags) — more reliable than
+    # any image-based inference, since they're the artist's own words.
+    description = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     preview_data = models.BinaryField(null=True, blank=True)
     preview_content_type = models.CharField(max_length=100, null=True, blank=True)

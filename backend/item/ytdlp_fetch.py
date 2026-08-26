@@ -35,10 +35,10 @@ def _build_cookies_file(auth_token: str, ct0: str | None = None) -> str:
     return path
 
 
-def fetch_twitter_media_ytdlp(url: str) -> list[tuple[bytes, str]]:
+def fetch_twitter_media_ytdlp(url: str) -> tuple[list[tuple[bytes, str]], str]:
     """Fetch media from a tweet URL using yt-dlp.
 
-    Returns a list of (image_bytes, mime_type) tuples.
+    Returns ([(image_bytes, mime_type), ...], description_text).
     Raises RuntimeError if yt-dlp is not available or fetch fails.
     """
     try:
@@ -69,7 +69,9 @@ def fetch_twitter_media_ytdlp(url: str) -> list[tuple[bytes, str]]:
             info = ydl.extract_info(url, download=False)
 
         if not info:
-            return []
+            return [], ''
+
+        description = info.get('description') or ''
 
         # Collect image URLs from the extracted info.
         # Tweets can have multiple photos; each appears as a separate format
@@ -138,4 +140,4 @@ def fetch_twitter_media_ytdlp(url: str) -> list[tuple[bytes, str]]:
         except Exception:
             pass
 
-    return results
+    return results, description

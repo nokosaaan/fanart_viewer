@@ -174,7 +174,7 @@ def _run_bookmark_fetch_job(item_id, target_url, data=None):
 
 
 def _normalize_char_name(name):
-    return re.sub(r'\s+', ' ', (name or '').strip().lower())
+    return re.sub(r'\s+', ' ', (name or '').strip().lower().replace('_', ' '))
 
 
 def _match_tagger_characters(candidates):
@@ -215,6 +215,43 @@ def _match_tagger_characters(candidates):
     return matched + unmatched, sorted(suggested_titles)
 
 
+def _match_hashtags(description):
+    """Direct match of hashtags from the source post's own text (see
+    Item.description) against the app's existing title/character
+    vocabulary. This is the single most reliable signal available when
+    present — the artist's own naming, not an inference — so it's tried
+    first, independently of (and before) any image analysis.
+
+    Same normalized-string-match limitation as _match_tagger_characters:
+    only catches hashtags that already spell a title/character the same
+    way something in this app's vocabulary does.
+    """
+    hashtags = _extract_hashtags(description)
+    if not hashtags:
+        return {'titles': [], 'characters': []}
+    normalized_hashtags = {_normalize_char_name(h) for h in hashtags}
+
+    title_by_norm = {}
+    for titles in Item.objects.exclude(titles=[]).values_list('titles', flat=True):
+        for name in (titles or []):
+            if name:
+                title_by_norm.setdefault(_normalize_char_name(name), name)
+
+    char_by_norm = {}
+    for group in CharacterGroup.objects.all():
+        for c in (group.characters or []):
+            char_by_norm.setdefault(_normalize_char_name(c), c)
+    for chars in Item.objects.exclude(characters=[]).values_list('characters', flat=True):
+        for c in (chars or []):
+            if c:
+                char_by_norm.setdefault(_normalize_char_name(c), c)
+
+    return {
+        'titles': sorted({title_by_norm[h] for h in normalized_hashtags if h in title_by_norm}),
+        'characters': sorted({char_by_norm[h] for h in normalized_hashtags if h in char_by_norm}),
+    }
+
+
 # An artist needs at least this many OTHER tagged items before their history
 # counts as a real pattern rather than noise from one or two data points.
 _ARTIST_HISTORY_MIN_SAMPLES = 2
@@ -234,7 +271,7 @@ def _suggest_from_existing_data(item):
     is only invoked as a fallback when this yields too little (see
     suggest_tags_view).
     """
-    empty = {'titles': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
+    empty = {'titles': [], 'title_candidates': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
     if not item.artist:
         return empty
 
@@ -254,73 +291,180 @@ def _suggest_from_existing_data(item):
     # sample sizes, where share*n rounds down to 1 otherwise)
     min_count = max(2, round(len(siblings) * _ARTIST_HISTORY_MIN_SHARE))
     suggested_titles = [t for t, n in title_counter.most_common(5) if n >= min_count]
+    # Low-confidence fallback: an artist who draws a handful of different
+    # things won't have any title clear the bar above — offer the top
+    # couple candidates anyway rather than nothing, for the user to pick
+    # from (see suggest_tags_view's title_candidates handling).
+    title_candidates = [t for t, _ in title_counter.most_common(3)] if not suggested_titles else []
     suggested_characters = [c for c, n in char_counter.most_common(10) if n >= min_count]
     top_situation = situation_counter.most_common(1)
     suggested_situation = top_situation[0][0] if top_situation and top_situation[0][1] >= min_count else None
 
     return {
         'titles': suggested_titles,
+        'title_candidates': title_candidates,
         'characters': suggested_characters,
         'situation_hint': suggested_situation,
         'sample_size': len(siblings),
     }
 
 
-# Minimum number of overlapping tags between this item and a DB item before
-# that DB item counts as "similar enough" to factor into tag-based
-# suggestion — a couple of generic shared tags (e.g. "1girl", "solo") isn't
-# a meaningful match, only a genuinely overlapping, specific combination is.
-# Deliberately uses the UNCAPPED tag list (tagger.py's `tags_full`, not the
-# 5-tag `tags` shown to the user) — matching on more tags is a more
-# specific, more reliable signal, and this list is never shown as-is, so
-# there's no UI-clutter reason to cap it here the way general_limit does.
-_TAG_SIMILARITY_MIN_OVERLAP = 4
+# --- Weighted tag similarity -------------------------------------------
+#
+# Not every shared tag is equally good evidence of "same character". Eye
+# color / hair color / worn accessories tend to stay consistent for a given
+# character even across wildly different scenes, poses, and outfits-of-the-
+# day — so they're weighted well above generic composition tags like
+# "1girl"/"solo"/"outdoors". Hashtags pulled from the source post's own text
+# (see Item.description) are weighted highest of all: they're the artist's
+# own words, not an inference, and often directly name the character/work.
+
+TAG_WEIGHT_HASHTAG = 5
+TAG_WEIGHT_FEATURE = 3
+TAG_WEIGHT_GENERIC = 1
+
+_COLOR_WORDS = {
+    'black', 'white', 'red', 'blue', 'green', 'yellow', 'pink', 'purple',
+    'brown', 'orange', 'grey', 'gray', 'silver', 'blonde', 'blond', 'aqua',
+    'violet', 'multicolored', 'platinum',
+}
+
+# Best-effort keyword list, not an exhaustive taxonomy — a tag containing
+# any of these is treated as a worn accessory for weighting purposes.
+_ACCESSORY_KEYWORDS = (
+    'hair ornament', 'hairclip', 'hair clip', 'ribbon', 'necklace', 'earring',
+    'glasses', 'eyewear', 'hat', 'headwear', 'hairband', 'hair band', 'choker',
+    'bracelet', 'hair bow', 'brooch', 'hairpin', 'hair pin', 'jewelry',
+    'accessory', 'collar', 'gloves', 'tiara', 'crown', 'headphones', 'mask',
+    'earmuffs', 'hairpiece',
+)
+
+_HASHTAG_RE = re.compile(r'#(\w+)', re.UNICODE)
+
+
+def _extract_hashtags(description):
+    """Hashtags from the source post's own text — see Item.description."""
+    if not description:
+        return set()
+    return {m.lower() for m in _HASHTAG_RE.findall(description) if m}
+
+
+def _tag_weight(tag):
+    words = tag.split()
+    if len(words) >= 2 and words[0] in _COLOR_WORDS and words[-1] in ('eyes', 'hair'):
+        return TAG_WEIGHT_FEATURE
+    if any(kw in tag for kw in _ACCESSORY_KEYWORDS):
+        return TAG_WEIGHT_FEATURE
+    return TAG_WEIGHT_GENERIC
+
+
+def _weighted_tag_signature(tags, description):
+    """{tag_or_hashtag: weight} for one item, for scoring similarity
+    against another item's signature."""
+    sig = {}
+    for t in (tags or []):
+        if t:
+            sig[t] = max(sig.get(t, 0), _tag_weight(t))
+    for h in _extract_hashtags(description):
+        sig[h] = max(sig.get(h, 0), TAG_WEIGHT_HASHTAG)
+    return sig
+
+
+# Minimum weighted overlap score before a DB item counts as "similar
+# enough" to factor into tag-based suggestion at all — a couple of generic
+# shared tags (e.g. "1girl", "solo", each worth 1 point) isn't a meaningful
+# match, only a genuinely overlapping, specific combination is. Deliberately
+# scored from the UNCAPPED tag list (tagger.py's `tags_full`, not the
+# display-only `tags`) — more tags is a more specific, more reliable
+# signal, and this list is never shown to the user as-is.
+_TAG_SIMILARITY_MIN_SCORE = 6
 _TAG_SIMILARITY_MIN_SAMPLES = 2
 _TAG_SIMILARITY_MIN_SHARE = 0.3
+# Characters need their own, stricter bar: a single shared high-priority
+# attribute (say, just hair color) isn't enough to call it the same
+# character — that's genuinely the "keeping X unique" ask this app cares
+# about (avoid seeding wrong-but-plausible character guesses).
+_CHARACTER_MIN_FEATURE_MATCHES = 2
 
 
-def _suggest_from_similar_tags(tag_names, exclude_pk):
-    """Suggest titles/characters/situation from OTHER items whose tags
-    overlap substantially with `tag_names`. Complements
+def _suggest_from_similar_tags(tag_names, description, exclude_pk):
+    """Suggest titles/characters/situation from OTHER items whose (weighted)
+    tags overlap substantially with this item's. Complements
     _suggest_from_existing_data's artist-based prior: an artist who draws
     many different things won't get a useful suggestion from "their other
     items", but items sharing a specific combination of visual tags
-    (a character's distinctive outfit/hairstyle/etc — not just generic tags
-    like "1girl") plausibly depict the same character/series regardless of
-    who drew them.
+    plausibly depict the same character/series regardless of who drew them.
+
+    Returns titles/title_candidates split: `titles` only holds candidates
+    that cleared the normal confidence bar; when NONE do but there was
+    still some signal, `title_candidates` holds a short, unranked-confidence
+    list instead of nothing — better to let the user pick from a couple of
+    plausible options than silently give up.
     """
-    empty = {'titles': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
-    tag_set = {t for t in (tag_names or []) if t}
-    if len(tag_set) < _TAG_SIMILARITY_MIN_OVERLAP:
+    empty = {'titles': [], 'title_candidates': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
+    query_sig = _weighted_tag_signature(tag_names, description)
+    plain_tags = [t for t in (tag_names or []) if t]
+    if not plain_tags or not query_sig:
         return empty
 
     q = Q()
-    for t in tag_set:
+    for t in plain_tags:
         q |= Q(tags__contains=[t])
-    candidates = Item.objects.filter(q).exclude(pk=exclude_pk).only('tags', 'titles', 'characters', 'situation')
+    candidates = Item.objects.filter(q).exclude(pk=exclude_pk).only('tags', 'description', 'titles', 'characters', 'situation')
 
-    siblings = [c for c in candidates if len(tag_set & set(c.tags or [])) >= _TAG_SIMILARITY_MIN_OVERLAP]
-    if len(siblings) < _TAG_SIMILARITY_MIN_SAMPLES:
+    # (score, feature_match_count, item) for every candidate that clears the
+    # overlap-score bar. feature_match_count only counts tags that are
+    # high-priority (feature/hashtag, weight >= TAG_WEIGHT_FEATURE) on BOTH
+    # sides — a hashtag on our side matching a merely-generic tag on theirs
+    # doesn't count as a "feature match", only a mutually-specific one does.
+    scored = []
+    for c in candidates:
+        sib_sig = _weighted_tag_signature(c.tags, c.description)
+        shared = query_sig.keys() & sib_sig.keys()
+        if not shared:
+            continue
+        score = sum(min(query_sig[t], sib_sig[t]) for t in shared)
+        if score < _TAG_SIMILARITY_MIN_SCORE:
+            continue
+        feature_matches = sum(
+            1 for t in shared
+            if query_sig[t] >= TAG_WEIGHT_FEATURE and sib_sig[t] >= TAG_WEIGHT_FEATURE
+        )
+        scored.append((score, feature_matches, c))
+
+    if len(scored) < _TAG_SIMILARITY_MIN_SAMPLES:
         return empty
 
-    title_counter, char_counter, situation_counter = Counter(), Counter(), Counter()
-    for sib in siblings:
+    title_counter, situation_counter = Counter(), Counter()
+    for _score, _fm, sib in scored:
         title_counter.update(set(sib.titles or []))
-        char_counter.update(set(sib.characters or []))
         if sib.situation:
             situation_counter[sib.situation] += 1
 
-    min_count = max(2, round(len(siblings) * _TAG_SIMILARITY_MIN_SHARE))
-    suggested_titles = [t for t, n in title_counter.most_common(5) if n >= min_count]
-    suggested_characters = [c for c, n in char_counter.most_common(10) if n >= min_count]
+    # Characters only come from the subset with enough independent
+    # high-priority attribute matches — see _CHARACTER_MIN_FEATURE_MATCHES.
+    char_eligible = [sib for _score, fm, sib in scored if fm >= _CHARACTER_MIN_FEATURE_MATCHES]
+    char_counter = Counter()
+    for sib in char_eligible:
+        char_counter.update(set(sib.characters or []))
+
+    n = len(scored)
+    min_count = max(2, round(n * _TAG_SIMILARITY_MIN_SHARE))
+    suggested_titles = [t for t, cnt in title_counter.most_common(5) if cnt >= min_count]
+    title_candidates = [t for t, _ in title_counter.most_common(3)] if not suggested_titles else []
+
+    char_min_count = max(2, round(len(char_eligible) * _TAG_SIMILARITY_MIN_SHARE))
+    suggested_characters = [c for c, cnt in char_counter.most_common(10) if cnt >= char_min_count] if char_eligible else []
+
     top_situation = situation_counter.most_common(1)
     suggested_situation = top_situation[0][0] if top_situation and top_situation[0][1] >= min_count else None
 
     return {
         'titles': suggested_titles,
+        'title_candidates': title_candidates,
         'characters': suggested_characters,
         'situation_hint': suggested_situation,
-        'sample_size': len(siblings),
+        'sample_size': n,
     }
 
 
@@ -419,6 +563,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Track which method produced the candidates for debugging/UI
         used_method = None
+        # Post body text captured alongside media, when the fetcher supports
+        # it (currently: twitter_gql, yt-dlp) — saved onto item.description.
+        # Hashtags in here are the most reliable signal for title/character
+        # suggestion (see _match_hashtags), more reliable than image inference
+        # since they're the artist's own words.
+        fetched_description = ''
 
         # If the target URL itself points to an image, try that first
         body, ctype = _internal_fetch(target_url, min_size=MIN_IMAGE_FETCH_BYTES)
@@ -567,11 +717,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             if not candidates and HAVE_TWITTER_GQL and os.environ.get('TWITTER_AUTH_TOKEN'):
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
-                        gql_results = fetch_twitter_media(target_url)
+                        gql_results, gql_description = fetch_twitter_media(target_url)
                         for (img_bytes, mime) in gql_results:
                             if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
                                 candidates.append((target_url, img_bytes, mime))
                                 used_method = 'twitter_gql'
+                        if gql_description and not fetched_description:
+                            fetched_description = gql_description
                     except TwitterAuthError as e:
                         logging.warning('Twitter GQL auth error for %s: %s', target_url, e)
                     except Exception:
@@ -581,11 +733,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             if not candidates and HAVE_YTDLP and os.environ.get('TWITTER_AUTH_TOKEN'):
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
-                        ytdlp_results = fetch_twitter_media_ytdlp(target_url)
+                        ytdlp_results, ytdlp_description = fetch_twitter_media_ytdlp(target_url)
                         for (img_bytes, mime) in ytdlp_results:
                             if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
                                 candidates.append((target_url, img_bytes, mime))
                                 used_method = 'ytdlp'
+                        if ytdlp_description and not fetched_description:
+                            fetched_description = ytdlp_description
                     except Exception:
                         logging.exception('yt-dlp fetch failed for %s', target_url)
 
@@ -783,6 +937,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not candidates:
             return Response({'detail': 'No image candidates found or failed to fetch', 'hints': hints}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+        # Save captured post text onto the item (never overwrite a description
+        # the user already has, e.g. from a manual edit or an earlier fetch).
+        if fetched_description and not item.description:
+            item.description = fetched_description
+            item.save(update_fields=['description'])
+
         # If Playwright was explicitly requested, enforce a global minimum
         # Enforce the minimum image size across all scraping methods so
         # small icons/thumbnails are never returned to the client.
@@ -820,6 +980,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             resp = {'preview_only': True, 'images': images}
             if used_method:
                 resp['method'] = used_method
+            if fetched_description:
+                resp['description'] = fetched_description
             # If API debugging is enabled, include the raw API JSON (if available)
             # include API debug output if requested either via env var or per-request
             if os.environ.get('TW_API_DEBUG') or debug_requested:
@@ -1168,44 +1330,78 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         want_tags = not (item.tags or [])
         want_situation = not item.situation
 
-        db = _suggest_from_existing_data(item) if (want_titles or want_characters or want_situation) else None
+        titles, characters, tags, situation_hint = [], [], [], None
+        title_candidates = []  # low-confidence fallback — see _suggest_from_similar_tags's docstring
+        source = 'none'
 
-        titles = list(db['titles']) if (want_titles and db) else []
-        characters = (
-            [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
-            if (want_characters and db) else []
-        )
-        tags = []
-        situation_hint = db['situation_hint'] if (want_situation and db) else None
-        used_tag_similarity = False
+        def _remaining():
+            return (want_titles and not titles) or (want_characters and not characters) or (want_situation and not situation_hint)
+
+        # Priority 1: hashtags straight from the source post's own text
+        # (Item.description) — the artist's own words, not an inference.
+        # Tried before anything else for exactly that reason. Counts as
+        # 'db' in the `source` field returned below (same bucket as the
+        # other no-image-analysis DB lookups — the frontend only
+        # distinguishes "used the image model" from "didn't").
+        if want_titles or want_characters:
+            hashtag_hits = _match_hashtags(item.description)
+            if want_titles and hashtag_hits['titles']:
+                titles = _merge_unique(titles, hashtag_hits['titles'])
+                source = 'db'
+            if want_characters and hashtag_hits['characters']:
+                characters = [{'name': c, 'score': None, 'matched': True, 'source': 'hashtag'} for c in hashtag_hits['characters']]
+                source = 'db'
+
+        # Priority 2: this item's artist's OTHER already-tagged items — a
+        # pure DB lookup, near-instant, no image analysis (most artists
+        # repeatedly draw a small set of series/characters). Skipped
+        # entirely if hashtags above already resolved everything wanted.
+        db = _suggest_from_existing_data(item) if _remaining() else None
+        if db:
+            if want_titles and not titles:
+                titles = list(db['titles'])
+                title_candidates = _merge_unique(title_candidates, db['title_candidates'])
+            if want_characters and not characters and db['characters']:
+                characters = [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
+            if want_situation and not situation_hint:
+                situation_hint = db['situation_hint']
+            if source == 'none' and (titles or characters):
+                source = 'db'
 
         def _merge_tag_similarity_result(sim):
             """Folds a _suggest_from_similar_tags() result into
-            titles/characters/situation_hint (only for fields still wanted
-            and not already resolved by the artist-based db suggestion
-            above), and records whether it actually contributed anything.
+            titles/characters/situation_hint/title_candidates (only for
+            fields still wanted and not already resolved above), and
+            records whether it actually contributed anything.
             """
-            nonlocal titles, characters, situation_hint, used_tag_similarity
-            if want_titles and sim['titles']:
-                titles = _merge_unique(titles, sim['titles'])
-                used_tag_similarity = True
+            nonlocal titles, characters, situation_hint, title_candidates, source
+            contributed = False
+            if want_titles:
+                if sim['titles']:
+                    titles = _merge_unique(titles, sim['titles'])
+                    contributed = True
+                elif not titles:
+                    title_candidates = _merge_unique(title_candidates, sim['title_candidates'])
             if want_characters and not characters and sim['characters']:
                 characters = [{'name': c, 'score': None, 'matched': True, 'source': 'tag'} for c in sim['characters']]
-                used_tag_similarity = True
+                contributed = True
             if want_situation and not situation_hint and sim['situation_hint']:
                 situation_hint = sim['situation_hint']
-                used_tag_similarity = True
+                contributed = True
+            if contributed:
+                if source == 'none':
+                    source = 'db'
+                elif source == 'tagger':
+                    source = 'db+tagger'
+                # already 'db' or 'db+tagger' — no change needed
 
-        # Tag-based similarity, attempt 1: with whatever tags this item
-        # already has (if any), before ever invoking the tagger — an item
-        # that already has tags but is missing title/characters gets this
-        # signal for free. Complements the artist-based prior above: it
-        # catches "different artist, same character" cases that "this
-        # artist's other work" can never see.
-        if not want_tags and (want_titles or (want_characters and not characters) or (want_situation and not situation_hint)):
-            _merge_tag_similarity_result(_suggest_from_similar_tags(item.tags or [], exclude_pk=item.pk))
-
-        source = 'db' if (titles or characters or used_tag_similarity) else 'none'
+        # Priority 3: tag-based similarity, attempt 1 — with whatever tags
+        # this item already has (if any), before ever invoking the tagger.
+        # Complements the artist-based prior above: it catches "different
+        # artist, same character" cases that "this artist's other work"
+        # can never see.
+        if not want_tags and _remaining():
+            _merge_tag_similarity_result(_suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk))
 
         needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
         if needs_tagger and HAVE_TAGGER:
@@ -1251,17 +1447,18 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     # freshly-inferred tags (uncapped — general_limit only
                     # bounds what's shown as suggested `tags`, not what's used
                     # here for matching), retry whatever's still unresolved.
-                    if (want_titles and not titles) or (want_characters and not characters) or (want_situation and not situation_hint):
-                        before = used_tag_similarity
-                        _merge_tag_similarity_result(_suggest_from_similar_tags(tagger_result['tags_full'], exclude_pk=item.pk))
-                        if used_tag_similarity and not before and source == 'tagger':
-                            source = 'db+tagger'
+                    if _remaining():
+                        _merge_tag_similarity_result(_suggest_from_similar_tags(tagger_result['tags_full'], item.description, exclude_pk=item.pk))
+
+        if titles:
+            title_candidates = []  # a confident answer supersedes the low-confidence list
 
         return Response({
             'characters': characters,
             'tags': tags,
             'situation_hint': situation_hint,
             'suggested_titles': titles,
+            'title_candidates': title_candidates,
             'source': source,
             'sample_size': db['sample_size'] if db else 0,
         })
