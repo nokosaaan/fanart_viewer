@@ -2,6 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ItemEditForm } from './EditFields'
 import { notify } from '../lib/crossWindowSync'
 
+function getCookie(name){
+  const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+  return match ? match.pop() : ''
+}
+
 const MISSING_FIELDS = [
   { key: 'titles', label: 'タイトル' },
   { key: 'characters', label: 'キャラクター' },
@@ -69,6 +74,10 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   // whatever the user was doing.
   const bulkSuggestingRef = useRef(false)
   const [bulkProgress, setBulkProgress] = useState(null) // {done, total, skipped}
+
+  // Bulk-save state for the "tags-only missing" fast path below.
+  const [bulkSaving, setBulkSaving] = useState(false)
+  const [bulkSaveProgress, setBulkSaveProgress] = useState(null) // {done, total, failed}
 
   // Sequentially requests a suggestion for every item in `targetItems` that
   // doesn't already have a cached one, caching results as it goes.
@@ -181,6 +190,73 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
     setCount(c => Math.max(0, c - 1))
   }
 
+  function removeItems(ids){
+    const idSet = new Set(ids)
+    setItems(prev => {
+      const rest = prev.filter(it => !idSet.has(it.id))
+      setSelectedId(sel => idSet.has(sel) ? null : sel)
+      return rest
+    })
+    setCount(c => Math.max(0, c - idSet.size))
+  }
+
+  // Items where titles/characters/situation are all already filled and tags
+  // is the ONLY thing missing, with a cached tag suggestion available — the
+  // common case where opening the full edit form one row at a time is pure
+  // overhead, since there's nothing left to review but "does this tag list
+  // look right". Checked against the item's actual field values (not just
+  // `activeFields`), since that reflects what's really true about the item
+  // regardless of which missing-field checkboxes happen to be ticked.
+  const tagsOnlyReady = items.filter(it => (
+    !isFieldMissing(it, 'titles') &&
+    !isFieldMissing(it, 'characters') &&
+    !isFieldMissing(it, 'situation') &&
+    isFieldMissing(it, 'tags') &&
+    (suggestions[it.id]?.tags?.length > 0)
+  ))
+
+  async function bulkSaveTagsOnly(){
+    if(bulkSaving || tagsOnlyReady.length === 0) return
+    const targets = tagsOnlyReady
+    if(!window.confirm(`タグ提案がある${targets.length}件に、提案されたタグをそのまま保存します。よろしいですか？`)) return
+
+    setBulkSaving(true)
+    let done = 0, failed = 0
+    setBulkSaveProgress({ done, total: targets.length, failed })
+    const savedIds = []
+    for(const it of targets){
+      try{
+        const payload = {
+          titles: it.titles || [],
+          characters: it.characters || [],
+          situation: it.situation || '',
+          tags: suggestions[it.id].tags.map(t => t.name),
+          artist: it.artist || '',
+        }
+        const resp = await fetch(`/api/items/${it.id}/update_fields/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+          credentials: 'same-origin',
+          body: JSON.stringify(payload)
+        })
+        const j = await resp.json().catch(()=>({}))
+        if(resp.ok){
+          savedIds.push(it.id)
+          notify('item-updated', { id: it.id, item: j.item })
+        } else {
+          failed++
+        }
+      }catch(e){
+        console.error('Bulk tag save failed for item', it.id, e)
+        failed++
+      }
+      done++
+      setBulkSaveProgress({ done, total: targets.length, failed })
+    }
+    if(savedIds.length > 0) removeItems(savedIds)
+    setBulkSaving(false)
+  }
+
   const selected = items.find(it => it.id === selectedId) || null
 
   const content = (
@@ -219,6 +295,22 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
             <span style={{fontSize:11, color:'#dc2626'}}>({bulkProgress.skipped}件失敗/スキップ)</span>
           )}
         </div>
+
+        {(tagsOnlyReady.length > 0 || bulkSaving) && (
+          <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
+            <span style={{fontSize:12, color: bulkSaving ? '#2563eb' : '#6b7280'}}>
+              {bulkSaving
+                ? `💾 タグを一括保存中… (${bulkSaveProgress ? bulkSaveProgress.done : 0}/${bulkSaveProgress ? bulkSaveProgress.total : 0})`
+                : `タグ以外は入力済み・タグ提案ありの項目が${tagsOnlyReady.length}件あります`}
+            </span>
+            <button className="btn" style={{fontSize:12}} onClick={bulkSaveTagsOnly} disabled={bulkSaving || tagsOnlyReady.length === 0}>
+              タグのみ不足の{tagsOnlyReady.length}件を一括保存
+            </button>
+            {!bulkSaving && bulkSaveProgress && bulkSaveProgress.failed > 0 && (
+              <span style={{fontSize:11, color:'#dc2626'}}>({bulkSaveProgress.failed}件失敗)</span>
+            )}
+          </div>
+        )}
 
         <div style={{display:'flex', minHeight:0, flex:'1 1 auto'}}>
           {/* Queue list (mailbox sidebar) */}
