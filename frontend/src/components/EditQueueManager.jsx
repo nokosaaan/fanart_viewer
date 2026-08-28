@@ -41,17 +41,19 @@ function summarizeMissing(it){
 // centered panel; onSaved broadcasts via BroadcastChannel (crossWindowSync)
 // so the main window's item list stays live-synced either way.
 // `currentPageItems`: the main list's currently-displayed page (App.jsx's
-// paginatedItems) — lets the "現在のページのみ対象" toggle below scope the
-// queue to just that, mirroring FetchQueueManager's page-scoped bulk-fetch
-// button. Not available in standalone mode (a popped-out window has no
-// access to the main window's pagination state), so the toggle is hidden
-// there.
+// paginatedItems). Whenever provided, the queue is filtered from it
+// client-side and strictly scoped to just that — mirroring
+// FetchQueueManager's page-scoped bulk-fetch button — instead of the
+// server's own independent `incomplete` pagination, which is what caused
+// items to get silently skipped (see `load` below). Only standalone mode (a
+// popped-out window with no access to the main window's pagination state)
+// falls back to querying the server directly, since it has no page to scope to.
 export default function EditQueueManager({ onClose, standalone = false, currentPageItems = null }){
   const [activeFields, setActiveFields] = useState(() => new Set(MISSING_FIELDS.map(f => f.key)))
-  const [currentPageOnly, setCurrentPageOnly] = useState(false)
   const [items, setItems] = useState([])
   const [count, setCount] = useState(0)
-  const [nextUrl, setNextUrl] = useState(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [nextBeforeId, setNextBeforeId] = useState(null)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [selectedId, setSelectedId] = useState(null)
@@ -123,12 +125,16 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
 
     // Current-page mode: currentPageItems is already fully loaded data (no
     // request needed), so just filter it client-side by the same
-    // missing-field criteria the server-side `incomplete` action uses.
-    if(currentPageOnly && currentPageItems){
+    // missing-field criteria the server-side `incomplete` action uses. This
+    // is the ONLY mode when currentPageItems is available (i.e. always,
+    // except in standalone) — there is no "load more" here since the queue
+    // is exactly whatever's on the current page, nothing else.
+    if(currentPageItems){
       const list = currentPageItems.filter(it => Array.from(activeFields).some(f => isFieldMissing(it, f)))
       setItems(list)
       setCount(list.length)
-      setNextUrl(null)
+      setHasMore(false)
+      setNextBeforeId(null)
       runSuggestFor(list)
       return
     }
@@ -138,32 +144,40 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
       const missing = Array.from(activeFields).join(',') || MISSING_FIELDS.map(f=>f.key).join(',')
       const r = await fetch(`/api/items/incomplete/?missing=${encodeURIComponent(missing)}`)
       const data = await r.json().catch(()=>({}))
-      const list = Array.isArray(data) ? data : (data.results || [])
+      const list = data.results || []
       setItems(list)
-      setCount(Array.isArray(data) ? list.length : (data.count ?? list.length))
-      setNextUrl(Array.isArray(data) ? null : (data.next || null))
+      setCount(data.count ?? list.length)
+      setHasMore(!!data.has_more)
+      setNextBeforeId(data.next_before_id ?? null)
       runSuggestFor(list) // fire and forget — don't block the loading spinner on this
     }catch(e){
       console.error('Failed to load incomplete items', e)
-      setItems([]); setCount(0); setNextUrl(null)
+      setItems([]); setCount(0); setHasMore(false); setNextBeforeId(null)
     }finally{
       setLoading(false)
     }
-  }, [activeFields, runSuggestFor, currentPageOnly, currentPageItems])
+  }, [activeFields, runSuggestFor, currentPageItems])
 
   useEffect(()=>{ load() }, [load])
 
+  // Standalone-only (see `load`). Uses an id cutoff (`before_id`), not a
+  // page number: as items get edited they stop matching the `incomplete`
+  // filter, which shrinks the server-side queryset out from under a
+  // page/offset cursor — the classic symptom being an entire batch silently
+  // skipped the moment you ask for "the next page" after finishing the
+  // current one. Cutting off by id isn't affected by rows disappearing
+  // above it, so nothing gets skipped (or repeated) as the queue empties.
   async function loadMore(){
-    if(!nextUrl || loadingMore) return
+    if(!hasMore || nextBeforeId == null || loadingMore) return
     setLoadingMore(true)
     try{
-      let fetchUrl = nextUrl
-      try{ const u = new URL(nextUrl); fetchUrl = u.pathname + (u.search || '') }catch(_){}
-      const r = await fetch(fetchUrl)
+      const missing = Array.from(activeFields).join(',') || MISSING_FIELDS.map(f=>f.key).join(',')
+      const r = await fetch(`/api/items/incomplete/?missing=${encodeURIComponent(missing)}&before_id=${nextBeforeId}`)
       const data = await r.json().catch(()=>({}))
-      const list = Array.isArray(data) ? data : (data.results || [])
+      const list = data.results || []
       setItems(prev => [...prev, ...list])
-      setNextUrl(Array.isArray(data) ? null : (data.next || null))
+      setHasMore(!!data.has_more)
+      setNextBeforeId(data.next_before_id ?? null)
       runSuggestFor(list)
     }catch(e){
       console.error('Failed to load more incomplete items', e)
@@ -276,12 +290,6 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
               {f.label}
             </label>
           ))}
-          {!standalone && currentPageItems && (
-            <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer', marginLeft:'auto'}}>
-              <input type="checkbox" checked={currentPageOnly} onChange={()=>setCurrentPageOnly(v=>!v)} />
-              現在のページのみ対象
-            </label>
-          )}
         </div>
 
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
@@ -353,7 +361,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
                 <div style={{fontSize:12, color:'#6b7280'}}>不足: {summarizeMissing(it)}</div>
               </div>
             ))}
-            {nextUrl && (
+            {hasMore && (
               <button className="btn" style={{width:'100%', margin:'8px 0', fontSize:12}} onClick={loadMore} disabled={loadingMore}>
                 {loadingMore ? '読み込み中…' : 'もっと読み込む'}
               </button>

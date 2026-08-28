@@ -1498,6 +1498,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         Query param `missing`: comma-separated subset of
         titles,characters,tags,situation,artist. Defaults to all five.
+
+        Query param `before_id`: only return items with id < before_id.
+        Deliberately NOT using DRF's page-number pagination here: as the
+        queue is worked through, items get edited and stop matching this
+        filter, which shrinks the underlying queryset out from under an
+        offset/page-number cursor — the classic symptom being an entire
+        batch silently skipped the moment you ask for "the next page" after
+        finishing the current one. A same-direction id cutoff isn't
+        affected by rows disappearing above it, so nothing gets skipped
+        (or repeated) as the queue is worked through.
         """
         valid_fields = ('titles', 'characters', 'tags', 'situation', 'artist')
         requested = (request.GET.get('missing') or ','.join(valid_fields)).split(',')
@@ -1512,12 +1522,27 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 q |= Q(**{f: []}) | Q(**{f'{f}__isnull': True})
 
         queryset = Item.objects.filter(q).order_by('-id')
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        total_count = queryset.count()
+
+        before_id = request.GET.get('before_id')
+        if before_id:
+            try:
+                queryset = queryset.filter(id__lt=int(before_id))
+            except (TypeError, ValueError):
+                pass
+
+        page_size = 50
+        batch = list(queryset[:page_size + 1])
+        has_more = len(batch) > page_size
+        batch = batch[:page_size]
+
+        serializer = self.get_serializer(batch, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': total_count,
+            'has_more': has_more,
+            'next_before_id': batch[-1].id if (has_more and batch) else None,
+        })
 
     @action(detail=True, methods=['post'], url_path='suggest_tags')
     def suggest_tags_view(self, request, pk=None):
