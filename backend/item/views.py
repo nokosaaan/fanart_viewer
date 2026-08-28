@@ -37,7 +37,7 @@ try:
 except Exception:
     HAVE_YTDLP = False
 try:
-    from .twitter_gql_fetch import fetch_twitter_media, TwitterAuthError
+    from .twitter_gql_fetch import fetch_twitter_media, fetch_account_retweets, TwitterAuthError
     HAVE_TWITTER_GQL = True
 except Exception:
     HAVE_TWITTER_GQL = False
@@ -171,6 +171,77 @@ def _run_bookmark_fetch_job(item_id, target_url, data=None):
         view.fetch_and_save_preview(request, pk=item_id)
     except Exception:
         logging.exception('Background bookmark fetch failed for item %s url=%s', item_id, target_url)
+
+
+def _run_account_retweets_job(screen_name, max_items):
+    """Scan `screen_name`'s timeline for native retweets and archive each one
+    not already in the DB, outside the request thread (this can take a
+    while: a handful of GraphQL page requests plus one CDN download per
+    image).
+
+    Unlike _run_bookmark_fetch_job, this does NOT re-invoke
+    fetch_and_save_preview per item — fetch_account_retweets already pulled
+    each retweet's media URLs and post text directly out of the UserTweets
+    timeline response, so a second per-tweet TweetDetail call (the thing
+    that actually burns through the rate limit one request per item) would
+    be pure waste. Only plain CDN GETs to pbs.twimg.com happen per item here,
+    which sit outside the GraphQL endpoint's separate rate-limit bucket.
+    """
+    try:
+        result = fetch_account_retweets(screen_name, max_items=max_items)
+    except Exception:
+        logging.exception('Account retweets fetch failed for screen_name=%s', screen_name)
+        return
+
+    created, skipped, failed = 0, 0, 0
+    for rt in result.get('retweets', []):
+        tweet_id = rt.get('tweet_id')
+        author = rt.get('screen_name') or result.get('screen_name') or ''
+        url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
+
+        if _find_item_by_url(url):
+            skipped += 1
+            continue
+
+        try:
+            item = Item.objects.create(
+                external_id=int(tweet_id),
+                source='twitter_rt',
+                situation='',
+                titles=[],
+                characters=[],
+                artist=author,
+                link=url,
+                tags=None,
+                description=rt.get('description') or '',
+            )
+        except Exception:
+            logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
+            failed += 1
+            continue
+
+        saved_any = False
+        for idx, media_url in enumerate(rt.get('media_urls') or []):
+            try:
+                body, ctype = _fetch_image_via_requests(media_url, min_size=MIN_IMAGE_FETCH_BYTES)
+                if body and ctype:
+                    PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
+                    saved_any = True
+            except Exception:
+                logging.exception('Failed to download retweet media %s for tweet %s', media_url, tweet_id)
+
+        if saved_any:
+            created += 1
+        else:
+            # Nothing downloadable (dead CDN link, transient error) — drop the
+            # empty Item rather than leave a preview-less row behind.
+            item.delete()
+            failed += 1
+
+    logging.info(
+        'Account retweets fetch for %s: created=%d skipped=%d failed=%d pages=%d',
+        screen_name, created, skipped, failed, result.get('pages_fetched', 0),
+    )
 
 
 def _normalize_char_name(name):
@@ -1116,6 +1187,38 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             },
             status=status.HTTP_202_ACCEPTED,
         )
+
+    @action(detail=False, methods=['post'], url_path='fetch_account_retweets')
+    def fetch_account_retweets_view(self, request):
+        """Scan a Twitter/X account's timeline for retweets and archive any
+        not already in the DB, as background job (see
+        _run_account_retweets_job). Requires TWITTER_AUTH_TOKEN/TWITTER_CT0.
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not os.environ.get('TWITTER_AUTH_TOKEN') or not os.environ.get('TWITTER_CT0'):
+            return Response({'detail': 'TWITTER_AUTH_TOKEN/TWITTER_CT0 not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        screen_name = (data.get('screen_name') or '').strip().lstrip('@')
+        if not screen_name:
+            return Response({'detail': 'screen_name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            max_items = int(data.get('max_items') or 30)
+        except (TypeError, ValueError):
+            max_items = 30
+
+        try:
+            threading.Thread(
+                target=_run_account_retweets_job,
+                args=(screen_name, max_items),
+                daemon=True,
+            ).start()
+        except Exception:
+            logging.exception('Failed to start background retweets fetch job for %s', screen_name)
+            return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'processing', 'screen_name': screen_name, 'max_items': max_items}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):

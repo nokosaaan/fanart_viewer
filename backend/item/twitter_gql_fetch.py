@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import requests
 
@@ -66,6 +67,84 @@ _TWEET_DETAIL_FEATURES = {
     "responsive_web_graphql_timeline_navigation_enabled": True,
     "responsive_web_enhance_cards_enabled": False,
 }
+
+# Query IDs for UserByScreenName (username -> user id) and UserTweets (a
+# user's reverse-chronological timeline, used here to scan for retweets —
+# see fetch_account_retweets). Sourced from gallery-dl's twitter extractor
+# (github.com/mikf/gallery-dl, gallery_dl/extractor/twitter.py) and verified
+# live against the real endpoint (dummy-auth request reaches the app layer
+# and returns a normal "Could not authenticate you" error rather than a 404,
+# confirming the query ID itself is current).
+_USER_BY_SCREEN_NAME_QUERY_ID = "ck5KkZ8t5cOmoLssopN99Q"
+_USER_TWEETS_QUERY_ID = "E8Wq-_jFSaU7hxVcuOPR9g"
+
+_USER_BY_SCREEN_NAME_FEATURES = {
+    "hidden_profile_subscriptions_enabled": True,
+    "payments_enabled": False,
+    "rweb_xchat_enabled": False,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "rweb_tipjar_consumption_enabled": True,
+    "verified_phone_label_enabled": False,
+    "highlights_tweets_tab_ui_enabled": True,
+    "responsive_web_twitter_article_notes_tab_enabled": True,
+    "subscriptions_feature_can_gift_premium": True,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "subscriptions_verification_info_is_identity_verified_enabled": True,
+    "subscriptions_verification_info_verified_since_enabled": True,
+}
+
+_USER_TWEETS_FEATURES = {
+    "rweb_video_screen_enabled": False,
+    "payments_enabled": False,
+    "rweb_xchat_enabled": False,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "rweb_tipjar_consumption_enabled": True,
+    "verified_phone_label_enabled": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
+    "premium_content_api_read_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+    "responsive_web_grok_analyze_post_followups_enabled": True,
+    "responsive_web_jetfuel_frame": True,
+    "responsive_web_grok_share_attachment_enabled": True,
+    "articles_preview_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+    "tweet_awards_web_tipping_enabled": False,
+    "responsive_web_grok_show_grok_translated_post": False,
+    "responsive_web_grok_analysis_button_from_backend": True,
+    "creator_subscriptions_quote_tweet_preview_enabled": False,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": True,
+    "responsive_web_grok_image_annotation_enabled": True,
+    "responsive_web_grok_imagine_annotation_enabled": True,
+    "responsive_web_grok_community_note_auto_translation_is_enabled": False,
+    "responsive_web_enhance_cards_enabled": False,
+}
+
+# Default/ceiling for fetch_account_retweets' max_items. The default sits
+# comfortably under the ~40-request threshold that was observed in practice
+# to trigger a several-minute rate-limit lockout on other endpoints (search,
+# etc.) on this account. Since each UserTweets page returns ~20-40 timeline
+# entries already carrying full media/text (no per-tweet TweetDetail call
+# needed — see fetch_account_retweets), collecting this many retweets costs
+# only a handful of GraphQL requests, not one per item.
+_ACCOUNT_RETWEETS_DEFAULT_MAX = 30
+_ACCOUNT_RETWEETS_HARD_CAP = 100
+# Safety valve against looping forever on an account whose timeline has very
+# few retweets relative to its total tweet count.
+_ACCOUNT_RETWEETS_MAX_PAGES = 20
 
 
 class TwitterAuthError(RuntimeError):
@@ -327,6 +406,258 @@ def fetch_twitter_media(tweet_url: str) -> tuple[list[tuple[bytes, str]], str]:
             logger.warning("twitter_gql_fetch: download failed %s: %s", url, e)
 
     return results, description
+
+
+def _get_with_ratelimit_backoff(url: str, params: dict, headers: dict, max_retries: int = 5):
+    """GET を投げ、Twitterのレート制限ヘッダーを尊重してリトライする。
+
+    ステータス429、または残り回数(`x-rate-limit-remaining`)がほぼ0の応答は
+    「そのまま叩き続けるとアカウントレベルでより長くロックされるサイン」
+    として扱い、`x-rate-limit-reset` (Unixタイム、無ければ60秒) まで待って
+    からリトライする。gallery-dl の同種の実装を参考にした挙動。
+    """
+    resp = None
+    for _ in range(max_retries):
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        remaining = resp.headers.get("x-rate-limit-remaining")
+        rate_limited = resp.status_code == 429
+        try:
+            if remaining is not None and int(remaining) <= 1:
+                rate_limited = True
+        except ValueError:
+            pass
+        if not rate_limited:
+            return resp
+        reset_at = resp.headers.get("x-rate-limit-reset")
+        try:
+            wait_s = max(1.0, float(reset_at) - time.time()) if reset_at else 60.0
+        except (TypeError, ValueError):
+            wait_s = 60.0
+        wait_s = min(wait_s, 300.0)
+        logger.warning("twitter_gql_fetch: rate limited, waiting %.0fs before retry", wait_s)
+        time.sleep(wait_s)
+    return resp
+
+
+def _resolve_user_id(screen_name: str, auth_token: str, ct0: str) -> str:
+    """screen_name(先頭@なし)からユーザーの rest_id を返す。"""
+    variables = json.dumps(
+        {"screen_name": screen_name, "withGrokTranslatedBio": False},
+        separators=(",", ":"),
+    )
+    features = json.dumps(_USER_BY_SCREEN_NAME_FEATURES, separators=(",", ":"))
+    field_toggles = json.dumps({"withAuxiliaryUserLabels": True}, separators=(",", ":"))
+
+    endpoint = f"https://twitter.com/i/api/graphql/{_USER_BY_SCREEN_NAME_QUERY_ID}/UserByScreenName"
+    headers = _build_headers(auth_token, ct0)
+
+    try:
+        resp = _get_with_ratelimit_backoff(
+            endpoint,
+            {"variables": variables, "features": features, "fieldToggles": field_toggles},
+            headers,
+        )
+    except requests.RequestException as e:
+        raise TwitterGQLError(f"Request failed: {e}") from e
+
+    if resp.status_code in (401, 403):
+        raise TwitterAuthError(
+            "auth_token または ct0 が期限切れです。"
+            "ブラウザの x.com Cookie から再取得してください。"
+        )
+    if not resp.ok:
+        raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
+
+    try:
+        data = resp.json()
+    except ValueError as e:
+        raise TwitterGQLError(f"Invalid JSON response: {e}") from e
+
+    errors = data.get("errors") or []
+    for err in errors:
+        code = err.get("code")
+        if code in (32, 64, 135, 326):
+            raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
+
+    user = ((data.get("data") or {}).get("user") or {}).get("result") or {}
+    rest_id = user.get("rest_id")
+    if not rest_id:
+        raise ValueError(f"User not found: {screen_name}")
+    return rest_id
+
+
+def _extract_retweet_original(tweet_obj: dict):
+    """tweet_results.result がネイティブRTなら、オリジナルツイートの
+    tweet dict(rest_id/legacy/coreを含む、アンラップ済み)を返す。RTで
+    なければ None。
+
+    引用RT(quote tweet)は legacy.quoted_status_result 側に入るため、ここ
+    ではヒットしない — 拾いたいのはコメントなしの純粋なRTのみ。
+    """
+    t = _unwrap_tweet(tweet_obj)
+    legacy = t.get("legacy") or {}
+    rt = legacy.get("retweeted_status_result")
+    if not rt:
+        return None
+    return _unwrap_tweet(rt.get("result") or {})
+
+
+def _get_screen_name(tweet_obj: dict) -> str | None:
+    """tweet result からツイート主の screen_name (@なし) を返す。"""
+    t = _unwrap_tweet(tweet_obj)
+    user = (((t.get("core") or {}).get("user_results") or {}).get("result") or {})
+    return (user.get("legacy") or {}).get("screen_name")
+
+
+def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
+    """指定アカウントのタイムラインを新しい順に走査し、ネイティブRTを
+    最大 max_items 件、画像URL・本文つきで集めて返す。
+
+    views.py から呼び出すエントリポイント。TWITTER_AUTH_TOKEN / TWITTER_CT0
+    環境変数を使う。UserTweets は1回の呼び出しで最大40件程度のタイムライン
+    項目を画像/本文つきで返すため、RT1件ごとに TweetDetail を叩く
+    (=bookmark_fetch 経由の取得) より GraphQL 呼び出し回数がずっと少なく
+    済む — 実運用で「一度に40件fetchするとレート制限で数分search等が
+    使えなくなる」ことが確認されているため、この呼び出し回数の少なさが
+    そのまま安全マージンになる。
+
+    戻り値: {
+        'screen_name': str, 'user_id': str, 'pages_fetched': int,
+        'retweets': [{'tweet_id': str, 'screen_name': str|None,
+                      'media_urls': [str, ...], 'description': str}, ...],
+    }
+    画像の無いRT(テキストのみの引用元など)はこのアプリでは保存しようが
+    ないため、その場でスキップする。
+
+    Raises:
+        TwitterAuthError: 認証エラー
+        TwitterGQLError: HTTPエラー等
+        RuntimeError: 環境変数未設定
+        ValueError: 指定アカウントが見つからない
+    """
+    auth_token = os.environ.get("TWITTER_AUTH_TOKEN", "").strip()
+    ct0 = os.environ.get("TWITTER_CT0", "").strip()
+    if not auth_token:
+        raise RuntimeError("TWITTER_AUTH_TOKEN が設定されていません")
+    if not ct0:
+        raise RuntimeError("TWITTER_CT0 が設定されていません")
+
+    if max_items is None:
+        max_items = _ACCOUNT_RETWEETS_DEFAULT_MAX
+    max_items = max(1, min(int(max_items), _ACCOUNT_RETWEETS_HARD_CAP))
+
+    screen_name = screen_name.lstrip("@")
+    user_id = _resolve_user_id(screen_name, auth_token, ct0)
+    headers = _build_headers(auth_token, ct0)
+    endpoint = f"https://twitter.com/i/api/graphql/{_USER_TWEETS_QUERY_ID}/UserTweets"
+
+    retweets: list[dict] = []
+    seen_ids: set[str] = set()
+    cursor: str | None = None
+    pages = 0
+
+    while len(retweets) < max_items and pages < _ACCOUNT_RETWEETS_MAX_PAGES:
+        variables = {
+            "userId": user_id,
+            "count": 40,
+            "includePromotedContent": False,
+            "withQuickPromoteEligibilityTweetFields": False,
+            "withVoice": True,
+        }
+        if cursor:
+            variables["cursor"] = cursor
+
+        params = {
+            "variables": json.dumps(variables, separators=(",", ":")),
+            "features": json.dumps(_USER_TWEETS_FEATURES, separators=(",", ":")),
+            "fieldToggles": json.dumps({"withArticlePlainText": False}, separators=(",", ":")),
+        }
+
+        try:
+            resp = _get_with_ratelimit_backoff(endpoint, params, headers)
+        except requests.RequestException as e:
+            raise TwitterGQLError(f"Request failed: {e}") from e
+
+        if resp.status_code in (401, 403):
+            raise TwitterAuthError(
+                "auth_token または ct0 が期限切れです。"
+                "ブラウザの x.com Cookie から再取得してください。"
+            )
+        if not resp.ok:
+            raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise TwitterGQLError(f"Invalid JSON response: {e}") from e
+
+        errors = data.get("errors") or []
+        for err in errors:
+            code = err.get("code")
+            if code in (32, 64, 135, 326):
+                raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
+
+        pages += 1
+
+        try:
+            instructions = data["data"]["user"]["result"]["timeline"]["timeline"]["instructions"]
+        except (KeyError, TypeError):
+            break
+
+        entries = []
+        for instr in instructions:
+            if instr.get("type") == "TimelineAddEntries":
+                entries.extend(instr.get("entries") or [])
+
+        next_cursor = None
+        for entry in entries:
+            entry_id = entry.get("entryId") or ""
+            if entry_id.startswith("cursor-bottom-"):
+                next_cursor = (entry.get("content") or {}).get("value")
+                continue
+            if not entry_id.startswith("tweet-"):
+                continue
+
+            content = entry.get("content") or {}
+            item_content = content.get("itemContent") or {}
+            tweet = (item_content.get("tweet_results") or {}).get("result")
+            if not tweet:
+                continue
+
+            original = _extract_retweet_original(tweet)
+            if not original:
+                continue  # native retweetでなければスキップ
+
+            tweet_id = _get_rest_id(original)
+            if not tweet_id or tweet_id in seen_ids:
+                continue
+            media_urls = _extract_media_urls(original)
+            if not media_urls:
+                continue  # テキストのみのRTは保存対象外
+
+            seen_ids.add(tweet_id)
+            retweets.append({
+                "tweet_id": tweet_id,
+                "screen_name": _get_screen_name(original),
+                "media_urls": media_urls,
+                "description": _extract_full_text(original),
+            })
+            if len(retweets) >= max_items:
+                break
+
+        if not next_cursor or next_cursor == cursor:
+            break
+        cursor = next_cursor
+
+        if len(retweets) < max_items and pages < _ACCOUNT_RETWEETS_MAX_PAGES:
+            time.sleep(1.5)  # ページ間の礼儀的なポーズ
+
+    return {
+        "screen_name": screen_name,
+        "user_id": user_id,
+        "retweets": retweets,
+        "pages_fetched": pages,
+    }
 
 
 def verify_credentials() -> dict:

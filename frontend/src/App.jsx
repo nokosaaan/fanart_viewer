@@ -7,6 +7,7 @@ import CharacterGroupManager from './components/CharacterGroupManager'
 import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import EditQueueManager from './components/EditQueueManager'
+import RetweetFetchManager from './components/RetweetFetchManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { postSync, onSync } from './lib/crossWindowSync'
@@ -35,6 +36,7 @@ function AppMain({ role, onLogout }){
   const [fetchQueue, setFetchQueue] = useState([])
   const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
   const [editQueueOpen, setEditQueueOpen] = useState(false)
+  const [retweetFetchOpen, setRetweetFetchOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
   // cookies/localStorage — and thus auth — carry over automatically) instead
   // of an overlay in this one, so the two can sit side by side. See
@@ -426,6 +428,7 @@ function AppMain({ role, onLogout }){
               { label: '取得キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('fetchQueue') },
               { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
               { label: '編集キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('editQueue') },
+              { label: 'アカウントのRTを取得', onClick: () => setRetweetFetchOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),
             ...(role !== 'none' ? [
@@ -506,6 +509,7 @@ function AppMain({ role, onLogout }){
         />
       )}
       {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} currentPageItems={paginatedItems} />}
+      {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} />}
     </div>
   )
 }
