@@ -83,6 +83,27 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   const [bulkSaving, setBulkSaving] = useState(false)
   const [bulkSaveProgress, setBulkSaveProgress] = useState(null) // {done, total, failed}
 
+  // 'local' never leaves this server (tagger inference + DB history/tag
+  // similarity only). 'external' additionally lets suggest_tags_view
+  // reverse-look-up an unrecognized tagger character's series against
+  // Danbooru's public API — the one network call in the whole pipeline —
+  // so it's an explicit, visible choice rather than something that just
+  // happens. Suggesting used to start automatically the moment the queue
+  // loaded; now it only ever runs when the user picks a mode and clicks
+  // the button below (see `runSuggestFor`'s callers).
+  const [suggestMode, setSuggestMode] = useState('local')
+  // Which tagger backend to request (see tagger.py's HAVE_TIMM/TIMM_MODEL_REPO
+  // and suggest_tags_view's `model` param). 'canary' is only ever offered
+  // once tagger_capabilities/ confirms it's actually installed on this
+  // server — not every deployment opts into the heavier torch dependency
+  // (see requirements-timm.txt).
+  const [suggestModel, setSuggestModel] = useState('default')
+  const [haveTimm, setHaveTimm] = useState(false)
+  useEffect(()=>{
+    fetch('/api/items/tagger_capabilities/')
+      .then(r=>r.json()).then(d=>setHaveTimm(!!d.have_timm)).catch(()=>{})
+  }, [])
+
   // Sequentially requests a suggestion for every item in `targetItems` that
   // doesn't already have a cached one, caching results as it goes.
   // Sequential (not parallel) on purpose: the DB-only case resolves near
@@ -90,7 +111,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   // is a real ~5s+ CPU-bound call, and hammering several concurrently would
   // just contend for the same CPU on the Pi4 deployment target for no speed
   // gain.
-  const runSuggestFor = useCallback(async (targetItems) => {
+  const runSuggestFor = useCallback(async (targetItems, mode, model) => {
     if(bulkSuggestingRef.current) return
     const targets = targetItems.filter(it => !suggestionsRef.current[it.id])
     if(targets.length === 0) return
@@ -101,7 +122,10 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
     setBulkProgress({ done, total: targets.length, skipped })
     for(const it of targets){
       try{
-        const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+        const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ external: mode === 'external', model: model === 'canary' ? 'timm' : 'default' }),
+        })
         const j = await resp.json().catch(()=>({}))
         if(resp.ok){
           suggestionsRef.current = { ...suggestionsRef.current, [it.id]: j }
@@ -135,7 +159,6 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
       setCount(list.length)
       setHasMore(false)
       setNextBeforeId(null)
-      runSuggestFor(list)
       return
     }
 
@@ -149,7 +172,6 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
       setCount(data.count ?? list.length)
       setHasMore(!!data.has_more)
       setNextBeforeId(data.next_before_id ?? null)
-      runSuggestFor(list) // fire and forget — don't block the loading spinner on this
     }catch(e){
       console.error('Failed to load incomplete items', e)
       setItems([]); setCount(0); setHasMore(false); setNextBeforeId(null)
@@ -178,7 +200,6 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
       setItems(prev => [...prev, ...list])
       setHasMore(!!data.has_more)
       setNextBeforeId(data.next_before_id ?? null)
-      runSuggestFor(list)
     }catch(e){
       console.error('Failed to load more incomplete items', e)
     }finally{
@@ -292,19 +313,42 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
           ))}
         </div>
 
-        <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
-          <span style={{fontSize:12, color: bulkSuggesting ? '#2563eb' : '#6b7280'}}>
+        <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10}}>
+          <span style={{fontSize:12, color:'#6b7280'}}>提案モード:</span>
+          <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
+            <input type="radio" checked={suggestMode==='local'} onChange={()=>setSuggestMode('local')} disabled={bulkSuggesting} />
+            ローカルのみ
+          </label>
+          <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
+            <input type="radio" checked={suggestMode==='external'} onChange={()=>setSuggestMode('external')} disabled={bulkSuggesting} />
+            Danbooru照合あり(外部通信・低速)
+          </label>
+          {haveTimm && (
+            <>
+              <span style={{fontSize:12, color:'#6b7280', marginLeft:8}}>画像解析モデル:</span>
+              <select value={suggestModel} onChange={e=>setSuggestModel(e.target.value)} disabled={bulkSuggesting} style={{fontSize:12}}>
+                <option value="default">標準(軽量・高速)</option>
+                <option value="canary">2026年学習の最新モデル(重い・初回は大きいダウンロード)</option>
+              </select>
+            </>
+          )}
+          <button className="btn" style={{fontSize:12}} onClick={()=>{
+              if(suggestModel==='canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
+              runSuggestFor(items, suggestMode, suggestModel)
+            }} disabled={bulkSuggesting || items.length===0 || items.every(it => suggestions[it.id])}>
             {bulkSuggesting
-              ? `🏷 自動提案を準備中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
-              : '🏷 各項目は開いた時点で提案(DBの傾向・必要なら画像解析)が反映済みの状態になります'}
-          </span>
-          <button className="btn" style={{fontSize:12}} onClick={()=>runSuggestFor(items)} disabled={bulkSuggesting || items.every(it => suggestions[it.id])}>
-            未処理分を再提案
+              ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
+              : '提案を開始'}
           </button>
           {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
             <span style={{fontSize:11, color:'#dc2626'}}>({bulkProgress.skipped}件失敗/スキップ)</span>
           )}
         </div>
+        {!bulkSuggesting && !bulkProgress && (
+          <div className="cgm-panel-search" style={{fontSize:11, color:'#6b7280'}}>
+            モードを選んで「提案を開始」を押すまで、AI提案(DBの傾向・必要なら画像解析)は実行されません。
+          </div>
+        )}
 
         {(tagsOnlyReady.length > 0 || bulkSaving) && (
           <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
@@ -345,13 +389,15 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
                     suggestions[it.id].source && suggestions[it.id].source !== 'none' ? (
                       <span
                         title={
-                          suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
+                          (suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
                           : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
-                          : '提案あり（既存データ＋画像解析）'
+                          : '提案あり（既存データ＋画像解析）')
+                          + (suggestions[it.id].source.includes('danbooru') ? '・Danbooru照合で新規タイトル推論' : '')
                         }
                         style={{marginLeft:6}}
                       >
                         {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
+                        {suggestions[it.id].source.includes('danbooru') && '🌐'}
                       </span>
                     ) : (
                       <span title="確認済み・提案なし" style={{marginLeft:6, color:'#d1d5db', fontWeight:400}}>·</span>

@@ -1,0 +1,19 @@
+# Optional, heavy dependencies for the second tagger backend (see
+# item/tagger.py's TIMM_MODEL_REPO / HAVE_TIMM) — a much larger, more
+# recently-trained model that recognizes characters the default ONNX
+# model's training cutoff missed, at the cost of these dependencies
+# (torch alone is several hundred MB) and slower CPU inference.
+#
+# NOT installed by default (see Dockerfile's INSTALL_TIMM_TAGGER build arg,
+# off by default) — this is an opt-in per deployment, since a
+# resource-constrained target (e.g. a Raspberry Pi) may not want it at all.
+# Without these installed, item.tagger.HAVE_TIMM is False and selecting
+# this model in the UI returns a clear "not available" error instead of
+# crashing.
+# CPU-only wheels (both x86_64 and aarch64/Pi4 are published here) — avoids
+# pulling torch's much larger CUDA build + nvidia-* packages, which this
+# app has no use for (no GPU in the deployment targets this is meant for).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+timm
+safetensors

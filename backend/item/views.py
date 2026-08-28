@@ -16,6 +16,7 @@ from urllib.parse import urljoin, urlparse
 
 from .models import Item, PreviewImage, CharacterGroup
 from .twitter_creds import has_credentials as _have_twitter_creds
+from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
 from .serializers import ItemSerializer, CharacterGroupSerializer
 from security.ssrf_guard import validate_url, SSRFError
 import logging
@@ -444,6 +445,23 @@ def _extract_hashtags(description):
     if not description:
         return set()
     return {m.lower() for m in _HASHTAG_RE.findall(description) if m}
+
+
+_OC_HASHTAGS = {'oc', 'original', 'originalcharacter', 'オリジナル', 'オリキャラ', '創作', '自創作', 'sozaku'}
+_OC_SUBSTRINGS = ('オリジナルキャラ', 'オリキャラ', '創作キャラ', '自創作')
+
+
+def _looks_like_oc(description):
+    """Whether the source post's own text signals an original (non-licensed)
+    character — the last-resort fallback in suggest_tags_view when nothing
+    (hashtag match, DB history, tag similarity, tagger+CharacterGroup match,
+    Danbooru reverse lookup) could name an existing title for this item.
+    """
+    if not description:
+        return False
+    if _extract_hashtags(description) & _OC_HASHTAGS:
+        return True
+    return any(s in description for s in _OC_SUBSTRINGS)
 
 
 def _tag_weight(tag):
@@ -1450,6 +1468,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'detail': 'Failed to delete item', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+    @action(detail=False, methods=['get'], url_path='tagger_capabilities')
+    def tagger_capabilities(self, request):
+        """Whether the optional 'timm' tagger backend is installed on this
+        server (see tagger.py's HAVE_TIMM) — lets the edit form/edit queue
+        only offer that model choice where it'll actually work, instead of
+        every deployment showing an option that 422s on Pi-class installs
+        that never opted into the heavier dependency (see requirements-timm.txt).
+        """
+        return Response({'have_timm': bool(HAVE_TAGGER and getattr(tagger, 'HAVE_TIMM', False))})
+
     @action(detail=False, methods=['get'], url_path='all_titles')
     def all_titles(self, request):
         """Return all unique titles used across all items, sorted alphabetically."""
@@ -1549,6 +1577,22 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         update_fields as normal.
         """
         item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        # Opt-in only: the Danbooru reverse-lookup below is the one part of
+        # this pipeline that makes an external network call. Everything else
+        # (tagger inference, DB history, tag similarity) stays fully local
+        # regardless of this flag.
+        external = bool(data.get('external'))
+        # Tagger backend, chosen per-request — see tagger.py's module
+        # docstring. 'timm' needs torch/timm installed (opt-in build, see
+        # requirements-timm.txt); reject up front with a clear message
+        # rather than silently falling through to "no suggestion found".
+        tagger_backend = 'timm' if data.get('model') == 'timm' else 'onnx'
+        if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
+            return Response(
+                {'detail': 'この最新モデル(timm)はサーバーにインストールされていません。管理者に環境構築を依頼してください。'},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
         want_titles = not (item.titles or [])
         want_characters = not (item.characters or [])
         want_tags = not (item.tags or [])
@@ -1638,7 +1682,6 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 image_bytes = None
 
             if image_bytes is not None:
-                data = request.data if isinstance(request.data, dict) else {}
                 try:
                     general_threshold = float(data.get('general_threshold', 0.35))
                     character_threshold = float(data.get('character_threshold', 0.85))
@@ -1650,6 +1693,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         image_bytes,
                         general_threshold=general_threshold,
                         character_threshold=character_threshold,
+                        backend=tagger_backend,
                     )
                 except Exception:
                     logging.exception('Tagger inference failed for item %s', item.id)
@@ -1662,6 +1706,25 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         characters = matched_chars
                         if want_titles:
                             titles = _merge_unique(titles, tagger_titles)
+
+                        # A character the tagger recognized but that matches
+                        # nothing in this app's own vocabulary yet — treated
+                        # as reliable (it's the model's own identification,
+                        # not a guess) and reverse-looked-up against Danbooru
+                        # to name a genuinely new title, rather than only
+                        # ever being able to suggest titles already seen
+                        # locally. Opt-in only (external flag) since this is
+                        # the one network call in the whole pipeline.
+                        if external and want_titles:
+                            for c in matched_chars:
+                                if titles:
+                                    break  # got an answer — no need to keep querying Danbooru
+                                if c.get('matched'):
+                                    continue
+                                looked_up = _resolve_title_from_character(c['name'])
+                                if looked_up:
+                                    titles = _merge_unique(titles, [looked_up])
+                                    source = f'{source}+danbooru' if 'danbooru' not in source else source
                     if want_tags:
                         tags = tagger_result['tags']
                     if want_situation and not situation_hint:
@@ -1673,6 +1736,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     # here for matching), retry whatever's still unresolved.
                     if _remaining():
                         _merge_tag_similarity_result(_suggest_from_similar_tags(tagger_result['tags_full'], item.description, exclude_pk=item.pk))
+
+        # Last resort: nothing above (hashtags, DB history, tag similarity,
+        # tagger+CharacterGroup match, Danbooru reverse lookup) could name an
+        # existing title for this item. Rather than leaving titles empty,
+        # check the source post's own text for an explicit "this is an
+        # original character" signal — purely local (no network call),
+        # independent of the `external` flag.
+        if want_titles and not titles and _looks_like_oc(item.description):
+            titles = ['OC']
 
         if titles:
             title_candidates = []  # a confident answer supersedes the low-confidence list

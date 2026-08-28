@@ -12,7 +12,13 @@ services:
       - db_data:/var/lib/postgresql/data
 
   web:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        # Opt-in per deployment (see backend/Dockerfile) — set
+        # INSTALL_TIMM_TAGGER=1 in .env before building to enable the
+        # heavier 'timm' tagger backend (needs torch).
+        INSTALL_TIMM_TAGGER: ${INSTALL_TIMM_TAGGER:-0}
     command: /app/entrypoint.sh
     volumes:
       - ./backend:/app

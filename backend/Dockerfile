@@ -41,6 +41,19 @@ COPY requirements.txt /app/requirements.txt
 RUN grep -iEv '^\s*playwright\s*$' /app/requirements.txt > /app/requirements.nodeps.txt \
 	&& pip install --no-cache-dir -r /app/requirements.nodeps.txt
 
+# Optional, heavy 'timm' tagger backend (see item/tagger.py's HAVE_TIMM /
+# TIMM_MODEL_REPO) — off by default since torch alone is several hundred MB
+# and the Pi4 deployment target may not want it at all. Enable per-deployment
+# by setting INSTALL_TIMM_TAGGER=1 as a build arg (see docker-compose's
+# `web` service `build.args`, driven by the .env var of the same name).
+# Without it, item.tagger.HAVE_TIMM is False and selecting that model in the
+# UI returns a clear "not available" error rather than crashing.
+ARG INSTALL_TIMM_TAGGER=0
+COPY requirements-timm.txt /app/requirements-timm.txt
+RUN if [ "$INSTALL_TIMM_TAGGER" = "1" ]; then \
+		pip install --no-cache-dir -r /app/requirements-timm.txt; \
+	fi
+
 # Ensure Playwright python package and browsers are installed in the image.
 # Installing here keeps the Python package and browser binaries in sync.
 RUN pip install --no-cache-dir playwright \

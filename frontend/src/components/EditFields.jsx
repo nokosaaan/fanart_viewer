@@ -16,6 +16,19 @@ const chipStyle = {
   padding:'5px 10px', fontSize:13, display:'inline-flex', alignItems:'center', gap:6,
 }
 
+// Renders text with #hashtags visually distinguished, so a quick glance
+// confirms whether _extract_full_text actually captured the hashtags a
+// post used (the signal _match_hashtags relies on) rather than requiring
+// the user to compare against the source tweet by eye.
+function HighlightedText({ text }){
+  const parts = String(text || '').split(/(#[^\s#]+)/g)
+  return parts.map((part, i) => (
+    part.startsWith('#')
+      ? <span key={i} style={{color:'#93c5fd', fontWeight:600}}>{part}</span>
+      : <React.Fragment key={i}>{part}</React.Fragment>
+  ))
+}
+
 function TagField({ label, hint, list, setList, allOptions, setAllOptions, selectPlaceholder }){
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
@@ -123,12 +136,23 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // title_candidates: returned only when nothing was confident enough to
   // suggest outright, so guessing wrong here is a real risk worth avoiding).
   const [titleCandidates, setTitleCandidates] = useState([])
+  // Off by default — the one network call in the suggestion pipeline
+  // (Danbooru reverse lookup for a tagger-recognized character that
+  // matches nothing in this app's own vocabulary yet) is opt-in.
+  const [suggestExternal, setSuggestExternal] = useState(false)
+  // Only offered once tagger_capabilities/ confirms the heavier 'timm'
+  // backend is actually installed on this server (see requirements-timm.txt
+  // — not every deployment opts into torch).
+  const [suggestModel, setSuggestModel] = useState('default')
+  const [haveTimm, setHaveTimm] = useState(false)
 
   useEffect(()=>{
     fetch('/api/items/all_titles/')
       .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setAllTitles(d) }).catch(()=>{})
     fetch('/api/items/all_characters/')
       .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setAllChars(d) }).catch(()=>{})
+    fetch('/api/items/tagger_capabilities/')
+      .then(r=>r.json()).then(d=>setHaveTimm(!!d.have_timm)).catch(()=>{})
   }, [])
 
   function parseList(str){
@@ -191,10 +215,14 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   }, [])
 
   async function runSuggest(){
+    if(suggestModel === 'canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
     setSuggesting(true)
     setSuggestError('')
     try{
-      const resp = await fetch(`/api/items/${item.id}/suggest_tags/`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+      const resp = await fetch(`/api/items/${item.id}/suggest_tags/`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ external: suggestExternal, model: suggestModel === 'canary' ? 'timm' : 'default' }),
+      })
       const j = await resp.json().catch(()=>({}))
       if(!resp.ok){ setSuggestError(j.detail || `提案の取得に失敗しました (${resp.status})`); return }
       applySuggestion(j)
@@ -247,10 +275,29 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <button className="btn" style={{padding:'4px 10px'}} onClick={onClose}>✕</button>
       </div>
 
+      {item.description && (
+        <div style={{...SECTION.wrap, background:'#0f172a'}}>
+          <label style={SECTION.label}>取得した本文(確認用) <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— ハッシュタグが正しく取れているか確認できます</span></label>
+          <div style={{fontSize:13, color:'#cbd5e1', whiteSpace:'pre-wrap', wordBreak:'break-word'}}>
+            <HighlightedText text={item.description} />
+          </div>
+        </div>
+      )}
+
       <div style={{marginBottom:16}}>
         <button className="btn" onClick={runSuggest} disabled={suggesting} style={{fontSize:13}}>
           {suggesting ? '画像を解析中…' : (suggestionResult ? '🏷 再提案' : '🏷 AIでキャラ・タグを提案')}
         </button>
+        <label style={{marginLeft:10, fontSize:11, color:'#94a3b8', cursor:'pointer'}}>
+          <input type="checkbox" checked={suggestExternal} onChange={e=>setSuggestExternal(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />
+          Danbooruで新規タイトルも照合(外部通信)
+        </label>
+        {haveTimm && (
+          <select value={suggestModel} onChange={e=>setSuggestModel(e.target.value)} disabled={suggesting} style={{marginLeft:10, fontSize:11}}>
+            <option value="default">標準モデル(軽量・高速)</option>
+            <option value="canary">2026年学習の最新モデル(重い・初回は大きいダウンロード)</option>
+          </select>
+        )}
         <span style={{marginLeft:8, fontSize:11, color: suggestionResult && !suggestionResult.added ? '#f59e0b' : '#64748b'}}>
           {!suggestionResult ? (
             'プレビュー画像とキャラ既存データからキャラ・タイトル・タグを提案します（保存されるまで確定しません）'
@@ -260,7 +307,8 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
               {suggestionResult.source && (
                 <> — {suggestionResult.source === 'db' ? '既存データから'
                     : suggestionResult.source === 'tagger' ? '画像解析から'
-                    : '既存データ＋画像解析から'}</>
+                    : '既存データ＋画像解析から'}
+                  {suggestionResult.source.includes('danbooru') && '（Danbooru照合で新規タイトルを推論）'}</>
               )}
             </>
           ) : (

@@ -56,6 +56,21 @@ class TwitterCredential(models.Model):
         return f"TwitterCredential(updated_at={self.updated_at})"
 
 
+class DanbooruTitleCache(models.Model):
+    """Caches character-tag -> series/title lookups against Danbooru's
+    public API (see item.danbooru_lookup), so the same character is never
+    looked up twice. `title` is null when Danbooru had no clear consensus
+    (also cached, to avoid re-querying a character with no clean answer on
+    every suggestion run).
+    """
+    character_tag = models.CharField(max_length=200, unique=True)
+    title = models.CharField(max_length=255, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.character_tag} -> {self.title or '(no match)'}"
+
+
 class CharacterGroup(models.Model):
     name = models.CharField(max_length=200, unique=True)
     characters = models.JSONField(default=list, blank=True)
