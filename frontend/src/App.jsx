@@ -512,7 +512,7 @@ function AppMain({ role, onLogout }){
         />
       )}
       {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} currentPageItems={paginatedItems} />}
-      {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} />}
+      {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
     </div>
   )

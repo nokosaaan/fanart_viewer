@@ -1246,15 +1246,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({'status': 'processing', 'screen_name': screen_name, 'max_items': max_items}, status=status.HTTP_202_ACCEPTED)
 
-    @action(detail=False, methods=['post'], url_path='preview_account_retweets')
-    def preview_account_retweets_view(self, request):
-        """Like fetch_account_retweets, but for manual review: scans the
-        account's timeline synchronously and returns the candidate list
-        (media URLs, description, RT-original author) WITHOUT downloading
-        or saving anything — the caller picks which ones to actually import
-        via import_retweets_view. Candidates already archived are dropped
-        from the list up front so the review UI only shows genuinely new
-        ones.
+    @action(detail=False, methods=['post'], url_path='scan_account_retweets')
+    def scan_account_retweets_view(self, request):
+        """Scans the account's timeline for retweets and creates a bare Item
+        (no preview yet) for each one not already archived — image selection
+        is deliberately NOT done here. The caller (RetweetFetchManager) is
+        expected to run each returned item through the exact same
+        fetch-then-review flow as any other link (fetchPreviewCandidates +
+        the fetch queue — see FetchQueueManager.runBulkFetch), so RT-derived
+        items go through identical image selection to everything else in
+        the app rather than a bespoke path of their own.
 
         Runs synchronously (unlike fetch_account_retweets_view's background
         job) since it's just a handful of GraphQL page requests, no image
@@ -1279,11 +1280,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:
-            logging.exception('Account retweets preview failed for %s', screen_name)
+            logging.exception('Account retweets scan failed for %s', screen_name)
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
 
         already_archived = 0
-        candidates = []
+        created_items = []
         for rt in result.get('retweets', []):
             author = rt.get('screen_name') or ''
             tweet_id = rt.get('tweet_id')
@@ -1291,48 +1292,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             if _find_item_by_url(url):
                 already_archived += 1
                 continue
-            candidates.append({
-                'tweet_id': tweet_id,
-                'screen_name': author,
-                'media_urls': rt.get('media_urls') or [],
-                'description': rt.get('description') or '',
-                'link': url,
-            })
+            try:
+                item = Item.objects.create(
+                    external_id=int(tweet_id),
+                    source='twitter_rt',
+                    situation='',
+                    titles=[],
+                    characters=[],
+                    artist=author,
+                    link=url,
+                    tags=None,
+                    description=rt.get('description') or '',
+                )
+            except Exception:
+                logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
+                continue
+            created_items.append({'id': item.id, 'link': item.link})
 
         return Response({
             'screen_name': result.get('screen_name'),
-            'candidates': candidates,
+            'items': created_items,
             'already_archived': already_archived,
             'pages_fetched': result.get('pages_fetched', 0),
         })
-
-    @action(detail=False, methods=['post'], url_path='import_retweets')
-    def import_retweets_view(self, request):
-        """Archives the user-approved subset of candidates returned by
-        preview_account_retweets_view — one Item + image download per
-        candidate, synchronously (so the caller gets a real per-item result
-        while watching this specific screen, unlike the "auto" background
-        job which is meant to be walk-away).
-        """
-        data = request.data if isinstance(request.data, dict) else {}
-        items = data.get('retweets')
-        if not isinstance(items, list) or not items:
-            return Response({'detail': 'retweets (non-empty list) is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        created, skipped, failed = 0, 0, 0
-        for rt in items:
-            if not isinstance(rt, dict) or not rt.get('tweet_id'):
-                failed += 1
-                continue
-            outcome = _archive_retweet_candidate(rt)
-            if outcome == 'created':
-                created += 1
-            elif outcome == 'skipped':
-                skipped += 1
-            else:
-                failed += 1
-
-        return Response({'created': created, 'skipped': skipped, 'failed': failed})
 
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):
