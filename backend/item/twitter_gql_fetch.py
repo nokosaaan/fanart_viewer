@@ -537,7 +537,7 @@ def _resolve_screen_name_by_user_id(user_id: str, auth_token: str, ct0: str) -> 
         if errors:
             logger.warning("twitter_gql_fetch: UserByRestId errors for user_id=%s: %s", user_id, errors)
         user = ((data.get("data") or {}).get("user") or {}).get("result") or {}
-        screen_name = (user.get("legacy") or {}).get("screen_name")
+        screen_name = _extract_user_screen_name(user)
         if not screen_name:
             logger.warning(
                 "twitter_gql_fetch: UserByRestId returned no usable screen_name for user_id=%s "
@@ -566,11 +566,27 @@ def _extract_retweet_original(tweet_obj: dict):
     return _unwrap_tweet(rt.get("result") or {})
 
 
+def _extract_user_screen_name(user: dict) -> str | None:
+    """User result オブジェクト(tweet.core.user_results.result や
+    UserByRestId の data.user.result)から screen_name を返す。
+
+    Twitterはユーザースキーマを移行中で、screen_name が
+    User.legacy.screen_name ではなく User.core.screen_name (ツイート側の
+    core とは別物 — こちらはユーザーオブジェクト自身が持つ core) に
+    入っているケースを実際のレスポンスで確認した(typename=User, legacy
+    はキーとして存在するが screen_name を含まない)。両方を試す。
+    """
+    return (
+        (user.get("core") or {}).get("screen_name")
+        or (user.get("legacy") or {}).get("screen_name")
+    )
+
+
 def _get_screen_name(tweet_obj: dict) -> str | None:
     """tweet result からツイート主の screen_name (@なし) を返す。"""
     t = _unwrap_tweet(tweet_obj)
     user = (((t.get("core") or {}).get("user_results") or {}).get("result") or {})
-    return (user.get("legacy") or {}).get("screen_name")
+    return _extract_user_screen_name(user)
 
 
 def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
