@@ -583,42 +583,70 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
             "fieldToggles": json.dumps({"withArticlePlainText": False}, separators=(",", ":")),
         }
 
-        try:
-            resp = _get_with_ratelimit_backoff(endpoint, params, headers)
-        except requests.RequestException as e:
-            raise TwitterGQLError(f"Request failed: {e}") from e
+        # Twitter occasionally returns some tweet results in a page without
+        # their 'core' (author) data populated — a known API glitch gallery-dl
+        # also works around by retrying the same page. Left unhandled, this
+        # silently produced wrong-artist Items here (the RT's original author
+        # couldn't be read, so a naive fallback used the scanned account's own
+        # name instead) — this only shows up past the first tweet or two,
+        # since the first page's leading entries are the ones most reliably
+        # fully hydrated.
+        entries = []
+        for page_attempt in range(3):
+            try:
+                resp = _get_with_ratelimit_backoff(endpoint, params, headers)
+            except requests.RequestException as e:
+                raise TwitterGQLError(f"Request failed: {e}") from e
 
-        if resp.status_code in (401, 403):
-            raise TwitterAuthError(
-                "auth_token または ct0 が期限切れです。"
-                "ブラウザの x.com Cookie から再取得してください。"
-            )
-        if not resp.ok:
-            raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
+            if resp.status_code in (401, 403):
+                raise TwitterAuthError(
+                    "auth_token または ct0 が期限切れです。"
+                    "ブラウザの x.com Cookie から再取得してください。"
+                )
+            if not resp.ok:
+                raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
 
-        try:
-            data = resp.json()
-        except ValueError as e:
-            raise TwitterGQLError(f"Invalid JSON response: {e}") from e
+            try:
+                data = resp.json()
+            except ValueError as e:
+                raise TwitterGQLError(f"Invalid JSON response: {e}") from e
 
-        errors = data.get("errors") or []
-        for err in errors:
-            code = err.get("code")
-            if code in (32, 64, 135, 326):
-                raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
+            errors = data.get("errors") or []
+            for err in errors:
+                code = err.get("code")
+                if code in (32, 64, 135, 326):
+                    raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
+
+            try:
+                instructions = data["data"]["user"]["result"]["timeline"]["timeline"]["instructions"]
+            except (KeyError, TypeError):
+                entries = []
+                break
+
+            entries = []
+            for instr in instructions:
+                if instr.get("type") == "TimelineAddEntries":
+                    entries.extend(instr.get("entries") or [])
+
+            incomplete = False
+            for entry in entries:
+                entry_id = entry.get("entryId") or ""
+                if not entry_id.startswith("tweet-"):
+                    continue
+                content = entry.get("content") or {}
+                item_content = content.get("itemContent") or {}
+                tweet = (item_content.get("tweet_results") or {}).get("result")
+                if not tweet:
+                    continue
+                if "core" not in _unwrap_tweet(tweet):
+                    incomplete = True
+                    break
+
+            if not incomplete or page_attempt == 2:
+                break
+            time.sleep(1.5)
 
         pages += 1
-
-        try:
-            instructions = data["data"]["user"]["result"]["timeline"]["timeline"]["instructions"]
-        except (KeyError, TypeError):
-            break
-
-        entries = []
-        for instr in instructions:
-            if instr.get("type") == "TimelineAddEntries":
-                entries.extend(instr.get("entries") or [])
-
         next_cursor = None
         for entry in entries:
             entry_id = entry.get("entryId") or ""

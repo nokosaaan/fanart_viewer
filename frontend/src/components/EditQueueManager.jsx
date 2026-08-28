@@ -12,10 +12,11 @@ const MISSING_FIELDS = [
   { key: 'characters', label: 'キャラクター' },
   { key: 'tags', label: 'タグ' },
   { key: 'situation', label: 'シチュエーション' },
+  { key: 'artist', label: '作者' },
 ]
 
 function isFieldMissing(it, field){
-  if (field === 'situation') return !it.situation
+  if (field === 'situation' || field === 'artist') return !it[field]
   const v = it[field]
   return !Array.isArray(v) || v.length === 0
 }
@@ -26,6 +27,7 @@ function summarizeMissing(it){
   if (isFieldMissing(it, 'characters')) missing.push('キャラ')
   if (isFieldMissing(it, 'tags')) missing.push('タグ')
   if (isFieldMissing(it, 'situation')) missing.push('状況')
+  if (isFieldMissing(it, 'artist')) missing.push('作者')
   return missing.join('・') || '—'
 }
 

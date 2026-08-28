@@ -196,53 +196,78 @@ def _run_account_retweets_job(screen_name, max_items):
 
     created, skipped, failed = 0, 0, 0
     for rt in result.get('retweets', []):
-        tweet_id = rt.get('tweet_id')
-        author = rt.get('screen_name') or result.get('screen_name') or ''
-        url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
-
-        if _find_item_by_url(url):
-            skipped += 1
-            continue
-
-        try:
-            item = Item.objects.create(
-                external_id=int(tweet_id),
-                source='twitter_rt',
-                situation='',
-                titles=[],
-                characters=[],
-                artist=author,
-                link=url,
-                tags=None,
-                description=rt.get('description') or '',
-            )
-        except Exception:
-            logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
-            failed += 1
-            continue
-
-        saved_any = False
-        for idx, media_url in enumerate(rt.get('media_urls') or []):
-            try:
-                body, ctype = _fetch_image_via_requests(media_url, min_size=MIN_IMAGE_FETCH_BYTES)
-                if body and ctype:
-                    PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
-                    saved_any = True
-            except Exception:
-                logging.exception('Failed to download retweet media %s for tweet %s', media_url, tweet_id)
-
-        if saved_any:
+        outcome = _archive_retweet_candidate(rt)
+        if outcome == 'created':
             created += 1
+        elif outcome == 'skipped':
+            skipped += 1
         else:
-            # Nothing downloadable (dead CDN link, transient error) — drop the
-            # empty Item rather than leave a preview-less row behind.
-            item.delete()
             failed += 1
 
     logging.info(
         'Account retweets fetch for %s: created=%d skipped=%d failed=%d pages=%d',
         screen_name, created, skipped, failed, result.get('pages_fetched', 0),
     )
+
+
+def _archive_retweet_candidate(rt):
+    """Create an Item (+ download its images) for one retweet candidate
+    dict, as produced by twitter_gql_fetch.fetch_account_retweets:
+    {'tweet_id', 'screen_name', 'media_urls', 'description'}.
+
+    Shared by the "auto" background scan (_run_account_retweets_job) and the
+    "manual review" import endpoint (import_retweets_view) so both paths
+    dedupe/create/download identically.
+
+    `screen_name` here is deliberately NEVER the scanned account — only the
+    retweet's original author, or blank if that couldn't be read from the
+    API response (Twitter occasionally omits it — see
+    fetch_account_retweets' page-retry). A blank artist is left for the
+    user to fill in later via the edit queue rather than silently guessing
+    wrong (attributing the RT to whoever's timeline it came from would be
+    incorrect and easy to miss).
+
+    Returns 'created', 'skipped' (already archived), or 'failed'.
+    """
+    tweet_id = rt.get('tweet_id')
+    author = rt.get('screen_name') or ''
+    url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
+
+    if _find_item_by_url(url):
+        return 'skipped'
+
+    try:
+        item = Item.objects.create(
+            external_id=int(tweet_id),
+            source='twitter_rt',
+            situation='',
+            titles=[],
+            characters=[],
+            artist=author,
+            link=url,
+            tags=None,
+            description=rt.get('description') or '',
+        )
+    except Exception:
+        logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
+        return 'failed'
+
+    saved_any = False
+    for idx, media_url in enumerate(rt.get('media_urls') or []):
+        try:
+            body, ctype = _fetch_image_via_requests(media_url, min_size=MIN_IMAGE_FETCH_BYTES)
+            if body and ctype:
+                PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
+                saved_any = True
+        except Exception:
+            logging.exception('Failed to download retweet media %s for tweet %s', media_url, tweet_id)
+
+    if saved_any:
+        return 'created'
+    # Nothing downloadable (dead CDN link, transient error) — drop the
+    # empty Item rather than leave a preview-less row behind.
+    item.delete()
+    return 'failed'
 
 
 def _normalize_char_name(name):
@@ -1221,6 +1246,94 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({'status': 'processing', 'screen_name': screen_name, 'max_items': max_items}, status=status.HTTP_202_ACCEPTED)
 
+    @action(detail=False, methods=['post'], url_path='preview_account_retweets')
+    def preview_account_retweets_view(self, request):
+        """Like fetch_account_retweets, but for manual review: scans the
+        account's timeline synchronously and returns the candidate list
+        (media URLs, description, RT-original author) WITHOUT downloading
+        or saving anything — the caller picks which ones to actually import
+        via import_retweets_view. Candidates already archived are dropped
+        from the list up front so the review UI only shows genuinely new
+        ones.
+
+        Runs synchronously (unlike fetch_account_retweets_view's background
+        job) since it's just a handful of GraphQL page requests, no image
+        downloads — should return in a few seconds even for max_items=40.
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        screen_name = (data.get('screen_name') or '').strip().lstrip('@')
+        if not screen_name:
+            return Response({'detail': 'screen_name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            max_items = int(data.get('max_items') or 30)
+        except (TypeError, ValueError):
+            max_items = 30
+
+        try:
+            result = fetch_account_retweets(screen_name, max_items=max_items)
+        except TwitterAuthError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception as e:
+            logging.exception('Account retweets preview failed for %s', screen_name)
+            return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        already_archived = 0
+        candidates = []
+        for rt in result.get('retweets', []):
+            author = rt.get('screen_name') or ''
+            tweet_id = rt.get('tweet_id')
+            url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
+            if _find_item_by_url(url):
+                already_archived += 1
+                continue
+            candidates.append({
+                'tweet_id': tweet_id,
+                'screen_name': author,
+                'media_urls': rt.get('media_urls') or [],
+                'description': rt.get('description') or '',
+                'link': url,
+            })
+
+        return Response({
+            'screen_name': result.get('screen_name'),
+            'candidates': candidates,
+            'already_archived': already_archived,
+            'pages_fetched': result.get('pages_fetched', 0),
+        })
+
+    @action(detail=False, methods=['post'], url_path='import_retweets')
+    def import_retweets_view(self, request):
+        """Archives the user-approved subset of candidates returned by
+        preview_account_retweets_view — one Item + image download per
+        candidate, synchronously (so the caller gets a real per-item result
+        while watching this specific screen, unlike the "auto" background
+        job which is meant to be walk-away).
+        """
+        data = request.data if isinstance(request.data, dict) else {}
+        items = data.get('retweets')
+        if not isinstance(items, list) or not items:
+            return Response({'detail': 'retweets (non-empty list) is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        created, skipped, failed = 0, 0, 0
+        for rt in items:
+            if not isinstance(rt, dict) or not rt.get('tweet_id'):
+                failed += 1
+                continue
+            outcome = _archive_retweet_candidate(rt)
+            if outcome == 'created':
+                created += 1
+            elif outcome == 'skipped':
+                skipped += 1
+            else:
+                failed += 1
+
+        return Response({'created': created, 'skipped': skipped, 'failed': failed})
+
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):
         """Accepts client-provided images (data_uri) and persists them as PreviewImage.
@@ -1384,16 +1497,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         EditFields one item at a time.
 
         Query param `missing`: comma-separated subset of
-        titles,characters,tags,situation. Defaults to all four.
+        titles,characters,tags,situation,artist. Defaults to all five.
         """
-        valid_fields = ('titles', 'characters', 'tags', 'situation')
+        valid_fields = ('titles', 'characters', 'tags', 'situation', 'artist')
         requested = (request.GET.get('missing') or ','.join(valid_fields)).split(',')
         fields = [f.strip() for f in requested if f.strip() in valid_fields] or list(valid_fields)
 
         q = Q()
         for f in fields:
-            if f == 'situation':
-                q |= Q(situation='') | Q(situation__isnull=True)
+            if f in ('situation', 'artist'):
+                q |= Q(**{f: ''}) | Q(**{f'{f}__isnull': True})
             else:
                 # JSONField list (titles/characters/tags): empty means [] or null
                 q |= Q(**{f: []}) | Q(**{f'{f}__isnull': True})
