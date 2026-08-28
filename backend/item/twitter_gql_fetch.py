@@ -77,6 +77,14 @@ _TWEET_DETAIL_FEATURES = {
 # confirming the query ID itself is current).
 _USER_BY_SCREEN_NAME_QUERY_ID = "ck5KkZ8t5cOmoLssopN99Q"
 _USER_TWEETS_QUERY_ID = "E8Wq-_jFSaU7hxVcuOPR9g"
+# UserByRestId — resolves a numeric user id to a screen_name. Used as a
+# fallback when a retweet's original tweet result is missing its inline
+# `core.user_results` hydration (observed on real, live, non-deleted tweets —
+# not just the tombstoned/suspended case _get_screen_name's docstring
+# originally assumed); `legacy.user_id_str` is present on the tweet either
+# way, so it's always available to resolve from. Verified live (dummy-auth
+# request reaches the app layer, same as the other query ids above).
+_USER_BY_REST_ID_QUERY_ID = "8r5oa_2vD0WkhIAOkY4TTA"
 
 _USER_BY_SCREEN_NAME_FEATURES = {
     "hidden_profile_subscriptions_enabled": True,
@@ -93,6 +101,13 @@ _USER_BY_SCREEN_NAME_FEATURES = {
     "responsive_web_graphql_timeline_navigation_enabled": True,
     "subscriptions_verification_info_is_identity_verified_enabled": True,
     "subscriptions_verification_info_verified_since_enabled": True,
+}
+
+# Same as _USER_BY_SCREEN_NAME_FEATURES minus the two verification-info flags
+# gallery-dl only adds for that specific query — used by UserByRestId.
+_USER_BY_REST_ID_FEATURES = {
+    k: v for k, v in _USER_BY_SCREEN_NAME_FEATURES.items()
+    if not k.startswith("subscriptions_verification_info")
 }
 
 _USER_TWEETS_FEATURES = {
@@ -497,6 +512,29 @@ def _resolve_user_id(screen_name: str, auth_token: str, ct0: str) -> str:
     return rest_id
 
 
+def _resolve_screen_name_by_user_id(user_id: str, auth_token: str, ct0: str) -> str | None:
+    """Numeric user id -> screen_name, or None on any failure.
+
+    Best-effort fallback only (see fetch_account_retweets) — never raises,
+    since a single lookup failing shouldn't abort the whole scan; the
+    caller just keeps the artist blank for that one item when this misses.
+    """
+    variables = json.dumps({"userId": user_id}, separators=(",", ":"))
+    features = json.dumps(_USER_BY_REST_ID_FEATURES, separators=(",", ":"))
+    endpoint = f"https://twitter.com/i/api/graphql/{_USER_BY_REST_ID_QUERY_ID}/UserByRestId"
+    headers = _build_headers(auth_token, ct0)
+
+    try:
+        resp = _get_with_ratelimit_backoff(endpoint, {"variables": variables, "features": features}, headers)
+        if not resp.ok:
+            return None
+        data = resp.json()
+        user = ((data.get("data") or {}).get("user") or {}).get("result") or {}
+        return (user.get("legacy") or {}).get("screen_name") or None
+    except (requests.RequestException, ValueError):
+        return None
+
+
 def _extract_retweet_original(tweet_obj: dict):
     """tweet_results.result がネイティブRTなら、オリジナルツイートの
     tweet dict(rest_id/legacy/coreを含む、アンラップ済み)を返す。RTで
@@ -563,6 +601,10 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
 
     retweets: list[dict] = []
     seen_ids: set[str] = set()
+    # user_id -> screen_name, populated by the _resolve_screen_name_by_user_id
+    # fallback below. Keeps a prolific artist appearing in many RTs on this
+    # timeline to a single extra lookup instead of one per retweet.
+    resolved_authors: dict[str, str | None] = {}
     cursor: str | None = None
     pages = 0
 
@@ -674,9 +716,28 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
                 continue  # テキストのみのRTは保存対象外
 
             seen_ids.add(tweet_id)
+
+            screen_name_for_rt = _get_screen_name(original)
+            if not screen_name_for_rt:
+                # The inline core.user_results hydration is sometimes absent
+                # even on perfectly live, public tweets (not just deleted or
+                # suspended ones) — legacy.user_id_str is present regardless,
+                # so resolve the screen_name with one extra lookup rather
+                # than leaving the artist blank.
+                author_id = _get_author_id(original)
+                if author_id:
+                    if author_id not in resolved_authors:
+                        resolved_authors[author_id] = _resolve_screen_name_by_user_id(author_id, auth_token, ct0)
+                    screen_name_for_rt = resolved_authors[author_id]
+                if not screen_name_for_rt:
+                    logger.warning(
+                        "twitter_gql_fetch: could not resolve author for retweeted tweet %s "
+                        "(author_id=%s) — leaving artist blank", tweet_id, author_id,
+                    )
+
             retweets.append({
                 "tweet_id": tweet_id,
-                "screen_name": _get_screen_name(original),
+                "screen_name": screen_name_for_rt,
                 "media_urls": media_urls,
                 "description": _extract_full_text(original),
             })
