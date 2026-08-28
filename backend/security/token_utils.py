@@ -15,6 +15,8 @@ import hmac
 import hashlib
 import time
 
+from django.http import JsonResponse
+
 # Read once at import time; restart required to pick up changes.
 _EXPIRY_SECONDS = int(os.environ.get('TOKEN_EXPIRY_DAYS', '30')) * 86400
 
@@ -61,3 +63,25 @@ def verify_token(token: str):
             return role
 
     return None  # signature mismatch
+
+
+def require_admin(request):
+    """Return a JsonResponse to short-circuit with, or None if the request
+    may proceed. Shared by any view that needs the admin role specifically
+    (not just any authenticated write access) — e.g. Drive backup/restore
+    and Twitter credential storage — since SimpleAuthMiddleware alone only
+    blocks viewer WRITE methods and does not distinguish admin from viewer
+    on GET, so a view exposing genuinely sensitive data/actions must check
+    this explicitly rather than relying on the blanket middleware rule.
+
+    Mirrors SimpleAuthMiddleware's "no password configured = open" posture
+    for local/dev use where ADMIN_PASSWORD isn't set at all.
+    """
+    admin_pass = os.environ.get('ADMIN_PASSWORD', '')
+    if not admin_pass:
+        return None  # auth not configured for this deployment — match app-wide behavior
+
+    token = request.COOKIES.get('fv_auth', '') or request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    if verify_token(token) != 'admin':
+        return JsonResponse({'detail': '管理者のみ利用できます'}, status=403)
+    return None

@@ -147,6 +147,18 @@ _ACCOUNT_RETWEETS_HARD_CAP = 100
 _ACCOUNT_RETWEETS_MAX_PAGES = 20
 
 
+def _get_creds() -> tuple[str, str]:
+    """(auth_token, ct0), preferring the encrypted DB-stored value set via
+    the admin UI and falling back to the TWITTER_AUTH_TOKEN/TWITTER_CT0 env
+    vars — see item.twitter_creds. Imported lazily so this module stays
+    importable (and its non-Django parts testable) without the Django app
+    registry being ready.
+    """
+    from .twitter_creds import get_credentials
+
+    return get_credentials()
+
+
 class TwitterAuthError(RuntimeError):
     """auth_token / ct0 が期限切れまたは未設定。"""
 
@@ -369,8 +381,7 @@ def fetch_twitter_media(tweet_url: str) -> tuple[list[tuple[bytes, str]], str]:
         TwitterAuthError: 認証エラー
         RuntimeError: 環境変数未設定
     """
-    auth_token = os.environ.get("TWITTER_AUTH_TOKEN", "").strip()
-    ct0 = os.environ.get("TWITTER_CT0", "").strip()
+    auth_token, ct0 = _get_creds()
 
     if not auth_token:
         raise RuntimeError("TWITTER_AUTH_TOKEN が設定されていません")
@@ -535,8 +546,7 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
         RuntimeError: 環境変数未設定
         ValueError: 指定アカウントが見つからない
     """
-    auth_token = os.environ.get("TWITTER_AUTH_TOKEN", "").strip()
-    ct0 = os.environ.get("TWITTER_CT0", "").strip()
+    auth_token, ct0 = _get_creds()
     if not auth_token:
         raise RuntimeError("TWITTER_AUTH_TOKEN が設定されていません")
     if not ct0:
@@ -667,8 +677,7 @@ def verify_credentials() -> dict:
 
     twitter.com の内部 API を使う（api.twitter.com の v1.1 は OAuth 1.0a 必須）。
     """
-    auth_token = os.environ.get("TWITTER_AUTH_TOKEN", "").strip()
-    ct0 = os.environ.get("TWITTER_CT0", "").strip()
+    auth_token, ct0 = _get_creds()
 
     if not auth_token or not ct0:
         return {"ok": False, "reason": "TWITTER_AUTH_TOKEN または TWITTER_CT0 が未設定"}

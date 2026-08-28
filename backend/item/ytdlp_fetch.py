@@ -46,8 +46,8 @@ def fetch_twitter_media_ytdlp(url: str) -> tuple[list[tuple[bytes, str]], str]:
     except ImportError:
         raise RuntimeError('yt-dlp not installed; run pip install yt-dlp')
 
-    auth_token = os.environ.get('TWITTER_AUTH_TOKEN')
-    ct0 = os.environ.get('TWITTER_CT0')
+    from .twitter_creds import get_credentials
+    auth_token, ct0 = get_credentials()
 
     if not auth_token:
         raise RuntimeError('TWITTER_AUTH_TOKEN not set')

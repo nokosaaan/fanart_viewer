@@ -38,6 +38,24 @@ class PreviewImage(models.Model):
         return f"PreviewImage {self.item_id}#{self.order} ({self.content_type})"
 
 
+class TwitterCredential(models.Model):
+    """Single-row store for the Twitter/X session cookies (auth_token, ct0)
+    used by the scraping fetchers (see item.twitter_creds). Values are
+    stored Fernet-encrypted (never plaintext) so that a DB-only leak (e.g.
+    the Google Drive backup) doesn't expose usable session cookies — the
+    decryption key lives only in TWITTER_CREDS_ENC_KEY, outside the DB.
+
+    Never exposed via any API response — see item.twitter_creds_views,
+    which only ever accepts new values (write-only), never returns them.
+    """
+    encrypted_auth_token = models.BinaryField(null=True, blank=True)
+    encrypted_ct0 = models.BinaryField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"TwitterCredential(updated_at={self.updated_at})"
+
+
 class CharacterGroup(models.Model):
     name = models.CharField(max_length=200, unique=True)
     characters = models.JSONField(default=list, blank=True)

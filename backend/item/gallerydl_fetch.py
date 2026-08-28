@@ -68,8 +68,8 @@ def fetch_twitter_media_gallerydl(url: str) -> list[tuple[bytes, str]]:
     Returns list of (image_bytes, mime_type).
     Raises RuntimeError if gallery-dl is not installed or TWITTER_* vars are unset.
     """
-    auth_token = os.environ.get("TWITTER_AUTH_TOKEN", "").strip()
-    ct0 = os.environ.get("TWITTER_CT0", "").strip()
+    from .twitter_creds import get_credentials
+    auth_token, ct0 = get_credentials()
 
     if not auth_token or not ct0:
         raise RuntimeError("TWITTER_AUTH_TOKEN または TWITTER_CT0 が未設定")

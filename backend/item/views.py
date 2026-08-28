@@ -15,6 +15,7 @@ import re
 from urllib.parse import urljoin, urlparse
 
 from .models import Item, PreviewImage, CharacterGroup
+from .twitter_creds import has_credentials as _have_twitter_creds
 from .serializers import ItemSerializer, CharacterGroupSerializer
 from security.ssrf_guard import validate_url, SSRFError
 import logging
@@ -773,7 +774,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             # gallery-dl fetch for Twitter/X sensitive images (primary auth method).
             # gallery-dl maintains active Twitter support and handles sensitive
             # content reliably via cookie auth.
-            if not candidates and HAVE_GALLERYDL and os.environ.get('TWITTER_AUTH_TOKEN'):
+            if not candidates and HAVE_GALLERYDL and _have_twitter_creds():
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
                         gdl_results = fetch_twitter_media_gallerydl(target_url)
@@ -785,7 +786,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         logging.exception('gallery-dl fetch failed for %s', target_url)
 
             # GraphQL API fallback (browser-free, but more fragile than gallery-dl).
-            if not candidates and HAVE_TWITTER_GQL and os.environ.get('TWITTER_AUTH_TOKEN'):
+            if not candidates and HAVE_TWITTER_GQL and _have_twitter_creds():
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
                         gql_results, gql_description = fetch_twitter_media(target_url)
@@ -801,7 +802,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         logging.exception('Twitter GQL fetch failed for %s', target_url)
 
             # yt-dlp fallback (primarily video, last resort for images).
-            if not candidates and HAVE_YTDLP and os.environ.get('TWITTER_AUTH_TOKEN'):
+            if not candidates and HAVE_YTDLP and _have_twitter_creds():
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
                         ytdlp_results, ytdlp_description = fetch_twitter_media_ytdlp(target_url)
@@ -1196,8 +1197,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         """
         if not HAVE_TWITTER_GQL:
             return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        if not os.environ.get('TWITTER_AUTH_TOKEN') or not os.environ.get('TWITTER_CT0'):
-            return Response({'detail': 'TWITTER_AUTH_TOKEN/TWITTER_CT0 not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
         data = request.data if isinstance(request.data, dict) else {}
         screen_name = (data.get('screen_name') or '').strip().lstrip('@')
