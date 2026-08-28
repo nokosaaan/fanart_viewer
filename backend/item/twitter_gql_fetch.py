@@ -527,11 +527,26 @@ def _resolve_screen_name_by_user_id(user_id: str, auth_token: str, ct0: str) -> 
     try:
         resp = _get_with_ratelimit_backoff(endpoint, {"variables": variables, "features": features}, headers)
         if not resp.ok:
+            logger.warning(
+                "twitter_gql_fetch: UserByRestId HTTP %s for user_id=%s: %s",
+                resp.status_code, user_id, resp.text[:300],
+            )
             return None
         data = resp.json()
+        errors = data.get("errors") or []
+        if errors:
+            logger.warning("twitter_gql_fetch: UserByRestId errors for user_id=%s: %s", user_id, errors)
         user = ((data.get("data") or {}).get("user") or {}).get("result") or {}
-        return (user.get("legacy") or {}).get("screen_name") or None
-    except (requests.RequestException, ValueError):
+        screen_name = (user.get("legacy") or {}).get("screen_name")
+        if not screen_name:
+            logger.warning(
+                "twitter_gql_fetch: UserByRestId returned no usable screen_name for user_id=%s "
+                "(typename=%s, keys=%s)",
+                user_id, user.get("__typename"), sorted(user.keys()),
+            )
+        return screen_name or None
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("twitter_gql_fetch: UserByRestId lookup failed for user_id=%s: %s", user_id, e)
         return None
 
 
