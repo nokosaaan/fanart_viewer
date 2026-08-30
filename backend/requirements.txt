@@ -19,3 +19,16 @@ cryptography
 onnxruntime==1.22.0
 numpy
 pillow
+# Anime-art person detector (ONNX, tiny model — see item/tagger.py's
+# _detect_person_boxes) used to separate multiple characters into
+# individual regions before tagging, avoiding cross-character feature
+# bleed. Wheels for aarch64 (Pi4) exist for all of this package's own
+# dependencies (verified), so unlike requirements-timm.txt this is a
+# regular, always-installed dependency, not gated behind a build arg.
+dghs-imgutils
+# Pinned explicitly: dghs-imgutils pulls in pyrfc6266, which declares (but
+# doesn't actually need — verified) pyparsing~=3.0.7, while httplib2 (used
+# by google-api-python-client for the Drive backup feature) needs
+# pyparsing>=3.1. Without pinning, pip's resolver order can land on either
+# depending on install order and silently break one of the two features.
+pyparsing>=3.1,<4

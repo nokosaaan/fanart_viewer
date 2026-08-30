@@ -42,11 +42,14 @@ The 'timm' backend is slower still (larger model, PyTorch CPU inference).
 """
 import importlib.util
 import io
+import logging
 import os
 import re
 import threading
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_REPO = 'SmilingWolf/wd-vit-tagger-v3'
 MODEL_FILENAME = 'model.onnx'
@@ -366,6 +369,63 @@ def _suggest_tags_timm(image_bytes, general_threshold, character_threshold, gene
     )
 
 
+def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend):
+    if backend == 'timm':
+        return _suggest_tags_timm(image_bytes, general_threshold, character_threshold, general_limit, model_repo)
+    return _suggest_tags_onnx(image_bytes, general_threshold, character_threshold, general_limit, model_repo)
+
+
+# Anime-art person detector (ONNX, ~11-25M params depending on level — same
+# lightweight-inference philosophy as the tagger itself, not the heavier
+# 'timm' backend) used to localize characters before tagging. A WD14-style
+# tagger sees a whole image as one blended feature vector, so a multi-
+# character image can have one character's feature (e.g. eye color) get
+# attributed to another, surfacing a character that isn't actually in the
+# picture at all. Splitting the image into per-person regions first and
+# tagging each crop independently means each tagger call only ever sees one
+# character, which can't cross-contaminate. Verified live against a real
+# 2-character Danbooru image (Hakurei Reimu + Kirisame Marisa) — produced
+# exactly 2 correctly-separated, non-overlapping boxes.
+_PERSON_DETECT_CONF_THRESHOLD = 0.3
+_MAX_PERSON_CROPS = 4  # bounds worst-case cost on a crowd scene
+
+
+def _detect_person_boxes(image_bytes):
+    """[(x1, y1, x2, y2), ...] in the original image's pixel coordinates,
+    most-confident first. Empty list (never raises to the caller — see
+    suggest_tags) if detection itself fails for any reason, so a tagger
+    request never fails outright over this being an additional, optional
+    refinement step.
+    """
+    from imgutils.detect import detect_person
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    results = detect_person(image, conf_threshold=_PERSON_DETECT_CONF_THRESHOLD)
+    ordered = sorted(results, key=lambda r: -r[2])
+    return [tuple(int(v) for v in box) for box, _label, _score in ordered]
+
+
+def _crop_with_padding(image_bytes, box, padding_ratio=0.15):
+    """Crops to `box` plus a margin (person-detection boxes can clip hair
+    ornaments, hands, etc. right at the edge) and re-encodes as PNG bytes —
+    kept as bytes (not a PIL Image) so this feeds straight back into the
+    same _suggest_tags_onnx/_suggest_tags_timm entry points a whole image
+    would, no separate code path needed for the cropped case.
+    """
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    x1, y1, x2, y2 = box
+    pad_x, pad_y = int((x2 - x1) * padding_ratio), int((y2 - y1) * padding_ratio)
+    x1, y1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
+    x2, y2 = min(image.width, x2 + pad_x), min(image.height, y2 + pad_y)
+
+    buf = io.BytesIO()
+    image.crop((x1, y1, x2, y2)).save(buf, format='PNG')
+    return buf.getvalue()
+
+
 def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=15,
                   model_repo=None, backend='onnx'):
     """Run the tagger on a single image.
@@ -387,7 +447,43 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     characters/series the default model's training cutoff missed entirely.
     Callers choose per-request (see views.suggest_tags_view's `model` param)
     — nothing here decides that on its own.
+
+    If a person detector finds 2+ people in the image, `characters` is
+    re-derived from tagging each person's cropped region individually
+    instead of the whole image — see _detect_person_boxes. `tags`/`rating`/
+    `situation_hint` always come from the whole image regardless (they
+    aren't character-specific, and re-deriving them per-crop would just
+    duplicate background/composition tags per detected person for no
+    benefit). Single-subject images take exactly the same path as before
+    (one detector call that finds 0-1 boxes, no extra tagger passes).
     """
-    if backend == 'timm':
-        return _suggest_tags_timm(image_bytes, general_threshold, character_threshold, general_limit, model_repo)
-    return _suggest_tags_onnx(image_bytes, general_threshold, character_threshold, general_limit, model_repo)
+    result = _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend)
+
+    try:
+        boxes = _detect_person_boxes(image_bytes)
+    except Exception:
+        logger.exception('Person detection failed — falling back to whole-image character tagging')
+        boxes = []
+
+    if len(boxes) >= 2:
+        merged = {}
+        for box in boxes[:_MAX_PERSON_CROPS]:
+            try:
+                crop_bytes = _crop_with_padding(image_bytes, box)
+                crop_result = _suggest_tags_single_pass(
+                    crop_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
+                )
+            except Exception:
+                logger.exception('Per-crop tagging failed for box %s', box)
+                continue
+            for c in crop_result['characters']:
+                existing = merged.get(c['name'])
+                if existing is None or c['score'] > existing['score']:
+                    merged[c['name']] = c
+        if merged:
+            # Crop-derived characters supersede (not merge with) the
+            # whole-image pass's — that whole-image list is exactly the
+            # cross-contamination-prone signal this is meant to replace.
+            result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
+
+    return result
