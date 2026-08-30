@@ -34,6 +34,7 @@ Usage:
 from django.core.management.base import BaseCommand
 
 from item import tagger
+from item.views import _normalize_char_name
 from item.management.commands._eval_utils import get_evaluation_items
 
 
@@ -109,9 +110,15 @@ class Command(BaseCommand):
                 self.stderr.write(f'Item {item.id}: tagger failed ({e}), skipping')
                 continue
 
-            true_characters = set(item.characters or [])
+            # Compare on the SAME normalized spelling _match_tagger_characters
+            # (views.py) uses in production — the tagger emits Danbooru-style
+            # names ("hakurei reimu"), while this app's own DB rows keep
+            # whatever casing/spacing/underscore convention was typed in
+            # ("Hakurei Reimu"). Comparing raw strings would call almost
+            # every correct match a miss, regardless of threshold.
+            true_characters = {_normalize_char_name(c) for c in (item.characters or [])}
             for t in thresholds:
-                predicted = {c['name'] for c in per_threshold[t]['characters']}
+                predicted = {_normalize_char_name(c['name']) for c in per_threshold[t]['characters']}
                 tp = predicted & true_characters
                 fp = predicted - true_characters
                 stats[t]['tp'] += len(tp)
