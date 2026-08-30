@@ -1,5 +1,7 @@
-"""Evaluates the tagger's OWN character recognition (never mind the DB
-tag-similarity fallback or Danbooru reverse lookup — see _suggest_for_item)
+"""Evaluates the tagger's character recognition (through the SAME
+_match_tagger_characters bridging production uses — CharacterGroup aliases
+and plain string reuse across other items — but never mind the DB
+tag-similarity fallback or Danbooru reverse lookup, see _suggest_for_item)
 as a function of character_threshold, for a fixed backend. Orthogonal to
 evaluate_tag_count/evaluate_full_pipeline, which vary how many tags get fed
 to the DB matcher while always using the tagger's default
@@ -8,6 +10,17 @@ cutoff for THIS backend's confidence distribution? A differently-trained
 model (e.g. the 'timm'/canary backend) can have a differently calibrated
 confidence scale, so a threshold tuned against the default ONNX model may
 not transfer as-is.
+
+Routing predictions through _match_tagger_characters (rather than comparing
+the tagger's raw names directly against item.characters) matters a lot for
+a DB using non-English character names: the tagger only ever names
+characters in English/romaji (Danbooru's public tag vocabulary), so a
+straight string comparison against e.g. Japanese-named DB entries would
+almost always miss even when the recognition itself was correct. Adding an
+English/romaji alias to a character's CharacterGroup lets a correct
+recognition resolve back to that group's own (e.g. Japanese) name — see
+_match_tagger_characters's own docstring — which is exactly what this
+command needs to reflect to make its numbers mean anything for such a DB.
 
 Reports both:
   - recall (item-level): of the evaluated items, how many had at least one
@@ -34,7 +47,7 @@ Usage:
 from django.core.management.base import BaseCommand
 
 from item import tagger
-from item.views import _normalize_char_name
+from item.views import _normalize_char_name, _match_tagger_characters
 from item.management.commands._eval_utils import get_evaluation_items
 
 
@@ -62,11 +75,11 @@ class Command(BaseCommand):
                                   "at build time). Same choice values as the UI's model dropdown.")
         parser.add_argument('--debug-samples', type=int, default=0,
                              help='Print this many items where the tagger predicted at least one '
-                                  'character (at the lowest threshold tested), showing raw vs '
-                                  'normalized predicted/DB names side by side — use this to see WHY '
-                                  'a prediction is/isn\'t counted as a match (e.g. language mismatch: '
-                                  'the tagger only ever names characters in English/romaji, so a DB '
-                                  'entry stored in Japanese can never match no matter the threshold).')
+                                  'character (at the lowest threshold tested), showing raw predicted '
+                                  'names, their CharacterGroup-resolved names, and DB names side by '
+                                  'side — use this to see WHY a prediction is/isn\'t counted as a '
+                                  'match (e.g. a character with no CharacterGroup alias bridging its '
+                                  'English tagger name to its Japanese DB name).')
 
     def handle(self, *args, **options):
         import matplotlib
@@ -119,28 +132,28 @@ class Command(BaseCommand):
                 self.stderr.write(f'Item {item.id}: tagger failed ({e}), skipping')
                 continue
 
-            # Compare on the SAME normalized spelling _match_tagger_characters
-            # (views.py) uses in production — the tagger emits Danbooru-style
-            # names ("hakurei reimu"), while this app's own DB rows keep
-            # whatever casing/spacing/underscore convention was typed in
-            # ("Hakurei Reimu"). Comparing raw strings would call almost
-            # every correct match a miss, regardless of threshold.
             true_characters = {_normalize_char_name(c) for c in (item.characters or [])}
 
             if debug_budget > 0:
-                raw_predicted = [c['name'] for c in per_threshold[lowest_threshold]['characters']]
-                if raw_predicted:
+                raw_candidates = per_threshold[lowest_threshold]['characters']
+                if raw_candidates:
+                    resolved, _titles = _match_tagger_characters(raw_candidates)
                     self.stdout.write(
                         f'--- Item {item.id} (threshold={lowest_threshold}) ---\n'
-                        f'  predicted (raw):        {raw_predicted}\n'
-                        f'  predicted (normalized): {sorted(_normalize_char_name(n) for n in raw_predicted)}\n'
-                        f'  db characters (raw):        {list(item.characters or [])}\n'
-                        f'  db characters (normalized): {sorted(true_characters)}'
+                        f'  predicted (raw):                {[c["name"] for c in raw_candidates]}\n'
+                        f'  predicted (CharacterGroup-resolved): {[r["name"] for r in resolved]}\n'
+                        f'  db characters (raw):                {list(item.characters or [])}'
                     )
                     debug_budget -= 1
 
             for t in thresholds:
-                predicted = {_normalize_char_name(c['name']) for c in per_threshold[t]['characters']}
+                # _match_tagger_characters is the SAME bridging step
+                # production runs (see _suggest_for_item) — a candidate that
+                # resolves via a CharacterGroup alias comes back as the
+                # group's own name, not the raw tagger string, so this is
+                # what a real request would actually end up suggesting.
+                resolved, _titles = _match_tagger_characters(per_threshold[t]['characters'])
+                predicted = {_normalize_char_name(r['name']) for r in resolved}
                 tp = predicted & true_characters
                 fp = predicted - true_characters
                 stats[t]['tp'] += len(tp)

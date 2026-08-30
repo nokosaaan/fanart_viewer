@@ -292,7 +292,13 @@ def _match_tagger_characters(candidates):
     existing_by_norm = {}
     for group in CharacterGroup.objects.all():
         for c in (group.characters or []):
-            existing_by_norm.setdefault(_normalize_char_name(c), []).append((c, group))
+            # A group-alias match always resolves to the GROUP's own name,
+            # never to whichever alias string happened to match — the alias
+            # list exists purely to bridge recognition (e.g. tagger names a
+            # character "sherry" while this app's own convention for that
+            # character is the group's Japanese name "シェリー"), not to
+            # decide what gets displayed as the suggestion.
+            existing_by_norm.setdefault(_normalize_char_name(c), []).append((group.name, group))
     for item in Item.objects.only('characters'):
         for c in (item.characters or []):
             if c:
