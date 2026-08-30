@@ -32,3 +32,7 @@ dghs-imgutils
 # pyparsing>=3.1. Without pinning, pip's resolver order can land on either
 # depending on install order and silently break one of the two features.
 pyparsing>=3.1,<4
+# Dev/analysis tool only (item/management/commands/evaluate_tag_count.py) —
+# not on any request-serving code path. Headless (Agg backend), portable
+# wheels on both x86_64 and aarch64.
+matplotlib
