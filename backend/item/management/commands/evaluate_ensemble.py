@@ -44,6 +44,27 @@ character output: a weighted addition preserves full coverage while still
 letting the classifier dominate the combined score wherever it is
 confident, rather than trading away everything it hasn't been trained on.
 
+SITUATION IS SCORED SEPARATELY from title/character, using its own fixed
+weights (views.DEFAULT_SITUATION_WEIGHTS, override with
+--situation-weights) that are NOT swept by --grid-search: the tagger's own
+composition/rating heuristic (tagger._situation_hint — R18 from `rating`
+takes priority, then 1girl+solo -> SOLO, a 3+ count tag/"multiple girls" ->
+MULTIPLE) is a direct read of the image and is trusted on its own rather
+than blended against DB priors the way title/character are. --grid-search
+still REPORTS situation accuracy for context, but every combo in the grid
+uses the exact same situation_weights, so it can't explain any difference
+between rows — only title/character do.
+
+Note also that a Danbooru reverse-lookup candidate ('danbooru') can never
+actually move title accuracy in this harness: it only ever fires for a
+tagger-recognized character that matches NOTHING in this app's own
+vocabulary yet, but every evaluated item's ground-truth character is BY
+DEFINITION already somewhere in that vocabulary (that's what makes it
+usable as confirmed ground truth) — so its real use case (a genuinely new,
+never-before-seen character) structurally cannot occur in this kind of
+"reconstruct a known item" test. Validating it needs a live check against
+an actual new/unconfirmed item instead.
+
 Usage:
   # Score the current hand-tuned defaults:
   docker compose -f docker-compose.prod.yml exec web python manage.py evaluate_ensemble --seed 42
@@ -84,7 +105,16 @@ class Command(BaseCommand):
         parser.add_argument('--weights', type=str, default=None,
                              help='JSON dict of source->weight for a SINGLE run, e.g. '
                                   '\'{"hashtag": 5, "tagger": 4}\' — unspecified sources fall back to '
-                                  'DEFAULT_ENSEMBLE_WEIGHTS. Overrides --grid-search when given.')
+                                  'DEFAULT_ENSEMBLE_WEIGHTS. Overrides --grid-search when given. Only '
+                                  'affects title/character — see --situation-weights for situation.')
+        parser.add_argument('--situation-weights', type=str, default=None,
+                             help="JSON dict of source->weight used for situation ONLY, e.g. "
+                                  '\'{"tagger": 10, "artist_history": 1, "tag_similarity": 1}\' — situation '
+                                  "is scored separately from title/character (see "
+                                  "views.DEFAULT_SITUATION_WEIGHTS) and is NOT swept by --grid-search, "
+                                  "since the tagger's own composition/rating heuristic is trusted directly "
+                                  "rather than blended/tuned against DB priors. Default: "
+                                  "DEFAULT_SITUATION_WEIGHTS.")
         parser.add_argument('--grid-search', action='store_true',
                              help='Sweep --grid-values over the 6 main weight dimensions instead of '
                                   'scoring a single vector')
@@ -143,6 +173,11 @@ class Command(BaseCommand):
 
         self.stdout.write(f'\n{len(cached)} items ready (model={model_choice}, external={external}, seed={seed})\n')
 
+        situation_weights = views.DEFAULT_SITUATION_WEIGHTS
+        if options['situation_weights']:
+            situation_weights = json.loads(options['situation_weights'])
+        self.stdout.write(f'situation_weights (fixed, not swept): {situation_weights}\n')
+
         def expand(partial_weights):
             w = dict(views.DEFAULT_ENSEMBLE_WEIGHTS)
             w.update(partial_weights)
@@ -152,11 +187,15 @@ class Command(BaseCommand):
             return w
 
         def score_weights(weights):
+            # title/character use the (possibly swept) `weights`; situation
+            # always uses the separate, fixed situation_weights — see
+            # DEFAULT_SITUATION_WEIGHTS's docstring for why it isn't tuned
+            # alongside the other two fields.
             title_hits = char_hits = situation_hits = 0
             for item, collected in cached:
                 title_vals, _ = views._combine_candidates(collected['title'], weights, min_score, top_k=1)
                 char_vals, _ = views._combine_candidates(collected['character'], weights, min_score, top_k=1)
-                situ_vals, _ = views._combine_candidates(collected['situation'], weights, min_score, top_k=1)
+                situ_vals, _ = views._combine_candidates(collected['situation'], situation_weights, min_score, top_k=1)
                 if title_vals and title_vals[0] in (item.titles or []):
                     title_hits += 1
                 if char_vals and char_vals[0] in (item.characters or []):

@@ -989,6 +989,21 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
     'classifier': 3.0,
 }
 
+# Situation gets its OWN weight scheme, not DEFAULT_ENSEMBLE_WEIGHTS — the
+# tagger's own composition/rating heuristic (see tagger._situation_hint:
+# R18 from `rating` takes priority, then 1girl+solo -> SOLO, a 3+ count tag
+# or "multiple girls" -> MULTIPLE) is a direct read of the image itself and
+# is considered reliable enough on its own that it isn't worth blending
+# with the DB-derived priors the way title/character are — those exist to
+# cover for the tagger being unavailable/undecided (no image, or a
+# genuinely ambiguous 2-person composition tagger.py deliberately leaves
+# unmapped), not to outvote it when it HAS an answer.
+DEFAULT_SITUATION_WEIGHTS = {
+    'tagger': 10.0,
+    'artist_history': 1.0,
+    'tag_similarity': 1.0,
+}
+
 
 def _combine_candidates(entries, weights, min_score=0.0, top_k=1):
     """entries: [{'value','source','confidence'}, ...] (one field's worth,
