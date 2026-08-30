@@ -41,6 +41,15 @@ COPY requirements.txt /app/requirements.txt
 RUN grep -iEv '^\s*playwright\s*$' /app/requirements.txt > /app/requirements.nodeps.txt \
 	&& pip install --no-cache-dir -r /app/requirements.nodeps.txt
 
+# dghs-imgutils and pyrfc6266, installed WITHOUT letting pip pull in/check
+# their own declared dependencies (requirements.txt above already installs
+# everything they actually need — see the comments there for why each is
+# skipped this way: bchlib has no aarch64/Pi4 wheel and isn't needed by
+# anything item.tagger imports; pyrfc6266's declared pyparsing~=3.0.7
+# conflicts on paper with the pyparsing>=3.1 this image also needs, despite
+# working fine against it in practice).
+RUN pip install --no-cache-dir --no-deps dghs-imgutils pyrfc6266
+
 # Optional, heavy 'timm' tagger backend (see item/tagger.py's HAVE_TIMM /
 # TIMM_MODEL_REPO) — off by default since torch alone is several hundred MB
 # and the Pi4 deployment target may not want it at all. Enable per-deployment
@@ -48,7 +57,7 @@ RUN grep -iEv '^\s*playwright\s*$' /app/requirements.txt > /app/requirements.nod
 # `web` service `build.args`, driven by the .env var of the same name).
 # Without it, item.tagger.HAVE_TIMM is False and selecting that model in the
 # UI returns a clear "not available" error rather than crashing.
-ARG INSTALL_TIMM_TAGGER=1
+ARG INSTALL_TIMM_TAGGER=0
 COPY requirements-timm.txt /app/requirements-timm.txt
 RUN if [ "$INSTALL_TIMM_TAGGER" = "1" ]; then \
 		pip install --no-cache-dir -r /app/requirements-timm.txt; \
