@@ -60,6 +60,13 @@ class Command(BaseCommand):
                              help="Tagger backend to run: 'default' (small ONNX model, always available) "
                                   "or 'canary' (the larger 'timm' backend — needs INSTALL_TIMM_TAGGER=1 "
                                   "at build time). Same choice values as the UI's model dropdown.")
+        parser.add_argument('--debug-samples', type=int, default=0,
+                             help='Print this many items where the tagger predicted at least one '
+                                  'character (at the lowest threshold tested), showing raw vs '
+                                  'normalized predicted/DB names side by side — use this to see WHY '
+                                  'a prediction is/isn\'t counted as a match (e.g. language mismatch: '
+                                  'the tagger only ever names characters in English/romaji, so a DB '
+                                  'entry stored in Japanese can never match no matter the threshold).')
 
     def handle(self, *args, **options):
         import matplotlib
@@ -92,6 +99,8 @@ class Command(BaseCommand):
         )
 
         stats = {t: {'tp': 0, 'fp': 0, 'total_items': 0, 'items_with_hit': 0} for t in thresholds}
+        debug_budget = options['debug_samples']
+        lowest_threshold = thresholds[0]
 
         for i, item in enumerate(items):
             imgs = list(item.preview_images.order_by('order'))
@@ -117,6 +126,19 @@ class Command(BaseCommand):
             # ("Hakurei Reimu"). Comparing raw strings would call almost
             # every correct match a miss, regardless of threshold.
             true_characters = {_normalize_char_name(c) for c in (item.characters or [])}
+
+            if debug_budget > 0:
+                raw_predicted = [c['name'] for c in per_threshold[lowest_threshold]['characters']]
+                if raw_predicted:
+                    self.stdout.write(
+                        f'--- Item {item.id} (threshold={lowest_threshold}) ---\n'
+                        f'  predicted (raw):        {raw_predicted}\n'
+                        f'  predicted (normalized): {sorted(_normalize_char_name(n) for n in raw_predicted)}\n'
+                        f'  db characters (raw):        {list(item.characters or [])}\n'
+                        f'  db characters (normalized): {sorted(true_characters)}'
+                    )
+                    debug_budget -= 1
+
             for t in thresholds:
                 predicted = {_normalize_char_name(c['name']) for c in per_threshold[t]['characters']}
                 tp = predicted & true_characters
