@@ -33,9 +33,9 @@ from unittest.mock import patch
 
 from django.core.management.base import BaseCommand
 
-from item.models import Item
 from item import tagger
 from item import views
+from item.management.commands._eval_utils import get_evaluation_items
 
 
 class Command(BaseCommand):
@@ -47,6 +47,10 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--limit', type=int, default=50,
                              help='Max number of ground-truth items to evaluate (default 50)')
+        parser.add_argument('--seed', type=int, default=None,
+                             help='Fix which ground-truth items are sampled, so a --model default run '
+                                  'and a --model canary run compare the SAME items instead of two '
+                                  'independent random subsets (default: random each run)')
         parser.add_argument('--output', type=str, default=None,
                              help='Output chart path (default: full_pipeline_evaluation_<model>.png)')
         parser.add_argument('--counts', type=str, default='3,5,8,10,12,15,20,25,30,40,50',
@@ -67,6 +71,7 @@ class Command(BaseCommand):
 
         counts = sorted({int(x) for x in options['counts'].split(',') if x.strip()})
         limit = options['limit']
+        seed = options['seed']
         external = options['external']
         model_choice = options['model']
         tagger_backend = 'timm' if model_choice == 'canary' else 'onnx'
@@ -78,13 +83,7 @@ class Command(BaseCommand):
             return
         output_path = options['output'] or f'full_pipeline_evaluation_{model_choice}.png'
 
-        candidates = (
-            Item.objects
-            .exclude(titles=[]).exclude(titles__isnull=True)
-            .exclude(characters=[]).exclude(characters__isnull=True)
-            .exclude(situation='').exclude(situation__isnull=True)
-            .order_by('?')[:limit]
-        )
+        candidates = get_evaluation_items(limit, seed)
 
         evaluated = []  # (real_item, image_bytes) — real_item's own fields are never touched
         for item in candidates:
@@ -105,7 +104,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f'Evaluating {len(evaluated)} items across tag counts: {counts} '
-            f'(model={model_choice}, external={external})'
+            f'(model={model_choice}, external={external}, seed={seed})'
         )
 
         hits = {n: {'title': 0, 'char': 0, 'situation': 0} for n in counts}
@@ -163,7 +162,11 @@ class Command(BaseCommand):
         plt.axvline(15, color='gray', linestyle='--', alpha=0.5, label='current cap (15)')
         plt.xlabel('Tag count fed to matching (N)')
         plt.ylabel('Match rate (%)')
-        plt.title(f'Full pipeline: tag count vs match rate (model={model_choice}, n={total} items, external={external})')
+        seed_label = f', seed={seed}' if seed is not None else ''
+        plt.title(
+            f'Full pipeline: tag count vs match rate '
+            f'(model={model_choice}, n={total} items, external={external}{seed_label})'
+        )
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 100)

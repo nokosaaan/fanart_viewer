@@ -253,7 +253,7 @@ def _tags_from_predictions(preds, tag_names, rating_idx, general_idx, character_
     }
 
 
-def _suggest_tags_onnx(image_bytes, general_threshold, character_threshold, general_limit, model_repo):
+def _raw_predict_onnx(image_bytes, model_repo):
     repo = model_repo or os.environ.get('TAGGER_MODEL_REPO') or DEFAULT_MODEL_REPO
     state = _load_onnx(repo)
     batch = _prepare_image_onnx(image_bytes, state['target_size'])
@@ -262,11 +262,7 @@ def _suggest_tags_onnx(image_bytes, general_threshold, character_threshold, gene
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
     preds = session.run([output_name], {input_name: batch})[0][0]
-
-    return _tags_from_predictions(
-        preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx'],
-        general_threshold, character_threshold, general_limit,
-    )
+    return preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx']
 
 
 def _load_timm(repo):
@@ -353,7 +349,7 @@ def _prepare_image_timm(image_bytes, transform):
     return tensor
 
 
-def _suggest_tags_timm(image_bytes, general_threshold, character_threshold, general_limit, model_repo):
+def _raw_predict_timm(image_bytes, model_repo):
     repo = model_repo or TIMM_MODEL_REPO
     state = _load_timm(repo)  # sets HF_HOME and imports torch/timm as a side effect, before this next import
     import torch
@@ -362,17 +358,28 @@ def _suggest_tags_timm(image_bytes, general_threshold, character_threshold, gene
     with torch.inference_mode():
         logits = state['model'](tensor)
         preds = torch.sigmoid(logits).squeeze(0).numpy()
+    return preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx']
 
-    return _tags_from_predictions(
-        preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx'],
-        general_threshold, character_threshold, general_limit,
-    )
+
+def _raw_predict(image_bytes, model_repo, backend):
+    """The forward pass alone, before any threshold is applied — split out
+    from _tags_from_predictions so a threshold sweep (see
+    suggest_tags_multi_threshold) can run inference ONCE per image/crop and
+    then cheaply re-filter the same per-tag probabilities at many different
+    character_threshold values, instead of re-running the model per
+    threshold for no reason (the forward pass doesn't depend on the
+    threshold at all)."""
+    if backend == 'timm':
+        return _raw_predict_timm(image_bytes, model_repo)
+    return _raw_predict_onnx(image_bytes, model_repo)
 
 
 def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend):
-    if backend == 'timm':
-        return _suggest_tags_timm(image_bytes, general_threshold, character_threshold, general_limit, model_repo)
-    return _suggest_tags_onnx(image_bytes, general_threshold, character_threshold, general_limit, model_repo)
+    preds, tag_names, rating_idx, general_idx, character_idx = _raw_predict(image_bytes, model_repo, backend)
+    return _tags_from_predictions(
+        preds, tag_names, rating_idx, general_idx, character_idx,
+        general_threshold, character_threshold, general_limit,
+    )
 
 
 # Anime-art person detector (ONNX, ~11-25M params depending on level — same
@@ -487,3 +494,58 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
             result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
 
     return result
+
+
+def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_threshold=0.35,
+                                  general_limit=15, model_repo=None, backend='onnx'):
+    """Dev/analysis helper (see the evaluate_threshold management command) —
+    answers "what would suggest_tags() have returned at each of these
+    character_threshold values" without re-running inference once per
+    threshold. A threshold only decides which already-computed per-tag
+    probabilities pass a cutoff — it doesn't change the forward pass itself
+    — so this runs inference exactly once per image (plus once per detected
+    person crop, same as suggest_tags()) and re-applies each threshold to
+    that same cached prediction. Useful because whether the default
+    character_threshold=0.85 is well-calibrated depends on the backend's own
+    confidence distribution — a differently-trained model (e.g. 'timm') may
+    need a different cutoff than the default ONNX model was tuned for.
+
+    Returns {threshold: result_dict}, one entry per value in
+    `character_thresholds`, each result_dict shaped exactly like
+    suggest_tags()'s return value (mirrors its whole-image + multi-person-
+    crop merge logic exactly, just parameterized over threshold instead of
+    computed once).
+    """
+    whole_raw = _raw_predict(image_bytes, model_repo, backend)
+
+    try:
+        boxes = _detect_person_boxes(image_bytes)
+    except Exception:
+        logger.exception('Person detection failed — falling back to whole-image character tagging')
+        boxes = []
+
+    crop_raws = []
+    if len(boxes) >= 2:
+        for box in boxes[:_MAX_PERSON_CROPS]:
+            try:
+                crop_bytes = _crop_with_padding(image_bytes, box)
+                crop_raws.append(_raw_predict(crop_bytes, model_repo, backend))
+            except Exception:
+                logger.exception('Per-crop tagging failed for box %s', box)
+
+    results = {}
+    for threshold in character_thresholds:
+        result = _tags_from_predictions(*whole_raw, general_threshold, threshold, general_limit)
+        if crop_raws:
+            merged = {}
+            for crop_raw in crop_raws:
+                crop_result = _tags_from_predictions(*crop_raw, general_threshold, threshold, general_limit)
+                for c in crop_result['characters']:
+                    existing = merged.get(c['name'])
+                    if existing is None or c['score'] > existing['score']:
+                        merged[c['name']] = c
+            if merged:
+                result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
+        results[threshold] = result
+
+    return results

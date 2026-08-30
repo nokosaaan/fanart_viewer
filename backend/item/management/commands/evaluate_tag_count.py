@@ -22,9 +22,9 @@ Usage:
 """
 from django.core.management.base import BaseCommand
 
-from item.models import Item
 from item import tagger
 from item.views import _suggest_from_similar_tags
+from item.management.commands._eval_utils import get_evaluation_items
 
 
 class Command(BaseCommand):
@@ -36,6 +36,10 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--limit', type=int, default=50,
                              help='Max number of ground-truth items to evaluate (default 50)')
+        parser.add_argument('--seed', type=int, default=None,
+                             help='Fix which ground-truth items are sampled, so a --model default run '
+                                  'and a --model canary run compare the SAME items instead of two '
+                                  'independent random subsets (default: random each run)')
         parser.add_argument('--output', type=str, default=None,
                              help='Output chart path (default: tag_count_evaluation_<model>.png)')
         parser.add_argument('--counts', type=str, default='3,5,8,10,12,15,20,25,30,40,50',
@@ -52,6 +56,7 @@ class Command(BaseCommand):
 
         counts = sorted({int(x) for x in options['counts'].split(',') if x.strip()})
         limit = options['limit']
+        seed = options['seed']
         model_choice = options['model']
         tagger_backend = 'timm' if model_choice == 'canary' else 'onnx'
         if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
@@ -62,15 +67,7 @@ class Command(BaseCommand):
             return
         output_path = options['output'] or f'tag_count_evaluation_{model_choice}.png'
 
-        # Ground truth pool: fully-confirmed items only, so there's a real
-        # answer to check predictions against on all three fronts.
-        candidates = (
-            Item.objects
-            .exclude(titles=[]).exclude(titles__isnull=True)
-            .exclude(characters=[]).exclude(characters__isnull=True)
-            .exclude(situation='').exclude(situation__isnull=True)
-            .order_by('?')[:limit]
-        )
+        candidates = get_evaluation_items(limit, seed)
 
         evaluated = []  # (item, tags_full) — tags_full is the tagger's full confidence-ranked list
         for item in candidates:
@@ -99,7 +96,10 @@ class Command(BaseCommand):
             ))
             return
 
-        self.stdout.write(f'Evaluating {len(evaluated)} items across tag counts: {counts} (model={model_choice})')
+        self.stdout.write(
+            f'Evaluating {len(evaluated)} items across tag counts: {counts} '
+            f'(model={model_choice}, seed={seed})'
+        )
 
         title_rates, char_rates, situation_rates = [], [], []
         for n in counts:
@@ -130,7 +130,8 @@ class Command(BaseCommand):
         plt.axvline(15, color='gray', linestyle='--', alpha=0.5, label='current cap (15)')
         plt.xlabel('Tag count (N)')
         plt.ylabel('Match rate (%)')
-        plt.title(f'Tag count vs DB-similarity match rate (model={model_choice}, n={len(evaluated)} items)')
+        seed_label = f', seed={seed}' if seed is not None else ''
+        plt.title(f'Tag count vs DB-similarity match rate (model={model_choice}, n={len(evaluated)} items{seed_label})')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 100)
