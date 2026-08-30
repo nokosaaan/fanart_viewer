@@ -593,6 +593,210 @@ def _merge_unique(*lists):
     return out
 
 
+def _suggest_for_item(item, external=False, tagger_backend='onnx',
+                       general_threshold=0.35, character_threshold=0.85,
+                       tag_limit_for_matching=None):
+    """Suggest titles/characters/tags/situation for `item`. Extracted from
+    ItemViewSet.suggest_tags_view (the actual HTTP endpoint, now a thin
+    wrapper around this) so it can also be called directly against an
+    in-memory item — e.g. an unsaved clone with fields cleared — by
+    item.management.commands.evaluate_full_pipeline, which needs to run the
+    exact production suggestion logic offline without a live request.
+
+    Fields the item ALREADY has filled in are left alone entirely — not
+    even queried for — regardless of what DB history or the tagger might
+    otherwise offer for them. "Already filled" uses the exact same
+    emptiness check as the `incomplete` action's missing-field filter, so a
+    field this item isn't missing never gets touched here.
+
+    Among the fields actually wanted: the primary source is this item's
+    artist's OTHER already-tagged items — a pure DB lookup (see
+    _suggest_from_existing_data), near-instant, no image analysis. The
+    image tagger only runs as a fallback for whichever wanted fields DB
+    history didn't cover, since it's a ~5s+ CPU-bound operation per image
+    and the DB signal, when available, is usually both faster and more
+    precise (it's drawn from what this user already curated, not a model's
+    guess).
+
+    `tag_limit_for_matching`: test-only hook, never set by
+    suggest_tags_view (always None there = current, unbounded production
+    behavior). Truncates the tagger's own uncapped tag list to this many
+    entries before it's used for DB tag-similarity matching (see Priority 3
+    attempt 2 below) — lets evaluate_full_pipeline reproduce the "what if
+    the tagger's own tag count were limited to N" axis from
+    evaluate_tag_count, but against the full pipeline instead of the
+    tag-similarity matcher in isolation. general_threshold/general_limit
+    passed to the tagger itself are unrelated to this — general_limit only
+    ever bounds what's shown to the user as suggested `tags`, never what
+    feeds matching, in production or here.
+
+    Nothing here is written to the Item — saving still goes through
+    update_fields as normal.
+    """
+    want_titles = not (item.titles or [])
+    want_characters = not (item.characters or [])
+    want_tags = not (item.tags or [])
+    want_situation = not item.situation
+
+    titles, characters, tags, situation_hint = [], [], [], None
+    title_candidates = []  # low-confidence fallback — see _suggest_from_similar_tags's docstring
+    source = 'none'
+
+    def _remaining():
+        return (want_titles and not titles) or (want_characters and not characters) or (want_situation and not situation_hint)
+
+    # Priority 1: hashtags straight from the source post's own text
+    # (Item.description) — the artist's own words, not an inference.
+    # Tried before anything else for exactly that reason. Counts as
+    # 'db' in the `source` field returned below (same bucket as the
+    # other no-image-analysis DB lookups — the frontend only
+    # distinguishes "used the image model" from "didn't").
+    if want_titles or want_characters:
+        hashtag_hits = _match_hashtags(item.description)
+        if want_titles and hashtag_hits['titles']:
+            titles = _merge_unique(titles, hashtag_hits['titles'])
+            source = 'db'
+        if want_characters and hashtag_hits['characters']:
+            characters = [{'name': c, 'score': None, 'matched': True, 'source': 'hashtag'} for c in hashtag_hits['characters']]
+            source = 'db'
+
+    # Priority 2: this item's artist's OTHER already-tagged items — a
+    # pure DB lookup, near-instant, no image analysis (most artists
+    # repeatedly draw a small set of series/characters). Skipped
+    # entirely if hashtags above already resolved everything wanted.
+    db = _suggest_from_existing_data(item) if _remaining() else None
+    if db:
+        if want_titles and not titles:
+            titles = list(db['titles'])
+            title_candidates = _merge_unique(title_candidates, db['title_candidates'])
+        if want_characters and not characters and db['characters']:
+            characters = [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
+        if want_situation and not situation_hint:
+            situation_hint = db['situation_hint']
+        if source == 'none' and (titles or characters):
+            source = 'db'
+
+    def _merge_tag_similarity_result(sim):
+        """Folds a _suggest_from_similar_tags() result into
+        titles/characters/situation_hint/title_candidates (only for
+        fields still wanted and not already resolved above), and
+        records whether it actually contributed anything.
+        """
+        nonlocal titles, characters, situation_hint, title_candidates, source
+        contributed = False
+        if want_titles:
+            if sim['titles']:
+                titles = _merge_unique(titles, sim['titles'])
+                contributed = True
+            elif not titles:
+                title_candidates = _merge_unique(title_candidates, sim['title_candidates'])
+        if want_characters and not characters and sim['characters']:
+            characters = [{'name': c, 'score': None, 'matched': True, 'source': 'tag'} for c in sim['characters']]
+            contributed = True
+        if want_situation and not situation_hint and sim['situation_hint']:
+            situation_hint = sim['situation_hint']
+            contributed = True
+        if contributed:
+            if source == 'none':
+                source = 'db'
+            elif source == 'tagger':
+                source = 'db+tagger'
+            # already 'db' or 'db+tagger' — no change needed
+
+    # Priority 3: tag-based similarity, attempt 1 — with whatever tags
+    # this item already has (if any), before ever invoking the tagger.
+    # Complements the artist-based prior above: it catches "different
+    # artist, same character" cases that "this artist's other work"
+    # can never see.
+    if not want_tags and _remaining():
+        _merge_tag_similarity_result(_suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk))
+
+    needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
+    if needs_tagger and HAVE_TAGGER:
+        imgs = list(item.preview_images.order_by('order'))
+        if imgs:
+            image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
+        elif item.preview_data:
+            image_bytes = bytes(item.preview_data)
+        else:
+            image_bytes = None
+
+        if image_bytes is not None:
+            try:
+                tagger_result = tagger.suggest_tags(
+                    image_bytes,
+                    general_threshold=general_threshold,
+                    character_threshold=character_threshold,
+                    backend=tagger_backend,
+                )
+            except Exception:
+                logging.exception('Tagger inference failed for item %s', item.id)
+                tagger_result = None
+
+            if tagger_result is not None:
+                source = 'tagger' if source == 'none' else 'db+tagger'
+                if want_characters and not characters:
+                    matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
+                    characters = matched_chars
+                    if want_titles:
+                        titles = _merge_unique(titles, tagger_titles)
+
+                    # A character the tagger recognized but that matches
+                    # nothing in this app's own vocabulary yet — treated
+                    # as reliable (it's the model's own identification,
+                    # not a guess) and reverse-looked-up against Danbooru
+                    # to name a genuinely new title, rather than only
+                    # ever being able to suggest titles already seen
+                    # locally. Opt-in only (external flag) since this is
+                    # the one network call in the whole pipeline.
+                    if external and want_titles:
+                        for c in matched_chars:
+                            if titles:
+                                break  # got an answer — no need to keep querying Danbooru
+                            if c.get('matched'):
+                                continue
+                            looked_up = _resolve_title_from_character(c['name'])
+                            if looked_up:
+                                titles = _merge_unique(titles, [looked_up])
+                                source = f'{source}+danbooru' if 'danbooru' not in source else source
+                if want_tags:
+                    tags = tagger_result['tags']
+                if want_situation and not situation_hint:
+                    situation_hint = tagger_result['situation_hint']
+
+                # Tag-based similarity, attempt 2: now that this item has
+                # freshly-inferred tags (uncapped — general_limit only
+                # bounds what's shown as suggested `tags`, not what's used
+                # here for matching), retry whatever's still unresolved.
+                if _remaining():
+                    tags_for_matching = tagger_result['tags_full']
+                    if tag_limit_for_matching is not None:
+                        tags_for_matching = tags_for_matching[:tag_limit_for_matching]
+                    _merge_tag_similarity_result(_suggest_from_similar_tags(tags_for_matching, item.description, exclude_pk=item.pk))
+
+    # Last resort: nothing above (hashtags, DB history, tag similarity,
+    # tagger+CharacterGroup match, Danbooru reverse lookup) could name an
+    # existing title for this item. Rather than leaving titles empty,
+    # check the source post's own text for an explicit "this is an
+    # original character" signal — purely local (no network call),
+    # independent of the `external` flag.
+    if want_titles and not titles and _looks_like_oc(item.description):
+        titles = ['OC']
+
+    if titles:
+        title_candidates = []  # a confident answer supersedes the low-confidence list
+
+    return {
+        'characters': characters,
+        'tags': tags,
+        'situation_hint': situation_hint,
+        'suggested_titles': titles,
+        'title_candidates': title_candidates,
+        'source': source,
+        'sample_size': db['sample_size'] if db else 0,
+    }
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('-id')
@@ -1558,208 +1762,33 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='suggest_tags')
     def suggest_tags_view(self, request, pk=None):
-        """Suggest titles/characters/tags/situation for this item.
-
-        Fields the item ALREADY has filled in are left alone entirely — not
-        even queried for — regardless of what DB history or the tagger
-        might otherwise offer for them. "Already filled" uses the exact
-        same emptiness check as the `incomplete` action's missing-field
-        filter, so a field this item isn't missing never gets touched here.
-
-        Among the fields actually wanted: the primary source is this item's
-        artist's OTHER already-tagged items — a pure DB lookup (see
-        _suggest_from_existing_data), near-instant, no image analysis. The
-        image tagger only runs as a fallback for whichever wanted fields DB
-        history didn't cover, since it's a ~5s+ CPU-bound operation per
-        image and the DB signal, when available, is usually both faster and
-        more precise (it's drawn from what this user already curated, not a
-        model's guess).
-
-        Nothing here is written to the Item — saving still goes through
-        update_fields as normal.
+        """Suggest titles/characters/tags/situation for this item — a thin
+        HTTP wrapper around _suggest_for_item (module-level function below),
+        which holds the actual logic and is also called directly by
+        item.management.commands.evaluate_full_pipeline for offline accuracy
+        evaluation against an in-memory (never-saved) item, without going
+        through a live request.
         """
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
-        # Opt-in only: the Danbooru reverse-lookup below is the one part of
-        # this pipeline that makes an external network call. Everything else
-        # (tagger inference, DB history, tag similarity) stays fully local
-        # regardless of this flag.
         external = bool(data.get('external'))
-        # Tagger backend, chosen per-request — see tagger.py's module
-        # docstring. 'timm' needs torch/timm installed (opt-in build, see
-        # requirements-timm.txt); reject up front with a clear message
-        # rather than silently falling through to "no suggestion found".
         tagger_backend = 'timm' if data.get('model') == 'timm' else 'onnx'
         if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
             return Response(
                 {'detail': 'この最新モデル(timm)はサーバーにインストールされていません。管理者に環境構築を依頼してください。'},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
-        want_titles = not (item.titles or [])
-        want_characters = not (item.characters or [])
-        want_tags = not (item.tags or [])
-        want_situation = not item.situation
+        try:
+            general_threshold = float(data.get('general_threshold', 0.35))
+            character_threshold = float(data.get('character_threshold', 0.85))
+        except (TypeError, ValueError):
+            general_threshold, character_threshold = 0.35, 0.85
 
-        titles, characters, tags, situation_hint = [], [], [], None
-        title_candidates = []  # low-confidence fallback — see _suggest_from_similar_tags's docstring
-        source = 'none'
-
-        def _remaining():
-            return (want_titles and not titles) or (want_characters and not characters) or (want_situation and not situation_hint)
-
-        # Priority 1: hashtags straight from the source post's own text
-        # (Item.description) — the artist's own words, not an inference.
-        # Tried before anything else for exactly that reason. Counts as
-        # 'db' in the `source` field returned below (same bucket as the
-        # other no-image-analysis DB lookups — the frontend only
-        # distinguishes "used the image model" from "didn't").
-        if want_titles or want_characters:
-            hashtag_hits = _match_hashtags(item.description)
-            if want_titles and hashtag_hits['titles']:
-                titles = _merge_unique(titles, hashtag_hits['titles'])
-                source = 'db'
-            if want_characters and hashtag_hits['characters']:
-                characters = [{'name': c, 'score': None, 'matched': True, 'source': 'hashtag'} for c in hashtag_hits['characters']]
-                source = 'db'
-
-        # Priority 2: this item's artist's OTHER already-tagged items — a
-        # pure DB lookup, near-instant, no image analysis (most artists
-        # repeatedly draw a small set of series/characters). Skipped
-        # entirely if hashtags above already resolved everything wanted.
-        db = _suggest_from_existing_data(item) if _remaining() else None
-        if db:
-            if want_titles and not titles:
-                titles = list(db['titles'])
-                title_candidates = _merge_unique(title_candidates, db['title_candidates'])
-            if want_characters and not characters and db['characters']:
-                characters = [{'name': c, 'score': None, 'matched': True, 'source': 'db'} for c in db['characters']]
-            if want_situation and not situation_hint:
-                situation_hint = db['situation_hint']
-            if source == 'none' and (titles or characters):
-                source = 'db'
-
-        def _merge_tag_similarity_result(sim):
-            """Folds a _suggest_from_similar_tags() result into
-            titles/characters/situation_hint/title_candidates (only for
-            fields still wanted and not already resolved above), and
-            records whether it actually contributed anything.
-            """
-            nonlocal titles, characters, situation_hint, title_candidates, source
-            contributed = False
-            if want_titles:
-                if sim['titles']:
-                    titles = _merge_unique(titles, sim['titles'])
-                    contributed = True
-                elif not titles:
-                    title_candidates = _merge_unique(title_candidates, sim['title_candidates'])
-            if want_characters and not characters and sim['characters']:
-                characters = [{'name': c, 'score': None, 'matched': True, 'source': 'tag'} for c in sim['characters']]
-                contributed = True
-            if want_situation and not situation_hint and sim['situation_hint']:
-                situation_hint = sim['situation_hint']
-                contributed = True
-            if contributed:
-                if source == 'none':
-                    source = 'db'
-                elif source == 'tagger':
-                    source = 'db+tagger'
-                # already 'db' or 'db+tagger' — no change needed
-
-        # Priority 3: tag-based similarity, attempt 1 — with whatever tags
-        # this item already has (if any), before ever invoking the tagger.
-        # Complements the artist-based prior above: it catches "different
-        # artist, same character" cases that "this artist's other work"
-        # can never see.
-        if not want_tags and _remaining():
-            _merge_tag_similarity_result(_suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk))
-
-        needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
-        if needs_tagger and HAVE_TAGGER:
-            imgs = list(item.preview_images.order_by('order'))
-            if imgs:
-                image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
-            elif item.preview_data:
-                image_bytes = bytes(item.preview_data)
-            else:
-                image_bytes = None
-
-            if image_bytes is not None:
-                try:
-                    general_threshold = float(data.get('general_threshold', 0.35))
-                    character_threshold = float(data.get('character_threshold', 0.85))
-                except (TypeError, ValueError):
-                    general_threshold, character_threshold = 0.35, 0.85
-
-                try:
-                    tagger_result = tagger.suggest_tags(
-                        image_bytes,
-                        general_threshold=general_threshold,
-                        character_threshold=character_threshold,
-                        backend=tagger_backend,
-                    )
-                except Exception:
-                    logging.exception('Tagger inference failed for item %s', item.id)
-                    tagger_result = None
-
-                if tagger_result is not None:
-                    source = 'tagger' if source == 'none' else 'db+tagger'
-                    if want_characters and not characters:
-                        matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
-                        characters = matched_chars
-                        if want_titles:
-                            titles = _merge_unique(titles, tagger_titles)
-
-                        # A character the tagger recognized but that matches
-                        # nothing in this app's own vocabulary yet — treated
-                        # as reliable (it's the model's own identification,
-                        # not a guess) and reverse-looked-up against Danbooru
-                        # to name a genuinely new title, rather than only
-                        # ever being able to suggest titles already seen
-                        # locally. Opt-in only (external flag) since this is
-                        # the one network call in the whole pipeline.
-                        if external and want_titles:
-                            for c in matched_chars:
-                                if titles:
-                                    break  # got an answer — no need to keep querying Danbooru
-                                if c.get('matched'):
-                                    continue
-                                looked_up = _resolve_title_from_character(c['name'])
-                                if looked_up:
-                                    titles = _merge_unique(titles, [looked_up])
-                                    source = f'{source}+danbooru' if 'danbooru' not in source else source
-                    if want_tags:
-                        tags = tagger_result['tags']
-                    if want_situation and not situation_hint:
-                        situation_hint = tagger_result['situation_hint']
-
-                    # Tag-based similarity, attempt 2: now that this item has
-                    # freshly-inferred tags (uncapped — general_limit only
-                    # bounds what's shown as suggested `tags`, not what's used
-                    # here for matching), retry whatever's still unresolved.
-                    if _remaining():
-                        _merge_tag_similarity_result(_suggest_from_similar_tags(tagger_result['tags_full'], item.description, exclude_pk=item.pk))
-
-        # Last resort: nothing above (hashtags, DB history, tag similarity,
-        # tagger+CharacterGroup match, Danbooru reverse lookup) could name an
-        # existing title for this item. Rather than leaving titles empty,
-        # check the source post's own text for an explicit "this is an
-        # original character" signal — purely local (no network call),
-        # independent of the `external` flag.
-        if want_titles and not titles and _looks_like_oc(item.description):
-            titles = ['OC']
-
-        if titles:
-            title_candidates = []  # a confident answer supersedes the low-confidence list
-
-        return Response({
-            'characters': characters,
-            'tags': tags,
-            'situation_hint': situation_hint,
-            'suggested_titles': titles,
-            'title_candidates': title_candidates,
-            'source': source,
-            'sample_size': db['sample_size'] if db else 0,
-        })
+        result = _suggest_for_item(
+            item, external=external, tagger_backend=tagger_backend,
+            general_threshold=general_threshold, character_threshold=character_threshold,
+        )
+        return Response(result)
 
     @action(detail=True, methods=['post'], url_path='update_fields')
     def update_fields(self, request, pk=None):

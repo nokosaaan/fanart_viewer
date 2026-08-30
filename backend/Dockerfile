@@ -57,7 +57,7 @@ RUN pip install --no-cache-dir --no-deps dghs-imgutils pyrfc6266
 # `web` service `build.args`, driven by the .env var of the same name).
 # Without it, item.tagger.HAVE_TIMM is False and selecting that model in the
 # UI returns a clear "not available" error rather than crashing.
-ARG INSTALL_TIMM_TAGGER=0
+ARG INSTALL_TIMM_TAGGER=1
 COPY requirements-timm.txt /app/requirements-timm.txt
 RUN if [ "$INSTALL_TIMM_TAGGER" = "1" ]; then \
 		pip install --no-cache-dir -r /app/requirements-timm.txt; \

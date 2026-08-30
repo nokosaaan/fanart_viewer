@@ -17,6 +17,8 @@ tagger's own ranking doesn't change; only how much of it gets cut off).
 Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py evaluate_tag_count
   docker compose -f docker-compose.prod.yml exec web python manage.py evaluate_tag_count --limit 100 --counts 5,10,15,20,30
+  # Compare tagger backends (needs INSTALL_TIMM_TAGGER=1 for --model canary):
+  docker compose -f docker-compose.prod.yml exec web python manage.py evaluate_tag_count --model canary
 """
 from django.core.management.base import BaseCommand
 
@@ -34,10 +36,14 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--limit', type=int, default=50,
                              help='Max number of ground-truth items to evaluate (default 50)')
-        parser.add_argument('--output', type=str, default='tag_count_evaluation.png',
-                             help='Output chart path (default tag_count_evaluation.png)')
+        parser.add_argument('--output', type=str, default=None,
+                             help='Output chart path (default: tag_count_evaluation_<model>.png)')
         parser.add_argument('--counts', type=str, default='3,5,8,10,12,15,20,25,30,40,50',
                              help='Comma-separated tag-count values to test')
+        parser.add_argument('--model', choices=['default', 'canary'], default='default',
+                             help="Tagger backend to run: 'default' (small ONNX model, always available) "
+                                  "or 'canary' (the larger 'timm' backend — needs INSTALL_TIMM_TAGGER=1 "
+                                  "at build time). Same choice values as the UI's model dropdown.")
 
     def handle(self, *args, **options):
         import matplotlib
@@ -46,6 +52,15 @@ class Command(BaseCommand):
 
         counts = sorted({int(x) for x in options['counts'].split(',') if x.strip()})
         limit = options['limit']
+        model_choice = options['model']
+        tagger_backend = 'timm' if model_choice == 'canary' else 'onnx'
+        if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
+            self.stderr.write(self.style.ERROR(
+                "--model canary requires the 'timm' backend, which isn't installed on this server "
+                '(see requirements-timm.txt / the INSTALL_TIMM_TAGGER build arg).'
+            ))
+            return
+        output_path = options['output'] or f'tag_count_evaluation_{model_choice}.png'
 
         # Ground truth pool: fully-confirmed items only, so there's a real
         # answer to check predictions against on all three fronts.
@@ -70,7 +85,7 @@ class Command(BaseCommand):
             try:
                 # general_limit only bounds the returned `tags` field, not
                 # `tags_full` (already uncapped) — passed high anyway for clarity.
-                result = tagger.suggest_tags(image_bytes, general_limit=9999, backend='onnx')
+                result = tagger.suggest_tags(image_bytes, general_limit=9999, backend=tagger_backend)
             except Exception as e:
                 self.stderr.write(f'Item {item.id}: tagger failed ({e}), skipping')
                 continue
@@ -84,7 +99,7 @@ class Command(BaseCommand):
             ))
             return
 
-        self.stdout.write(f'Evaluating {len(evaluated)} items across tag counts: {counts}')
+        self.stdout.write(f'Evaluating {len(evaluated)} items across tag counts: {counts} (model={model_choice})')
 
         title_rates, char_rates, situation_rates = [], [], []
         for n in counts:
@@ -115,10 +130,10 @@ class Command(BaseCommand):
         plt.axvline(15, color='gray', linestyle='--', alpha=0.5, label='current cap (15)')
         plt.xlabel('Tag count (N)')
         plt.ylabel('Match rate (%)')
-        plt.title(f'Tag count vs DB-similarity match rate (n={len(evaluated)} items)')
+        plt.title(f'Tag count vs DB-similarity match rate (model={model_choice}, n={len(evaluated)} items)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 100)
         plt.tight_layout()
-        plt.savefig(options['output'])
-        self.stdout.write(self.style.SUCCESS(f"Chart saved to {options['output']}"))
+        plt.savefig(output_path)
+        self.stdout.write(self.style.SUCCESS(f"Chart saved to {output_path}"))
