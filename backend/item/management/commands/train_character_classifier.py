@@ -26,27 +26,43 @@ follow-up once this simpler version's accuracy is validated.
 A character is only included if it has at least --min-images *single-
 character* images total (across however many items that character appears
 alone in) — see the `character_image_stats` command to check this ahead of
-time; anything below the bar isn't included in the trained classes at all
-(those characters keep relying on the existing tag-similarity/artist-
-history/hashtag fallbacks, same as before this command existed).
+time. Use --exclude for a character that technically has enough images but
+isn't actually a single visually-coherent class — e.g. a catch-all bucket
+like "any OC with white hair" or "any image featuring the full cast of
+title X" isn't one character, and training on it just teaches the
+classifier to detect the confound (hair color, or "multiple people
+present") instead of an identity.
+
+THE EXPENSIVE PART is feature extraction (running the tagger's forward pass
+once per image) — the classifier fit itself is fast. This command caches
+every extracted (item_id, character, feature vector) to --feature-cache
+after extraction, so a later run that only changes --exclude/--min-images/
+--test-size (e.g. to drop a bad label you noticed in the first report) can
+reuse it via --use-cache instead of re-extracting from scratch. A cache is
+only valid for the --backend it was extracted with; extracting is still
+needed again after adding new single-character items to the DB, or to
+widen the character set below the cache's original --min-images floor
+(cache stores whatever this run's --min-images left in, not a fixed lower
+floor — a much lower --min-images used only for the cache-generating run
+maximizes future reuse, at the cost of extracting a few more long-tail
+images that run).
 
 This is a TRAINING script only — it saves a classifier artifact (joblib
 file) but does NOT wire it into the suggestion pipeline (item.tagger /
 item.views._suggest_for_item). That integration is a deliberate follow-up
 once this command's holdout accuracy has actually been reviewed.
 
-Feature extraction runs the tagger's forward pass once per image, same cost
-as a normal suggest_tags call (~5s/image on a modern x86 CPU for the
-default ONNX backend per tagger.py's own docstring — noticeably slower on a
-Pi4). With potentially thousands of qualifying images, budget realistic
-wall-clock time (or run this on stronger hardware than the Pi4 deployment
-target, if available) accordingly — that tradeoff is for whoever runs this
-to decide, since it's independent of the Pi4 inference-time cost the rest
-of this app is tuned around.
-
 Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier --min-images 20 --backend canary
+
+  # First run: extract + cache, excluding known-bad labels
+  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
+      --exclude white,牢屋敷メンバー --feature-cache /app/data/tagger/char_features_onnx.joblib
+
+  # Later: tweak and refit WITHOUT re-extracting
+  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
+      --use-cache /app/data/tagger/char_features_onnx.joblib --exclude white,牢屋敷メンバー,ユキ
 """
 import os
 import time
@@ -70,6 +86,10 @@ class Command(BaseCommand):
         parser.add_argument('--min-images', type=int, default=15,
                              help='Minimum single-character images a character needs to be included '
                                   '(default 15 — see character_image_stats to check counts first)')
+        parser.add_argument('--exclude', type=str, default='',
+                             help='Comma-separated character names to drop entirely, even if they clear '
+                                  '--min-images — for labels that are not one visually-coherent character '
+                                  '(a catch-all OC bucket, a "whole cast" group tag, etc.)')
         parser.add_argument('--backend', choices=['onnx', 'canary'], default='onnx',
                              help="Tagger backend to use as the frozen feature extractor: 'onnx' (small, "
                                   "always available) or 'canary' (needs INSTALL_TIMM_TAGGER=1). Whichever "
@@ -82,6 +102,14 @@ class Command(BaseCommand):
         parser.add_argument('--output', type=str, default=None,
                              help='Where to save the trained classifier (.joblib). Default: '
                                   "character_classifier_<backend>.joblib under the tagger's own cache dir.")
+        parser.add_argument('--feature-cache', type=str, default=None,
+                             help='Where to save extracted (item_id, character, feature) data after '
+                                  "extraction, for reuse by a later --use-cache run. Default: "
+                                  "character_features_<backend>.joblib under the tagger's own cache dir.")
+        parser.add_argument('--use-cache', type=str, default=None,
+                             help='Path to a previously-saved --feature-cache file — skip DB scanning and '
+                                  'feature extraction entirely and refit straight from these cached '
+                                  'features (still applies --exclude/--min-images as filters first).')
 
     def handle(self, *args, **options):
         try:
@@ -94,6 +122,7 @@ class Command(BaseCommand):
             return
 
         min_images = options['min_images']
+        exclude = {c.strip() for c in options['exclude'].split(',') if c.strip()}
         backend_choice = options['backend']
         tagger_backend = 'timm' if backend_choice == 'canary' else 'onnx'
         if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
@@ -103,7 +132,97 @@ class Command(BaseCommand):
             ))
             return
 
-        # 1. Collect every single-character item's image(s), grouped by character.
+        general_tag_names = None
+        if options['use_cache']:
+            self.stdout.write(f"Loading cached features from {options['use_cache']}...")
+            cache = joblib.load(options['use_cache'])
+            if cache.get('backend') != tagger_backend:
+                self.stderr.write(self.style.ERROR(
+                    f"Cache was extracted with backend={cache.get('backend')!r}, but --backend={backend_choice!r} "
+                    f"(tagger_backend={tagger_backend!r}) was requested — features aren't compatible across backends."
+                ))
+                return
+            raw_rows = cache['rows']  # [(item_id, character, feature_vector), ...]
+            general_tag_names = cache['general_tag_names']
+            self.stdout.write(f'Loaded {len(raw_rows)} cached (item, character, feature) rows.\n')
+        else:
+            raw_rows, general_tag_names = self._extract_features(min_images, tagger_backend)
+            if raw_rows is None:
+                return
+            feature_cache_path = options['feature_cache'] or os.path.join(
+                tagger._data_dir(), f'character_features_{backend_choice}.joblib',
+            )
+            joblib.dump({'rows': raw_rows, 'backend': tagger_backend, 'general_tag_names': general_tag_names},
+                        feature_cache_path)
+            self.stdout.write(self.style.SUCCESS(
+                f'\nCached {len(raw_rows)} extracted features to {feature_cache_path} '
+                '(reuse with --use-cache to skip re-extraction next time).\n'
+            ))
+
+        # Apply --exclude and --min-images as filters on whatever rows we now have
+        # (freshly extracted or loaded from cache) — this is the cheap part, so
+        # changing these two never requires touching the tagger/DB again.
+        by_char = defaultdict(list)
+        for item_id, char, feature in raw_rows:
+            if char in exclude:
+                continue
+            by_char[char].append((item_id, feature))
+        eligible = {c: rows for c, rows in by_char.items() if len(rows) >= min_images}
+        if len(eligible) < 2:
+            self.stderr.write(self.style.ERROR(
+                f'Only {len(eligible)} character(s) have >= {min_images} images after applying --exclude — '
+                'need at least 2 distinct classes to train a classifier.'
+            ))
+            return
+
+        self.stdout.write(f'{len(eligible)} characters included after filtering (>= {min_images} images, '
+                           f'excluding {sorted(exclude) or "none"}):')
+        for c, rows in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
+            self.stdout.write(f'  {len(rows):>5}  {c}')
+
+        X = np.stack([f for rows in eligible.values() for _id, f in rows])
+        y = np.array([c for c, rows in eligible.items() for _row in rows])
+
+        # Train/holdout split, fit, report — class_weight='balanced' so the
+        # smallest included classes aren't drowned out by the largest ones.
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=options['test_size'], random_state=options['random_state'], stratify=y,
+        )
+        clf = LogisticRegression(max_iter=2000, class_weight='balanced')
+        clf.fit(X_train, y_train)
+
+        train_acc = clf.score(X_train, y_train)
+        test_acc = clf.score(X_test, y_test)
+        self.stdout.write(f'\nTrain accuracy: {train_acc:.1%}  |  Holdout accuracy: {test_acc:.1%}\n')
+        self.stdout.write('Per-class holdout report:')
+        self.stdout.write(classification_report(y_test, clf.predict(X_test), zero_division=0))
+
+        # Save — self-contained: records which backend/tag ordering produced
+        # these features, so a later inference-side integration doesn't have
+        # to assume anything matches.
+        output_path = options['output'] or os.path.join(
+            tagger._data_dir(), f'character_classifier_{backend_choice}.joblib',
+        )
+        joblib.dump({
+            'classifier': clf,
+            'classes': list(clf.classes_),
+            'backend': tagger_backend,
+            'general_tag_names': general_tag_names,
+            'min_images': min_images,
+            'excluded': sorted(exclude),
+            'train_accuracy': train_acc,
+            'holdout_accuracy': test_acc,
+        }, output_path)
+        self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
+
+    def _extract_features(self, min_images, tagger_backend):
+        """Scans the DB for single-character items and runs the tagger's
+        forward pass once per image. Returns (rows, general_tag_names) where
+        rows is [(item_id, character, feature_vector), ...] for every
+        character with >= min_images single-character images — deliberately
+        NOT filtered by --exclude here, so the resulting feature-cache file
+        stays maximally reusable for a later run with a different --exclude
+        list (excluding is a cheap post-filter, see handle())."""
         by_char = defaultdict(list)  # character name -> [(item_id, image_bytes), ...]
         items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
             'id', 'characters', 'preview_data',
@@ -126,19 +245,15 @@ class Command(BaseCommand):
                 'need at least 2 distinct classes to train a classifier. Lower --min-images, or gather '
                 'more single-character-item data first (see character_image_stats).'
             ))
-            return
+            return None, None
 
         self.stdout.write(f'{len(eligible)} characters qualify (>= {min_images} single-character images each):')
         for c, imgs in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
             self.stdout.write(f'  {len(imgs):>5}  {c}')
 
-        # 2. Extract features: the tagger's own raw general-tag probability
-        # vector (pre-threshold) for every qualifying image — a frozen,
-        # already-trained visual representation, reused rather than
-        # retrained (see module docstring for why).
         total = sum(len(imgs) for imgs in eligible.values())
         self.stdout.write(f'\nExtracting features for {total} images (backend={tagger_backend})...')
-        X, y = [], []
+        rows = []
         general_tag_names = None
         t0 = time.time()
         done = 0
@@ -153,46 +268,13 @@ class Command(BaseCommand):
                     continue
                 if general_tag_names is None:
                     general_tag_names = [tag_names[i] for i in general_idx]
-                X.append(np.asarray(preds, dtype=np.float32)[general_idx])
-                y.append(char)
+                feature = np.asarray(preds, dtype=np.float32)[general_idx]
+                rows.append((item_id, char, feature))
                 done += 1
                 if done % 50 == 0 or done == total:
                     self.stdout.write(f'  {done}/{total} ({time.time() - t0:.0f}s elapsed)')
 
-        if len(X) < 2 or len(set(y)) < 2:
-            self.stderr.write(self.style.ERROR('Not enough successfully-extracted features to train on.'))
-            return
-
-        X = np.stack(X)
-        y = np.asarray(y)
-
-        # 3. Train/holdout split, fit, report — class_weight='balanced' so
-        # the ~15-image classes aren't drowned out by ~1000+-image ones.
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=options['test_size'], random_state=options['random_state'], stratify=y,
-        )
-        clf = LogisticRegression(max_iter=2000, class_weight='balanced')
-        clf.fit(X_train, y_train)
-
-        train_acc = clf.score(X_train, y_train)
-        test_acc = clf.score(X_test, y_test)
-        self.stdout.write(f'\nTrain accuracy: {train_acc:.1%}  |  Holdout accuracy: {test_acc:.1%}\n')
-        self.stdout.write('Per-class holdout report:')
-        self.stdout.write(classification_report(y_test, clf.predict(X_test), zero_division=0))
-
-        # 4. Save — self-contained: records which backend/tag ordering
-        # produced these features, so a later inference-side integration
-        # doesn't have to assume anything matches.
-        output_path = options['output'] or os.path.join(
-            tagger._data_dir(), f'character_classifier_{backend_choice}.joblib',
-        )
-        joblib.dump({
-            'classifier': clf,
-            'classes': list(clf.classes_),
-            'backend': tagger_backend,
-            'general_tag_names': general_tag_names,
-            'min_images': min_images,
-            'train_accuracy': train_acc,
-            'holdout_accuracy': test_acc,
-        }, output_path)
-        self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
+        if len(rows) < 2:
+            self.stderr.write(self.style.ERROR('Not enough successfully-extracted features.'))
+            return None, None
+        return rows, general_tag_names

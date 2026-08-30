@@ -376,10 +376,18 @@ def _raw_predict(image_bytes, model_repo, backend):
 
 def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend):
     preds, tag_names, rating_idx, general_idx, character_idx = _raw_predict(image_bytes, model_repo, backend)
-    return _tags_from_predictions(
+    result = _tags_from_predictions(
         preds, tag_names, rating_idx, general_idx, character_idx,
         general_threshold, character_threshold, general_limit,
     )
+    # Internal-only — the raw (pre-threshold) general-tag probability
+    # vector, for suggest_tags() to surface as 'general_probs' on the
+    # WHOLE-IMAGE pass only (see character_classifier.py's feature
+    # representation, trained on this exact vector). Popped before
+    # suggest_tags()'s return value, and never read from a per-crop pass —
+    # see suggest_tags's own docstring for why.
+    result['_general_probs'] = np.asarray(preds, dtype=np.float32)[general_idx]
+    return result
 
 
 # Anime-art person detector (ONNX, ~11-25M params depending on level — same
@@ -463,8 +471,15 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     duplicate background/composition tags per detected person for no
     benefit). Single-subject images take exactly the same path as before
     (one detector call that finds 0-1 boxes, no extra tagger passes).
+
+    Also includes `general_probs` (the whole image's raw general-tag
+    probability vector — see character_classifier.py, which trains and
+    predicts on exactly this) and `person_count` (how many boxes the
+    person detector found) — additive fields, safe for any existing caller
+    that only reads the keys documented above.
     """
     result = _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend)
+    general_probs = result.pop('_general_probs')
 
     try:
         boxes = _detect_person_boxes(image_bytes)
@@ -493,6 +508,8 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
             # cross-contamination-prone signal this is meant to replace.
             result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
 
+    result['general_probs'] = general_probs
+    result['person_count'] = len(boxes)
     return result
 
 
@@ -549,3 +566,84 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
         results[threshold] = result
 
     return results
+
+
+# --- Supplementary character classifier ------------------------------------
+#
+# A lightweight classifier trained on this app's OWN labeled images (see
+# item.management.commands.train_character_classifier) for characters the
+# Danbooru-trained tagger backends structurally cannot know about (OCs,
+# characters from titles not yet in Danbooru's tag vocabulary at all — see
+# that command's docstring for concrete examples this app hit). Reuses
+# suggest_tags()'s own 'general_probs' as its feature vector — no extra
+# inference cost, since that's already computed for every suggest_tags()
+# call regardless.
+#
+# v1 scope: trained only on single-character images, so a caller should
+# only trust a prediction when suggest_tags() found 0-1 people in the
+# image (its 'person_count') — feeding a multi-character image's blended
+# features into a classifier that never saw more than one character during
+# training would be a meaningless extrapolation, not a real prediction.
+# item.views._collect_candidates enforces this at the call site.
+
+_CHARACTER_CLASSIFIER_MIN_CONFIDENCE = 0.5
+_classifier_state = {}  # backend -> loaded artifact dict, or None once confirmed missing/unloadable
+
+
+def _load_character_classifier(backend):
+    if backend in _classifier_state:
+        return _classifier_state[backend]
+    with _lock:
+        if backend in _classifier_state:
+            return _classifier_state[backend]
+        backend_choice = 'canary' if backend == 'timm' else 'onnx'
+        path = os.path.join(_data_dir(), f'character_classifier_{backend_choice}.joblib')
+        artifact = None
+        if os.path.exists(path):
+            try:
+                import joblib
+                artifact = joblib.load(path)
+            except Exception:
+                logger.exception('Failed to load character classifier from %s', path)
+                artifact = None
+        _classifier_state[backend] = artifact
+        return artifact
+
+
+def have_character_classifier(backend):
+    """Whether a trained classifier artifact is available for this backend
+    — lets a caller skip the (cheap, but non-zero) predict_character call
+    entirely, and tells evaluate_ensemble/UI code whether this source can
+    contribute anything at all."""
+    return _load_character_classifier(backend) is not None
+
+
+def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFIER_MIN_CONFIDENCE):
+    """(character_name, confidence) from the supplementary classifier, or
+    (None, 0.0) if no classifier is trained for this backend, its feature
+    dimension doesn't match what it was trained on (a model/tag-list
+    version drifted since training — fails safe rather than guessing), or
+    its top prediction doesn't clear min_confidence.
+
+    `general_probs` must be suggest_tags()'s own 'general_probs' for THIS
+    SAME backend — mismatched backends produce meaningless output, which is
+    exactly why callers always forward it from suggest_tags()'s return
+    value rather than recomputing it separately.
+    """
+    artifact = _load_character_classifier(backend)
+    if artifact is None:
+        return None, 0.0
+    clf = artifact['classifier']
+    if len(general_probs) != len(artifact['general_tag_names']):
+        logger.warning(
+            'Character classifier feature-length mismatch (got %d, trained on %d) — '
+            'the tag list likely changed since training; skipping prediction.',
+            len(general_probs), len(artifact['general_tag_names']),
+        )
+        return None, 0.0
+    probs = clf.predict_proba(np.asarray(general_probs, dtype=np.float32).reshape(1, -1))[0]
+    idx = int(np.argmax(probs))
+    confidence = float(probs[idx])
+    if confidence < min_confidence:
+        return None, confidence
+    return clf.classes_[idx], confidence

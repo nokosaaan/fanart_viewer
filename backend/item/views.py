@@ -803,6 +803,215 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
     }
 
 
+def _append_tag_similarity_candidates(sim, title_c, char_c, situation_c,
+                                       want_titles, want_characters, want_situation):
+    """Shared by _collect_candidates's two tag-similarity calls (item's own
+    tags, then the tagger's freshly-inferred tags) — folds one
+    _suggest_from_similar_tags() result into the running candidate lists,
+    tagging each entry with its source so _combine_candidates can weight
+    it. Each field is still gated on its own want_* flag — the caller only
+    checks whether ANY field is wanted before bothering to call
+    _suggest_from_similar_tags at all (skip the query when nothing needs
+    it), not which specific ones."""
+    if want_titles:
+        for t in sim['titles']:
+            title_c.append({'value': t, 'source': 'tag_similarity', 'confidence': 1.0})
+        for t in sim['title_candidates']:
+            title_c.append({'value': t, 'source': 'tag_similarity_weak', 'confidence': 1.0})
+    if want_characters:
+        for c in sim['characters']:
+            char_c.append({'value': c, 'source': 'tag_similarity', 'confidence': 1.0})
+    if want_situation and sim['situation_hint']:
+        situation_c.append({'value': sim['situation_hint'], 'source': 'tag_similarity', 'confidence': 1.0})
+
+
+def _collect_candidates(item, external=False, tagger_backend='onnx',
+                         general_threshold=0.35, character_threshold=0.85,
+                         tag_limit_for_matching=None):
+    """Research/evaluation counterpart to _suggest_for_item (see
+    item.management.commands.evaluate_ensemble) — NOT wired into the live
+    suggest_tags endpoint. _suggest_for_item stops at the first source that
+    resolves a field, on the reasoning that DB signals are generally more
+    reliable than the image model's guess; in practice that means a weak
+    DB signal (e.g. an artist's history that barely clears its own
+    confidence bar) can block a stronger, more specific signal (e.g. the
+    tagger directly recognizing a character in THIS image) from ever even
+    running, since it never gets the chance to.
+
+    This instead runs every applicable source unconditionally (still
+    respecting want_titles/want_characters/want_tags/want_situation — a
+    field the item already has filled in is still never touched) and
+    returns ALL of their candidates, each tagged with which source
+    proposed it and a per-candidate confidence (1.0 for sources that are
+    internally already threshold-gated and don't expose a finer-grained
+    score of their own; the tagger's own per-character sigmoid score where
+    it has one). A downstream weighted combiner (_combine_candidates) then
+    picks the best-supported answer per field instead of whichever source
+    happened to run first.
+
+    Returns {'title': [...], 'character': [...], 'situation': [...],
+    'tags': [...]} — title/character/situation entries are
+    {'value', 'source', 'confidence'} dicts; 'tags' is just the tagger's
+    own display tag list (a single-source field — no ensemble needed since
+    nothing else proposes tags).
+    """
+    want_titles = not (item.titles or [])
+    want_characters = not (item.characters or [])
+    want_tags = not (item.tags or [])
+    want_situation = not item.situation
+
+    title_c, char_c, situation_c, tags_out = [], [], [], []
+
+    if want_titles or want_characters:
+        hashtag_hits = _match_hashtags(item.description)
+        if want_titles:
+            for t in hashtag_hits['titles']:
+                title_c.append({'value': t, 'source': 'hashtag', 'confidence': 1.0})
+        if want_characters:
+            for c in hashtag_hits['characters']:
+                char_c.append({'value': c, 'source': 'hashtag', 'confidence': 1.0})
+
+    if want_titles or want_characters or want_situation:
+        db = _suggest_from_existing_data(item)
+        if db:
+            if want_titles:
+                for t in db['titles']:
+                    title_c.append({'value': t, 'source': 'artist_history', 'confidence': 1.0})
+                for t in db['title_candidates']:
+                    title_c.append({'value': t, 'source': 'artist_history_weak', 'confidence': 1.0})
+            if want_characters:
+                for c in db['characters']:
+                    char_c.append({'value': c, 'source': 'artist_history', 'confidence': 1.0})
+            if want_situation and db['situation_hint']:
+                situation_c.append({'value': db['situation_hint'], 'source': 'artist_history', 'confidence': 1.0})
+
+    if not want_tags and (want_titles or want_characters or want_situation):
+        sim = _suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk)
+        _append_tag_similarity_candidates(sim, title_c, char_c, situation_c,
+                                           want_titles, want_characters, want_situation)
+
+    tagger_result = None
+    if (want_titles or want_characters or want_tags or want_situation) and HAVE_TAGGER:
+        imgs = list(item.preview_images.order_by('order'))
+        if imgs:
+            image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
+        elif item.preview_data:
+            image_bytes = bytes(item.preview_data)
+        else:
+            image_bytes = None
+
+        if image_bytes is not None:
+            try:
+                tagger_result = tagger.suggest_tags(
+                    image_bytes,
+                    general_threshold=general_threshold,
+                    character_threshold=character_threshold,
+                    backend=tagger_backend,
+                )
+            except Exception:
+                logging.exception('Tagger inference failed for item %s', item.id)
+
+    if tagger_result is not None:
+        if want_tags:
+            tags_out = tagger_result['tags']
+        if want_situation and tagger_result['situation_hint']:
+            situation_c.append({'value': tagger_result['situation_hint'], 'source': 'tagger', 'confidence': 1.0})
+
+        if want_characters or want_titles:
+            matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
+            if want_characters:
+                for c in matched_chars:
+                    confidence = c['score'] if c.get('score') is not None else 0.5
+                    char_c.append({'value': c['name'], 'source': 'tagger', 'confidence': confidence})
+            if want_titles:
+                for t in tagger_titles:
+                    title_c.append({'value': t, 'source': 'tagger_group', 'confidence': 1.0})
+
+            # Same reliable-model-output reasoning as _suggest_for_item's
+            # Danbooru step — capped to the top 3 unmatched candidates by
+            # score so this can't fire an unbounded number of network
+            # calls per item (DanbooruTitleCache still dedupes repeats
+            # across items on top of that).
+            if external and want_titles:
+                unmatched = sorted(
+                    (c for c in matched_chars if not c.get('matched')),
+                    key=lambda c: -(c['score'] or 0),
+                )[:3]
+                for c in unmatched:
+                    looked_up = _resolve_title_from_character(c['name'])
+                    if looked_up:
+                        title_c.append({'value': looked_up, 'source': 'danbooru', 'confidence': 1.0})
+
+            # Supplementary classifier trained on this app's own labeled
+            # images (see item.management.commands.train_character_classifier)
+            # — covers characters the Danbooru-trained tagger backends
+            # structurally can't (OCs, titles not yet in Danbooru's tag
+            # vocabulary). Only trusted on single-subject images
+            # (person_count <= 1) since it was only ever trained on those —
+            # a multi-character image's blended features would be a
+            # meaningless extrapolation for it, not a real prediction.
+            if want_characters and tagger_result.get('person_count', 0) <= 1:
+                char_name, confidence = tagger.predict_character(
+                    tagger_result['general_probs'], tagger_backend,
+                )
+                if char_name:
+                    char_c.append({'value': char_name, 'source': 'classifier', 'confidence': confidence})
+
+        if want_titles or want_characters or want_situation:
+            tags_for_matching = tagger_result['tags_full']
+            if tag_limit_for_matching is not None:
+                tags_for_matching = tags_for_matching[:tag_limit_for_matching]
+            sim2 = _suggest_from_similar_tags(tags_for_matching, item.description, exclude_pk=item.pk)
+            _append_tag_similarity_candidates(sim2, title_c, char_c, situation_c,
+                                               want_titles, want_characters, want_situation)
+
+    return {
+        'title': title_c, 'character': char_c, 'situation': situation_c, 'tags': tags_out,
+        'want_titles': want_titles, 'want_characters': want_characters,
+        'want_tags': want_tags, 'want_situation': want_situation,
+    }
+
+
+# Starting weights, hand-tuned by rough source reliability (hashtags are the
+# artist's own words; Danbooru reverse lookup is the model's own recognition
+# corroborated by an authoritative external source; DB/tag-similarity fall
+# in between) — meant to be swept/tuned against real confirmed-DB accuracy
+# (see evaluate_ensemble --grid-search), not treated as final.
+DEFAULT_ENSEMBLE_WEIGHTS = {
+    'hashtag': 5.0,
+    'artist_history': 2.0,
+    'artist_history_weak': 1.0,
+    'tag_similarity': 2.0,
+    'tag_similarity_weak': 1.0,
+    'tagger': 2.0,
+    'tagger_group': 2.0,
+    'danbooru': 3.0,
+    'classifier': 3.0,
+}
+
+
+def _combine_candidates(entries, weights, min_score=0.0, top_k=1):
+    """entries: [{'value','source','confidence'}, ...] (one field's worth,
+    from _collect_candidates). Sums weights[source] * confidence across
+    every entry proposing the same value — so multiple sources agreeing on
+    the same answer reinforces it — then returns the top_k values whose
+    combined score clears min_score, highest first.
+
+    Returns (values, scores) where `values` is a list (possibly empty) and
+    `scores` is {value: combined_score} for every candidate considered
+    (including ones that didn't clear min_score or make the top_k cut —
+    useful for debugging/inspection).
+    """
+    scores = {}
+    for e in entries:
+        w = weights.get(e['source'], 0.0)
+        if w == 0.0:
+            continue
+        scores[e['value']] = scores.get(e['value'], 0.0) + w * e['confidence']
+    ranked = sorted((v for v in scores.items() if v[1] >= min_score), key=lambda kv: -kv[1])
+    return [v for v, _s in ranked[:top_k]], scores
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('-id')
