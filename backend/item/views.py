@@ -820,11 +820,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             if not candidates and HAVE_GALLERYDL and _have_twitter_creds():
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
-                        gdl_results = fetch_twitter_media_gallerydl(target_url)
+                        gdl_results, gdl_description = fetch_twitter_media_gallerydl(target_url)
                         for (img_bytes, mime) in gdl_results:
                             if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
                                 candidates.append((target_url, img_bytes, mime))
                                 used_method = 'gallerydl'
+                        if gdl_description and not fetched_description:
+                            fetched_description = gdl_description
                     except Exception:
                         logging.exception('gallery-dl fetch failed for %s', target_url)
 

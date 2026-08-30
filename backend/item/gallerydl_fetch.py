@@ -61,11 +61,11 @@ def _write_config(cookies_path: str) -> str:
     return path
 
 
-def fetch_twitter_media_gallerydl(url: str) -> list[tuple[bytes, str]]:
+def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], str]:
     """
     Fetch media from a tweet URL using gallery-dl.
 
-    Returns list of (image_bytes, mime_type).
+    Returns ([(image_bytes, mime_type), ...], description_text).
     Raises RuntimeError if gallery-dl is not installed or TWITTER_* vars are unset.
     """
     from .twitter_creds import get_credentials
@@ -79,12 +79,18 @@ def fetch_twitter_media_gallerydl(url: str) -> list[tuple[bytes, str]]:
         cookies_path = _write_cookies(auth_token, ct0)
         config_path = _write_config(cookies_path)
 
-        # -g / --get-urls: print URLs to stdout instead of downloading
+        # -j / --dump-json (switched from --get-urls, which only ever
+        # printed bare URLs — this app now also wants the tweet's own text,
+        # see item.description). Doesn't download anything, same as
+        # --get-urls did; verified against a real tweet. Output is a JSON
+        # array of [type, data] entries: type 2 carries the tweet's own
+        # metadata dict (content/hashtags/etc — shared across all its
+        # media), type 3 carries a bare media URL string.
         proc = subprocess.run(
             [
                 "gallery-dl",
                 "--config", config_path,
-                "--get-urls",
+                "-j",
                 url,
             ],
             capture_output=True,
@@ -96,15 +102,24 @@ def fetch_twitter_media_gallerydl(url: str) -> list[tuple[bytes, str]]:
             # returncode 1 = partial success (some URLs found but errors occurred)
             logger.warning("gallery-dl exited %s for %s: %s", proc.returncode, url, proc.stderr[:300])
 
-        image_urls = [
-            line.strip()
-            for line in proc.stdout.splitlines()
-            if line.strip().startswith("http")
-        ]
+        image_urls: list[str] = []
+        description = ""
+        try:
+            entries = json.loads(proc.stdout or "[]")
+        except ValueError:
+            entries = []
+        for entry in entries:
+            if not isinstance(entry, list) or len(entry) < 2:
+                continue
+            entry_type, data = entry[0], entry[1]
+            if entry_type == 3 and isinstance(data, str) and data.startswith("http"):
+                image_urls.append(data)
+            elif entry_type == 2 and isinstance(data, dict) and not description:
+                description = data.get("content") or ""
 
         if not image_urls:
             logger.warning("gallery-dl: no image URLs found for %s\nstderr: %s", url, proc.stderr[:300])
-            return []
+            return [], description
 
         logger.info("gallery-dl: found %d URL(s) for %s", len(image_urls), url)
 
@@ -121,7 +136,7 @@ def fetch_twitter_media_gallerydl(url: str) -> list[tuple[bytes, str]]:
             except requests.RequestException as e:
                 logger.warning("gallery-dl: download error %s: %s", img_url, e)
 
-        return results
+        return results, description
 
     finally:
         for p in (cookies_path, config_path):
