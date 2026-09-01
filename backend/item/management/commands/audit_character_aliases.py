@@ -12,16 +12,29 @@ For each group's aliases that look like romaji/English (pure ASCII), this
 checks item.danbooru_lookup.tag_exists() — an EXACT tag-name lookup, not a
 substring/wildcard search (wildcard search on a common Western name like
 "sherry*"/"hanna*" collides with dozens of unrelated characters across
-totally different franchises — verified live, see the command's own
-history in this project). When an alias ISN'T a real tag, this tries to
-find the correct one automatically via item.danbooru_lookup.
-find_tag_via_other_names(): search Danbooru wiki pages whose other_names
-include one of the group's own Japanese-native character strings, filtered
-down to ones whose wiki body actually mentions one of this group's titles
-(the title cross-check is what makes this safe — see that function's own
-docstring for why a bare name match alone is far too ambiguous). Only an
-unambiguous (exactly one surviving candidate) match is proposed; anything
-else is reported as needing a human decision.
+totally different franchises — verified live). When an alias ISN'T a real
+tag, this tries two increasingly-approximate ways to find the correct one:
+
+1. find_tag_via_title_roster (preferred): resolves each of the group's
+   titles to its Danbooru copyright wiki page and reads that page's OWN
+   character roster (a title's wiki body reliably links its full cast —
+   verified live), then fuzzy-matches this group's Japanese given name
+   against just that small roster. Sidesteps the common-given-name
+   collision problem entirely, since it's only ever comparing against the
+   handful of characters actually IN that title, not searching globally.
+
+2. find_tag_via_other_names (fallback, used only if 1 found nothing): a
+   global wildcard search on Danbooru wiki other_names, filtered down to
+   pages whose body text happens to mention one of the group's titles.
+   Much more prone to false positives/negatives than the roster approach
+   (a short/generic title string can coincidentally appear in an unrelated
+   character's wiki body, or the group's own stored title text may not
+   literally appear in Danbooru's English-language wiki prose at all) —
+   kept only as a fallback for titles whose own wiki page couldn't be
+   resolved by method 1.
+
+Only a confident, unambiguous match from either method is proposed;
+anything else is reported as needing a human decision.
 
 Dry-run by default — prints every bad alias and its proposed fix (or "no
 confident match", or "already correct") without touching the DB. Pass
@@ -37,7 +50,9 @@ import time
 
 from django.core.management.base import BaseCommand
 
-from item.danbooru_lookup import _to_danbooru_tag, tag_exists, find_tag_via_other_names
+from item.danbooru_lookup import (
+    _to_danbooru_tag, tag_exists, find_tag_via_other_names, find_tag_via_title_roster,
+)
 from item.models import CharacterGroup
 
 
@@ -84,16 +99,24 @@ class Command(BaseCommand):
                     continue
 
                 proposal = None
+                method = None
                 for jp_name in japanese_names:
-                    proposal = find_tag_via_other_names(jp_name, group.titles)
+                    proposal = find_tag_via_title_roster(jp_name, group.titles)
                     if proposal:
+                        method = 'roster'
                         break
+                if not proposal:
+                    for jp_name in japanese_names:
+                        proposal = find_tag_via_other_names(jp_name, group.titles)
+                        if proposal:
+                            method = 'other_names (less reliable — double-check this one)'
+                            break
 
                 if proposal:
                     n_fixed += 1
                     self.stdout.write(self.style.WARNING(
                         f'[{group.name}] "{alias}" is NOT a real Danbooru tag -> '
-                        f'proposing "{proposal.replace("_", " ")}"'
+                        f'proposing "{proposal.replace("_", " ")}" (via {method})'
                     ))
                     if apply_fixes:
                         idx = chars.index(alias)

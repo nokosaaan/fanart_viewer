@@ -64,3 +64,10 @@ pyparsing>=3.1,<4
 # not on any request-serving code path. Headless (Agg backend), portable
 # wheels on both x86_64 and aarch64.
 matplotlib
+# Katakana/kana -> romaji conversion, used only by danbooru_lookup.py's
+# title-roster character matching (item/management/commands/
+# audit_character_aliases.py) to romanize this app's own Japanese given
+# names for fuzzy comparison against Danbooru's own romanized character
+# tags. Pure Python + a small built-in kana table — no ML model, no native
+# extension, trivial on the Pi4 deployment target.
+pykakasi
