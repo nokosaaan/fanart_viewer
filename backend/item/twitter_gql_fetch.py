@@ -790,6 +790,220 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
     }
 
 
+# --- Bookmarks / Likes polling ------------------------------------------
+#
+# Query IDs and the `path` used to reach `instructions` in the response are
+# sourced from gallery-dl's twitter extractor (gallery_dl/extractor/twitter.py,
+# TwitterAPI.user_bookmarks / user_likes / _pagination_tweets — same sourcing
+# convention as the query IDs above, verified against the live source on
+# 2026-09-05). Both endpoints use the exact same feature-flag set as
+# UserTweets (gallery-dl's `features_pagination` is byte-for-byte identical
+# to _USER_TWEETS_FEATURES above), so no separate features dict is needed.
+_BOOKMARKS_QUERY_ID = "pLtjrO4ubNh996M_Cubwsg"
+_LIKES_QUERY_ID = "TGEKkJG_meudeaFcqaxM-Q"
+
+
+def _walk_timeline_instructions(data: dict, path_keys):
+    """レスポンスJSONから`instructions`配列を取り出す。
+
+    path_keysがNoneならUserTweets/Likes標準の
+    data.data.user.result.timeline.timeline.instructionsを、指定があれば
+    data.data[path_keys[0]][path_keys[1]]...instructionsを辿る
+    (Bookmarksは`("bookmark_timeline_v2", "timeline")`)。
+    """
+    if path_keys is None:
+        node = data["data"]["user"]["result"]["timeline"]["timeline"]
+    else:
+        node = data["data"]
+        for key in path_keys:
+            node = node[key]
+    return node["instructions"]
+
+
+def _entries_from_instructions(instructions) -> list:
+    """TimelineAddEntries系のinstructionsからentry一覧を平坦化して返す。"""
+    entries = []
+    for instr in instructions:
+        if instr.get("type") == "TimelineAddEntries":
+            entries.extend(instr.get("entries") or [])
+    return entries
+
+
+def _fetch_social_timeline(
+    query_id: str, endpoint_name: str, variables: dict, path_keys,
+    field_toggles, auth_token: str, ct0: str, known_ids: set,
+    max_pages: int,
+) -> list[dict]:
+    """Bookmarks/Likesページを新しい順に辿り、`known_ids`に含まれる
+    tweet_idへ到達した時点(=前回チェック以降の差分を汲み終えた時点)で
+    打ち切る。最大max_pagesページまで(未知のIDばかりが続く初回実行など
+    向けの安全弁)。画像/動画の無いツイートは保存対象外として除外する。
+
+    戻り値: [{'tweet_id', 'screen_name', 'media_urls', 'description'}, ...]
+    (新しい順のまま返す。呼び出し元が古い順に反転してキュー投入すること)
+
+    Raises:
+        TwitterAuthError: 認証エラー
+        TwitterGQLError:  HTTPエラー等
+    """
+    headers = _build_headers(auth_token, ct0)
+    endpoint = f"https://twitter.com/i/api/graphql/{query_id}/{endpoint_name}"
+
+    candidates: list[dict] = []
+    cursor: str | None = None
+    resolved_authors: dict[str, str | None] = {}
+
+    for _page in range(max_pages):
+        page_variables = dict(variables)
+        if cursor:
+            page_variables["cursor"] = cursor
+
+        params = {
+            "variables": json.dumps(page_variables, separators=(",", ":")),
+            "features": json.dumps(_USER_TWEETS_FEATURES, separators=(",", ":")),
+        }
+        if field_toggles:
+            params["fieldToggles"] = json.dumps(field_toggles, separators=(",", ":"))
+
+        try:
+            resp = _get_with_ratelimit_backoff(endpoint, params, headers)
+        except requests.RequestException as e:
+            raise TwitterGQLError(f"Request failed: {e}") from e
+
+        if resp.status_code in (401, 403):
+            raise TwitterAuthError(
+                "auth_token または ct0 が期限切れです。"
+                "ブラウザの x.com Cookie から再取得してください。"
+            )
+        if not resp.ok:
+            raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise TwitterGQLError(f"Invalid JSON response: {e}") from e
+
+        errors = data.get("errors") or []
+        for err in errors:
+            code = err.get("code")
+            if code in (32, 64, 135, 326):
+                raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
+
+        try:
+            instructions = _walk_timeline_instructions(data, path_keys)
+        except (KeyError, TypeError):
+            if errors:
+                raise TwitterGQLError(f"Twitter GraphQL errors: {errors}")
+            break
+
+        entries = _entries_from_instructions(instructions)
+
+        next_cursor = None
+        stop = False
+        for entry in entries:
+            entry_id = entry.get("entryId") or ""
+            if entry_id.startswith("cursor-bottom-"):
+                next_cursor = (entry.get("content") or {}).get("value")
+                continue
+            if not entry_id.startswith("tweet-"):
+                continue
+
+            content = entry.get("content") or {}
+            item_content = content.get("itemContent") or {}
+            tweet = (item_content.get("tweet_results") or {}).get("result")
+            if not tweet:
+                continue
+
+            tweet_id = _get_rest_id(tweet)
+            if not tweet_id:
+                continue
+            tweet_id_int = int(tweet_id)
+            if tweet_id_int in known_ids:
+                stop = True
+                break
+
+            media_urls = _extract_media_urls(tweet)
+            if not media_urls:
+                continue  # 画像/動画の無いブックマーク・いいねは保存対象外
+
+            screen_name = _get_screen_name(tweet)
+            if not screen_name:
+                author_id = _get_author_id(tweet)
+                if author_id:
+                    if author_id not in resolved_authors:
+                        resolved_authors[author_id] = _resolve_screen_name_by_user_id(author_id, auth_token, ct0)
+                    screen_name = resolved_authors[author_id]
+
+            candidates.append({
+                "tweet_id": tweet_id,
+                "screen_name": screen_name,
+                "media_urls": media_urls,
+                "description": _extract_full_text(tweet),
+            })
+
+        if stop or not next_cursor or next_cursor == cursor:
+            break
+        cursor = next_cursor
+        time.sleep(1.5)
+
+    return candidates
+
+
+def fetch_account_bookmarks(known_ids: set, max_pages: int = 1) -> list[dict]:
+    """ログイン中アカウントのブックマークを新しい順に走査し、`known_ids`
+    未収載のものだけ画像URL・本文つきで返す(新しい順のまま)。
+
+    Raises:
+        TwitterAuthError: 認証エラー
+        TwitterGQLError:  HTTPエラー等
+        RuntimeError:     認証情報未設定
+    """
+    auth_token, ct0 = _get_creds()
+    if not auth_token or not ct0:
+        raise RuntimeError("TWITTER_AUTH_TOKEN/ct0 が設定されていません")
+
+    variables = {"count": 20, "includePromotedContent": False}
+    return _fetch_social_timeline(
+        _BOOKMARKS_QUERY_ID, "Bookmarks", variables,
+        path_keys=("bookmark_timeline_v2", "timeline"),
+        field_toggles=None,
+        auth_token=auth_token, ct0=ct0,
+        known_ids=known_ids, max_pages=max_pages,
+    )
+
+
+def fetch_account_likes(screen_name: str, known_ids: set, max_pages: int = 1) -> list[dict]:
+    """指定アカウント(通常はログイン中の本人自身)の「いいね」を新しい順に
+    走査し、`known_ids`未収載のものだけ画像URL・本文つきで返す(新しい順)。
+
+    Raises:
+        TwitterAuthError: 認証エラー
+        TwitterGQLError:  HTTPエラー等
+        RuntimeError:     認証情報未設定
+        ValueError:       指定アカウントが見つからない
+    """
+    auth_token, ct0 = _get_creds()
+    if not auth_token or not ct0:
+        raise RuntimeError("TWITTER_AUTH_TOKEN/ct0 が設定されていません")
+
+    user_id = _resolve_user_id(screen_name.lstrip("@"), auth_token, ct0)
+    variables = {
+        "userId": user_id,
+        "count": 20,
+        "includePromotedContent": False,
+        "withClientEventToken": False,
+        "withBirdwatchNotes": False,
+        "withVoice": True,
+    }
+    return _fetch_social_timeline(
+        _LIKES_QUERY_ID, "Likes", variables,
+        path_keys=None,
+        field_toggles={"withArticlePlainText": False},
+        auth_token=auth_token, ct0=ct0,
+        known_ids=known_ids, max_pages=max_pages,
+    )
+
+
 def verify_credentials() -> dict:
     """
     認証情報が有効かテストする。結果を dict で返す。

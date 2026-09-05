@@ -34,6 +34,27 @@ services:
     depends_on:
       - db
 
+  # poller:
+  #   build:
+  #     context: ./backend
+  #     args:
+  #       INSTALL_TIMM_TAGGER: ${INSTALL_TIMM_TAGGER:-0}
+  #   # The image's ENTRYPOINT (entrypoint.sh) always execs a web server at
+  #   # the end, so it's cleared here in favor of poller_entrypoint.sh, which
+  #   # waits for postgres + migrates + runs poll_twitter_updates instead.
+  #   entrypoint: []
+  #   command: ["sh", "/app/poller_entrypoint.sh"]
+  #   volumes:
+  #     - ./backend:/app
+  #     - ./backend/data:/app/data
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - DATABASE_HOST=db
+  #     - DATABASE_PORT=5432
+  #   depends_on:
+  #     - db
+
   frontend:
     build: ./frontend
     volumes:

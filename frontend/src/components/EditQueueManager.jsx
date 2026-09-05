@@ -99,6 +99,10 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   // (see requirements-timm.txt).
   const [suggestModel, setSuggestModel] = useState('default')
   const [haveTimm, setHaveTimm] = useState(false)
+  // Off by default — suggest_tags_view still defaults to the original
+  // "first source wins" cascade. See EditFields.jsx's own suggestUseEnsemble
+  // for the same toggle at the single-item level and why it's opt-in.
+  const [suggestUseEnsemble, setSuggestUseEnsemble] = useState(true)
   useEffect(()=>{
     fetch('/api/items/tagger_capabilities/')
       .then(r=>r.json()).then(d=>setHaveTimm(!!d.have_timm)).catch(()=>{})
@@ -111,7 +115,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   // is a real ~5s+ CPU-bound call, and hammering several concurrently would
   // just contend for the same CPU on the Pi4 deployment target for no speed
   // gain.
-  const runSuggestFor = useCallback(async (targetItems, mode, model) => {
+  const runSuggestFor = useCallback(async (targetItems, mode, model, useEnsemble) => {
     if(bulkSuggestingRef.current) return
     const targets = targetItems.filter(it => !suggestionsRef.current[it.id])
     if(targets.length === 0) return
@@ -124,7 +128,11 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
       try{
         const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ external: mode === 'external', model: model === 'canary' ? 'timm' : 'default' }),
+          body: JSON.stringify({
+            external: mode === 'external',
+            model: model === 'canary' ? 'timm' : 'default',
+            use_ensemble: !!useEnsemble,
+          }),
         })
         const j = await resp.json().catch(()=>({}))
         if(resp.ok){
@@ -332,9 +340,13 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
               </select>
             </>
           )}
+          <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer', marginLeft:8}} title="複数の情報源を重み付けして統合する新方式(実験的)。従来方式より実データでキャラ推定精度が高いことを確認済み">
+            <input type="checkbox" checked={suggestUseEnsemble} onChange={e=>setSuggestUseEnsemble(e.target.checked)} disabled={bulkSuggesting} />
+            統合型の推論を使う(実験的)
+          </label>
           <button className="btn" style={{fontSize:12}} onClick={()=>{
               if(suggestModel==='canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
-              runSuggestFor(items, suggestMode, suggestModel)
+              runSuggestFor(items, suggestMode, suggestModel, suggestUseEnsemble)
             }} disabled={bulkSuggesting || items.length===0 || items.every(it => suggestions[it.id])}>
             {bulkSuggesting
               ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`

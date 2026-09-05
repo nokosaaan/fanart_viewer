@@ -1,0 +1,5043 @@
+[
+{
+  "model": "item.characterdanboorulink",
+  "pk": 1,
+  "fields": {
+    "character_name": "エマ",
+    "danbooru_tag": "sakuraba_ema",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "sakuraba_ema",
+              1.0
+            ],
+            [
+              "hasumi_leia",
+              0.5714285714285714
+            ],
+            [
+              "saeki_miria",
+              0.5
+            ],
+            [
+              "housho_margo",
+              0.5
+            ],
+            [
+              "jogasaki_noah",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.452Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 2,
+  "fields": {
+    "character_name": "シェリー",
+    "danbooru_tag": "tachibana_sherry",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "ヘブンバーンズレッド",
+          "wiki_tag": "heaven_burns_red",
+          "top_scores": [
+            [
+              "hanamura_shiki",
+              0.7272727272727273
+            ],
+            [
+              "aoi_erika",
+              0.5454545454545454
+            ],
+            [
+              "higuchi_seika",
+              0.5454545454545454
+            ],
+            [
+              "sakuraba_seira",
+              0.5454545454545454
+            ],
+            [
+              "kanzaki_adelheid",
+              0.42857142857142855
+            ]
+          ],
+          "roster_size": 70
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "tachibana_sherry",
+              0.6666666666666666
+            ],
+            [
+              "nikaido_hiro",
+              0.4
+            ],
+            [
+              "hasumi_leia",
+              0.4
+            ],
+            [
+              "saeki_miria",
+              0.36363636363636365
+            ],
+            [
+              "hikami_meruru",
+              0.3333333333333333
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.518Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 3,
+  "fields": {
+    "character_name": "メルル",
+    "danbooru_tag": "hikami_meruru",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "陰の実力者になりたくて!",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "hikami_meruru",
+              1.0
+            ],
+            [
+              "tachibana_sherry",
+              0.5
+            ],
+            [
+              "saeki_miria",
+              0.36363636363636365
+            ],
+            [
+              "housho_margo",
+              0.36363636363636365
+            ],
+            [
+              "gokuchou",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.703Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 4,
+  "fields": {
+    "character_name": "mujica",
+    "danbooru_tag": "ave mujica (bang dream!)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "misumi_uika",
+              0.6
+            ],
+            [
+              "misumi_uika",
+              0.6
+            ],
+            [
+              "mori_minami",
+              0.5
+            ],
+            [
+              "wakaba_mutsumi",
+              0.46153846153846156
+            ],
+            [
+              "togawa_sakiko_(master_of_melodia)",
+              0.42857142857142855
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.232Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 5,
+  "fields": {
+    "character_name": "mygo",
+    "danbooru_tag": "bang dream! it's mygo!!!!!",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "demoted_reason": "tag collision with 'そよ' (higher score)",
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "nagasaki_soyo",
+              0.5
+            ],
+            [
+              "takamatsu_tomori",
+              0.4
+            ],
+            [
+              "nagasaki_soyo's_mother",
+              0.4
+            ],
+            [
+              "togawa_mizuho",
+              0.4
+            ],
+            [
+              "yahata_umiri's_mother",
+              0.4
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.243Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 6,
+  "fields": {
+    "character_name": "あかね",
+    "danbooru_tag": "yusa_akane",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "yusa_akane",
+              1.0
+            ],
+            [
+              "gujyo_kanade",
+              0.7272727272727273
+            ],
+            [
+              "kitamori_yaeka",
+              0.6
+            ],
+            [
+              "kamiina_botan",
+              0.4
+            ],
+            [
+              "chang_chin-lan",
+              0.3076923076923077
+            ]
+          ],
+          "roster_size": 6
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.419Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 7,
+  "fields": {
+    "character_name": "いぶき",
+    "danbooru_tag": "tonami_ibuki",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "sato_aiko",
+              0.4444444444444444
+            ],
+            [
+              "kita_ikuyo",
+              0.4
+            ],
+            [
+              "gotoh_naoki",
+              0.4
+            ],
+            [
+              "ijichi_seika",
+              0.4
+            ],
+            [
+              "gotoh_hitori",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "tonami_ibuki",
+              1.0
+            ],
+            [
+              "kamiina_botan",
+              0.2
+            ],
+            [
+              "yusa_akane",
+              0.2
+            ],
+            [
+              "kitamori_yaeka",
+              0.2
+            ],
+            [
+              "gujyo_kanade",
+              0.18181818181818182
+            ]
+          ],
+          "roster_size": 6
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "tsukishiro_yuki",
+              0.6666666666666666
+            ],
+            [
+              "saeki_miria",
+              0.4
+            ],
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.3333333333333333
+            ],
+            [
+              "nikaido_hiro",
+              0.2222222222222222
+            ],
+            [
+              "hasumi_leia",
+              0.2222222222222222
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.472Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 8,
+  "fields": {
+    "character_name": "おじさん",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "demoted_reason": "tag collision with 'アリサ' (higher score)",
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "shito_alisa",
+              0.5454545454545454
+            ],
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.46153846153846156
+            ],
+            [
+              "jogasaki_noah",
+              0.4
+            ],
+            [
+              "hasumi_leia",
+              0.4
+            ],
+            [
+              "natsume_an-an",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.531Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 9,
+  "fields": {
+    "character_name": "かなで",
+    "danbooru_tag": "gujyo_kanade",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "gotoh_naoki",
+              0.36363636363636365
+            ],
+            [
+              "ijichi_seika",
+              0.36363636363636365
+            ],
+            [
+              "ijichi_nijika",
+              0.3333333333333333
+            ],
+            [
+              "pa-san",
+              0.3333333333333333
+            ],
+            [
+              "sato_aiko",
+              0.2
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "gujyo_kanade",
+              1.0
+            ],
+            [
+              "yusa_akane",
+              0.7272727272727273
+            ],
+            [
+              "kamiina_botan",
+              0.36363636363636365
+            ],
+            [
+              "kitamori_yaeka",
+              0.36363636363636365
+            ],
+            [
+              "chang_chin-lan",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 6
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "natsume_an-an",
+              0.5454545454545454
+            ],
+            [
+              "tono_hanna",
+              0.5454545454545454
+            ],
+            [
+              "shito_alisa",
+              0.36363636363636365
+            ],
+            [
+              "kurobe_nanoka",
+              0.3333333333333333
+            ],
+            [
+              "kurobe_honoka",
+              0.3333333333333333
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.587Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 10,
+  "fields": {
+    "character_name": "きくり",
+    "danbooru_tag": "hiroi_kikuri",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "hiroi_kikuri",
+              1.0
+            ],
+            [
+              "kita_ikuyo",
+              0.5454545454545454
+            ],
+            [
+              "gotoh_hitori",
+              0.5
+            ],
+            [
+              "gotoh_hitori",
+              0.5
+            ],
+            [
+              "gotoh_futari",
+              0.5
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "tonami_ibuki",
+              0.36363636363636365
+            ],
+            [
+              "yusa_akane",
+              0.18181818181818182
+            ],
+            [
+              "kitamori_yaeka",
+              0.18181818181818182
+            ],
+            [
+              "gujyo_kanade",
+              0.16666666666666666
+            ],
+            [
+              "chang_chin-lan",
+              0.14285714285714285
+            ]
+          ],
+          "roster_size": 6
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.634Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 11,
+  "fields": {
+    "character_name": "ことね",
+    "danbooru_tag": "fujita kotone",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "nagasaki_soyo's_mother",
+              0.5
+            ],
+            [
+              "yahata_umiri's_mother",
+              0.5
+            ],
+            [
+              "yahata_umiri_(moonlight_executioner)",
+              0.4444444444444444
+            ],
+            [
+              "chihaya_anon",
+              0.4
+            ],
+            [
+              "nagasaki_soyo",
+              0.4
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.684Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 12,
+  "fields": {
+    "character_name": "こはく",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "タユタマ2",
+          "wiki_tag": "tayutama_2",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.734Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 13,
+  "fields": {
+    "character_name": "さやか",
+    "danbooru_tag": "maizono sayaka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ダンガンロンパ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.784Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 14,
+  "fields": {
+    "character_name": "すばる",
+    "danbooru_tag": "awa subaru",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.252Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 15,
+  "fields": {
+    "character_name": "すみれ",
+    "danbooru_tag": "heanna sumire",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラブライブ！",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "少女☆歌劇レヴュースタァライト",
+          "wiki_tag": "shoujo_kageki_revue_starlight",
+          "top_scores": [
+            [
+              "tsuyuzaki_mahiru",
+              0.5
+            ],
+            [
+              "honami_hisame",
+              0.5
+            ],
+            [
+              "hanare_yatsuki",
+              0.46153846153846156
+            ],
+            [
+              "saijo_claudine",
+              0.42857142857142855
+            ],
+            [
+              "minase_suzu",
+              0.4
+            ]
+          ],
+          "roster_size": 18
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.302Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 16,
+  "fields": {
+    "character_name": "すもも",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "白昼夢の白写真",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.354Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 17,
+  "fields": {
+    "character_name": "そよ",
+    "danbooru_tag": "nagasaki_soyo",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "nagasaki_soyo",
+              1.0
+            ],
+            [
+              "takamatsu_tomori",
+              0.4
+            ],
+            [
+              "togawa_sakiko",
+              0.4
+            ],
+            [
+              "yuutenji_nyamu_(magician_of_passion)",
+              0.3333333333333333
+            ],
+            [
+              "togawa_kiyotsugu",
+              0.3076923076923077
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.385Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 18,
+  "fields": {
+    "character_name": "ぼたん",
+    "danbooru_tag": "kamiina_botan",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "gotoh_futari",
+              0.36363636363636365
+            ],
+            [
+              "pa-san",
+              0.36363636363636365
+            ],
+            [
+              "yamada_ryo",
+              0.25
+            ],
+            [
+              "sato_aiko",
+              0.2222222222222222
+            ],
+            [
+              "kita_ikuyo",
+              0.2
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "kamiina_botan",
+              1.0
+            ],
+            [
+              "yusa_akane",
+              0.4
+            ],
+            [
+              "gujyo_kanade",
+              0.36363636363636365
+            ],
+            [
+              "chang_chin-lan",
+              0.3076923076923077
+            ],
+            [
+              "tonami_ibuki",
+              0.2
+            ]
+          ],
+          "roster_size": 6
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.5
+            ],
+            [
+              "jogasaki_noah",
+              0.4444444444444444
+            ],
+            [
+              "natsume_an-an",
+              0.4
+            ],
+            [
+              "tono_hanna",
+              0.4
+            ],
+            [
+              "kurobe_nanoka",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.391Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 19,
+  "fields": {
+    "character_name": "ましろ",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "さくら、もゆ。 -as the Night's, Reincarnation-",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.397Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 20,
+  "fields": {
+    "character_name": "やえか",
+    "danbooru_tag": "kitamori_yaeka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "kitamori_yaeka",
+              1.0
+            ],
+            [
+              "yusa_akane",
+              0.6
+            ],
+            [
+              "gujyo_kanade",
+              0.36363636363636365
+            ],
+            [
+              "kamiina_botan",
+              0.2
+            ],
+            [
+              "tonami_ibuki",
+              0.2
+            ]
+          ],
+          "roster_size": 6
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.400Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 21,
+  "fields": {
+    "character_name": "れな子",
+    "danbooru_tag": "amaori renako",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "demoted_reason": "tag collision with 'ナノカ' (higher score)",
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ダンガンロンパ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "kurobe_nanoka",
+              0.5
+            ],
+            [
+              "sakuraba_ema",
+              0.4444444444444444
+            ],
+            [
+              "nikaido_hiro",
+              0.4
+            ],
+            [
+              "jogasaki_noah",
+              0.4
+            ],
+            [
+              "hasumi_leia",
+              0.4
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.405Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 22,
+  "fields": {
+    "character_name": "アイラ",
+    "danbooru_tag": "isla_(plastic_memories)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "プラスティック・メモリーズ",
+          "wiki_tag": "plastic_memories",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.409Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 23,
+  "fields": {
+    "character_name": "アイリーン",
+    "danbooru_tag": "irene_redmayne",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "demoted_reason": "tag collision with 'ミリア' (higher score)",
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ヘブンバーンズレッド",
+          "wiki_tag": "heaven_burns_red",
+          "top_scores": [
+            [
+              "satsuki_mari",
+              0.6
+            ],
+            [
+              "mizuhara_aina",
+              0.6
+            ],
+            [
+              "date_akari",
+              0.5454545454545454
+            ],
+            [
+              "ooshima_niina",
+              0.5454545454545454
+            ],
+            [
+              "natsume_inori",
+              0.5454545454545454
+            ]
+          ],
+          "roster_size": 70
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "saeki_miria",
+              0.5454545454545454
+            ],
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.46153846153846156
+            ],
+            [
+              "nikaido_hiro",
+              0.4
+            ],
+            [
+              "natsume_an-an",
+              0.36363636363636365
+            ],
+            [
+              "housho_margo",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.414Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 24,
+  "fields": {
+    "character_name": "アリサ",
+    "danbooru_tag": "shito_alisa",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "shito_alisa",
+              0.8
+            ],
+            [
+              "saeki_miria",
+              0.6
+            ],
+            [
+              "natsume_an-an",
+              0.4
+            ],
+            [
+              "housho_margo",
+              0.4
+            ],
+            [
+              "tono_hanna",
+              0.4
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.423Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 25,
+  "fields": {
+    "character_name": "アンアン",
+    "danbooru_tag": "natsume_an-an",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "natsume_an-an",
+              0.8888888888888888
+            ],
+            [
+              "tono_hanna",
+              0.6666666666666666
+            ],
+            [
+              "kurobe_nanoka",
+              0.6
+            ],
+            [
+              "shito_alisa",
+              0.4444444444444444
+            ],
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.427Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 26,
+  "fields": {
+    "character_name": "アンジェ",
+    "danbooru_tag": "ange_(princess_principal)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "プリンセスプリンシパル",
+          "wiki_tag": "princess_principal",
+          "top_scores": [
+            [
+              "amy_anderson",
+              0.5
+            ],
+            [
+              "eric_anderson",
+              0.5
+            ],
+            [
+              "sophie_mackenzie",
+              0.46153846153846156
+            ],
+            [
+              "annette_grace",
+              0.4444444444444444
+            ],
+            [
+              "dizzy_durand",
+              0.4
+            ]
+          ],
+          "roster_size": 42
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.432Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 27,
+  "fields": {
+    "character_name": "イプシロン",
+    "danbooru_tag": "epsilon_(kagejitsu)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "陰の実力者になりたくて!",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.442Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 28,
+  "fields": {
+    "character_name": "イリヤ",
+    "danbooru_tag": "illyasviel_von_einzbern",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Fate/kaleid liner プリズマ☆イリヤ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.448Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 29,
+  "fields": {
+    "character_name": "イータ",
+    "danbooru_tag": "eta_(kagejitsu)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "陰の実力者になりたくて!",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.438Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 30,
+  "fields": {
+    "character_name": "エミリア",
+    "danbooru_tag": "emilia_(re:zero)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Re:ゼロから始める異世界生活",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.457Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 31,
+  "fields": {
+    "character_name": "エレーナ",
+    "danbooru_tag": "elena pastelkova",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.461Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 32,
+  "fields": {
+    "character_name": "オリヴィア",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "白昼夢の白写真",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.468Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 33,
+  "fields": {
+    "character_name": "カオスメイデン",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.478Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 34,
+  "fields": {
+    "character_name": "カリナ",
+    "danbooru_tag": "carina gentile",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.482Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 35,
+  "fields": {
+    "character_name": "クインテット",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.488Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 36,
+  "fields": {
+    "character_name": "クトリ",
+    "danbooru_tag": "chtholly_nota_seniorious",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "終末なにしてますか? 忙しいですか? 救ってもらっていいですか?",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.492Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 37,
+  "fields": {
+    "character_name": "クロ",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "さくら、もゆ。 -as the Night's, Reincarnation-",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.499Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 38,
+  "fields": {
+    "character_name": "クロディーヌ",
+    "danbooru_tag": "saijo_claudine",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラブライブ！",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "少女☆歌劇レヴュースタァライト",
+          "wiki_tag": "shoujo_kageki_revue_starlight",
+          "top_scores": [
+            [
+              "saijo_claudine",
+              0.47058823529411764
+            ],
+            [
+              "aijo_karen",
+              0.42857142857142855
+            ],
+            [
+              "kagura_hikari",
+              0.4
+            ],
+            [
+              "yakumo_kyouko",
+              0.4
+            ],
+            [
+              "hanayagi_kaoruko",
+              0.375
+            ]
+          ],
+          "roster_size": 18
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.507Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 39,
+  "fields": {
+    "character_name": "ココ",
+    "danbooru_tag": "sawatari_coco",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "sawatari_coco",
+              0.5
+            ],
+            [
+              "gokuchou",
+              0.5
+            ],
+            [
+              "kurobe_nanoka",
+              0.4
+            ],
+            [
+              "kurobe_honoka",
+              0.4
+            ],
+            [
+              "nikaido_hiro",
+              0.25
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.513Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 40,
+  "fields": {
+    "character_name": "シエナ",
+    "danbooru_tag": "sienna_clark",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.522Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 41,
+  "fields": {
+    "character_name": "シノア",
+    "danbooru_tag": "hiiragi_shinoa",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "終わりのセラフ",
+          "wiki_tag": "owari_no_seraph",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.527Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 42,
+  "fields": {
+    "character_name": "シャナ",
+    "danbooru_tag": "shana",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "とらドラ!",
+          "wiki_tag": "toradora!",
+          "top_scores": [
+            [
+              "kanou_sakura",
+              0.5454545454545454
+            ],
+            [
+              "kashii_nanako",
+              0.5454545454545454
+            ],
+            [
+              "kihara_maya",
+              0.4444444444444444
+            ],
+            [
+              "aisaka_taiga",
+              0.4
+            ],
+            [
+              "aisaka_taiga",
+              0.4
+            ]
+          ],
+          "roster_size": 18
+        },
+        {
+          "title": "ゼロの使い魔",
+          "wiki_tag": "zero_no_tsukaima",
+          "top_scores": [
+            [
+              "lukshana",
+              0.7692307692307693
+            ],
+            [
+              "henrietta_de_tristain",
+              0.46153846153846156
+            ],
+            [
+              "colbert_(zero_no_tsukaima)",
+              0.42857142857142855
+            ],
+            [
+              "jessica_(zero_no_tsukaima)",
+              0.42857142857142855
+            ],
+            [
+              "maricorne_(zero_no_tsukaima)",
+              0.42857142857142855
+            ]
+          ],
+          "roster_size": 26
+        },
+        {
+          "title": "機動戦士Gundam GQuuuuuuX",
+          "wiki_tag": "gundam_gquuuuuux",
+          "top_scores": [
+            [
+              "kanchana",
+              0.6153846153846154
+            ],
+            [
+              "char_aznable",
+              0.5
+            ],
+            [
+              "hambrabi",
+              0.46153846153846156
+            ],
+            [
+              "lalah_sune",
+              0.4444444444444444
+            ],
+            [
+              "gates_capa",
+              0.4444444444444444
+            ]
+          ],
+          "roster_size": 40
+        },
+        {
+          "title": "灼眼のシャナ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.536Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 43,
+  "fields": {
+    "character_name": "シュウジ",
+    "danbooru_tag": "shuji ito",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "とらドラ!",
+          "wiki_tag": "toradora!",
+          "top_scores": [
+            [
+              "takasu_ryuuji",
+              0.6666666666666666
+            ],
+            [
+              "takasu_ryuuji",
+              0.6666666666666666
+            ],
+            [
+              "haruta_kouji",
+              0.5454545454545454
+            ],
+            [
+              "kanou_sumire",
+              0.5
+            ],
+            [
+              "koigakubo_yuri",
+              0.4
+            ]
+          ],
+          "roster_size": 18
+        },
+        {
+          "title": "ゼロの使い魔",
+          "wiki_tag": "zero_no_tsukaima",
+          "top_scores": [
+            [
+              "colbert_(zero_no_tsukaima)",
+              0.4
+            ],
+            [
+              "jessica_(zero_no_tsukaima)",
+              0.4
+            ],
+            [
+              "maricorne_(zero_no_tsukaima)",
+              0.4
+            ],
+            [
+              "osmond_(zero_no_tsukaima)",
+              0.4
+            ],
+            [
+              "reynald_(zero_no_tsukaima)",
+              0.4
+            ]
+          ],
+          "roster_size": 26
+        },
+        {
+          "title": "機動戦士Gundam GQuuuuuuX",
+          "wiki_tag": "gundam_gquuuuuux",
+          "top_scores": [
+            [
+              "shiiko_sugai",
+              0.5454545454545454
+            ],
+            [
+              "lalah_sune",
+              0.4
+            ],
+            [
+              "jezzi",
+              0.36363636363636365
+            ],
+            [
+              "comoli_harcourt",
+              0.2857142857142857
+            ],
+            [
+              "hambrabi",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 37
+        },
+        {
+          "title": "灼眼のシャナ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.542Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 44,
+  "fields": {
+    "character_name": "シリウスシュガー",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.547Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 45,
+  "fields": {
+    "character_name": "スバル",
+    "danbooru_tag": "natsuki subaru",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Re:ゼロから始める異世界生活",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.559Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 46,
+  "fields": {
+    "character_name": "スピキ",
+    "danbooru_tag": "speaki (trickcal)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "トリッカル",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.563Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 47,
+  "fields": {
+    "character_name": "スーズ",
+    "danbooru_tag": "suze (aquarium wa odoranai)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "アクアリウムは踊らない",
+          "wiki_tag": "aquarium_wa_odoranai",
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "hikami_meruru",
+              0.36363636363636365
+            ],
+            [
+              "gokuchou",
+              0.3076923076923077
+            ],
+            [
+              "tsukishiro_yuki",
+              0.2222222222222222
+            ],
+            [
+              "shito_alisa",
+              0.2
+            ],
+            [
+              "tachibana_sherry",
+              0.18181818181818182
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.554Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 48,
+  "fields": {
+    "character_name": "ダイヤ",
+    "danbooru_tag": "kurosawa_dia",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラブライブ！",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "少女☆歌劇レヴュースタァライト",
+          "wiki_tag": "shoujo_kageki_revue_starlight",
+          "top_scores": [
+            [
+              "tendo_maya",
+              0.6666666666666666
+            ],
+            [
+              "daiba_nana",
+              0.4444444444444444
+            ],
+            [
+              "kagura_hikari",
+              0.36363636363636365
+            ],
+            [
+              "tsuyuzaki_mahiru",
+              0.36363636363636365
+            ],
+            [
+              "isurugi_futaba",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 18
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.568Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 49,
+  "fields": {
+    "character_name": "トキ",
+    "danbooru_tag": "toki_(blue_archive)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ブルーアーカイブ",
+          "wiki_tag": "blue_archive",
+          "top_scores": [],
+          "roster_size": 1
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.573Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 50,
+  "fields": {
+    "character_name": "ドンキホーテ(LCB)",
+    "danbooru_tag": "don_quixote_(project_moon)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "gokuchou",
+              0.34782608695652173
+            ],
+            [
+              "kurobe_honoka",
+              0.2857142857142857
+            ],
+            [
+              "jogasaki_noah",
+              0.21052631578947367
+            ],
+            [
+              "sawatari_coco",
+              0.21052631578947367
+            ],
+            [
+              "tsukishiro_yuki",
+              0.21052631578947367
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.577Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 51,
+  "fields": {
+    "character_name": "ナノカ",
+    "danbooru_tag": "kurobe_nanoka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "kurobe_nanoka",
+              1.0
+            ],
+            [
+              "kurobe_honoka",
+              0.6666666666666666
+            ],
+            [
+              "jogasaki_noah",
+              0.6
+            ],
+            [
+              "natsume_an-an",
+              0.5454545454545454
+            ],
+            [
+              "housho_margo",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.581Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 52,
+  "fields": {
+    "character_name": "ナノカ姉",
+    "danbooru_tag": "kurobe_honoka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "demoted_reason": "tag collision with 'ナノカ' (higher score)",
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "kurobe_nanoka",
+              0.8
+            ],
+            [
+              "natsume_an-an",
+              0.5714285714285714
+            ],
+            [
+              "kurobe_honoka",
+              0.5333333333333333
+            ],
+            [
+              "jogasaki_noah",
+              0.46153846153846156
+            ],
+            [
+              "housho_margo",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.591Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 53,
+  "fields": {
+    "character_name": "ニャアン",
+    "danbooru_tag": "nyaan (gundam gquuuuuux)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "とらドラ!",
+          "wiki_tag": "toradora!",
+          "top_scores": [
+            [
+              "kashii_nanako",
+              0.5454545454545454
+            ],
+            [
+              "kihara_maya",
+              0.4444444444444444
+            ],
+            [
+              "aisaka_taiga",
+              0.4
+            ],
+            [
+              "aisaka_taiga",
+              0.4
+            ],
+            [
+              "kanou_sakura",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 18
+        },
+        {
+          "title": "ゼロの使い魔",
+          "wiki_tag": "zero_no_tsukaima",
+          "top_scores": [
+            [
+              "cattleya_yvette_la_baume_le_blanc_de_la_fontaine",
+              0.46153846153846156
+            ],
+            [
+              "agnes_chevalier_de_milan",
+              0.4
+            ],
+            [
+              "jean-jacques_francis",
+              0.3333333333333333
+            ],
+            [
+              "lukshana",
+              0.3076923076923077
+            ],
+            [
+              "colbert_(zero_no_tsukaima)",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 26
+        },
+        {
+          "title": "機動戦士Gundam GQuuuuuuX",
+          "wiki_tag": "gundam_gquuuuuux",
+          "top_scores": [
+            [
+              "gates_capa",
+              0.4444444444444444
+            ],
+            [
+              "light_type_guncannon",
+              0.42857142857142855
+            ],
+            [
+              "annqi",
+              0.4
+            ],
+            [
+              "rx-78-2_gundam",
+              0.36363636363636365
+            ],
+            [
+              "atharv",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 40
+        },
+        {
+          "title": "灼眼のシャナ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.595Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 54,
+  "fields": {
+    "character_name": "ノア",
+    "danbooru_tag": "jogasaki_noah",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "jogasaki_noah",
+              0.8571428571428571
+            ],
+            [
+              "kurobe_nanoka",
+              0.6666666666666666
+            ],
+            [
+              "kurobe_honoka",
+              0.6666666666666666
+            ],
+            [
+              "natsume_an-an",
+              0.5
+            ],
+            [
+              "tono_hanna",
+              0.5
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.601Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 55,
+  "fields": {
+    "character_name": "ノゾミ",
+    "danbooru_tag": "nozomi_(blue_archive)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ブルーアーカイブ",
+          "wiki_tag": "blue_archive",
+          "top_scores": [],
+          "roster_size": 1
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.605Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 56,
+  "fields": {
+    "character_name": "ハリエット",
+    "danbooru_tag": "harriet_mills",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.609Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 57,
+  "fields": {
+    "character_name": "ハル",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "さくら、もゆ。 -as the Night's, Reincarnation-",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.613Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 58,
+  "fields": {
+    "character_name": "ハンナ",
+    "danbooru_tag": "tono_hanna",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "tono_hanna",
+              1.0
+            ],
+            [
+              "natsume_an-an",
+              0.6
+            ],
+            [
+              "kurobe_nanoka",
+              0.5454545454545454
+            ],
+            [
+              "shito_alisa",
+              0.4
+            ],
+            [
+              "kurobe_honoka",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.618Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 59,
+  "fields": {
+    "character_name": "ヒナ",
+    "danbooru_tag": "hina_(girls_band_cry)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.622Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 60,
+  "fields": {
+    "character_name": "ヒナミ",
+    "danbooru_tag": "watarai hinami",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "抜きゲーみたいな島に住んでる貧乳はどうすりゃいいですか?",
+          "wiki_tag": "nukigee_mitai_na_shima_ni_sunderu_watashi_wa_dou_surya_ii_desu_ka?",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.627Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 61,
+  "fields": {
+    "character_name": "ヒロ",
+    "danbooru_tag": "nikaido_hiro",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "nikaido_hiro",
+              1.0
+            ],
+            [
+              "saeki_miria",
+              0.4444444444444444
+            ],
+            [
+              "housho_margo",
+              0.4444444444444444
+            ],
+            [
+              "tachibana_sherry",
+              0.4
+            ],
+            [
+              "kurobe_honoka",
+              0.4
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.631Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 62,
+  "fields": {
+    "character_name": "ピコ",
+    "danbooru_tag": "pico (muv-luv girls garden)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.641Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 63,
+  "fields": {
+    "character_name": "フランチェスカ",
+    "danbooru_tag": "francesca prelati (fate)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Fate/strange Fake",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.645Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 64,
+  "fields": {
+    "character_name": "フレイヤ",
+    "danbooru_tag": "freya_(kagejitsu)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "陰の実力者になりたくて!",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.650Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 65,
+  "fields": {
+    "character_name": "プリンセス",
+    "danbooru_tag": "princess_(princess_principal)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "プリンセスプリンシパル",
+          "wiki_tag": "princess_principal",
+          "top_scores": [
+            [
+              "josie_rosebud",
+              0.5
+            ],
+            [
+              "nikki_quinnell",
+              0.47058823529411764
+            ],
+            [
+              "toudou_chise",
+              0.42857142857142855
+            ],
+            [
+              "ange_(princess_principal)",
+              0.42105263157894735
+            ],
+            [
+              "beatrice_(princess_principal)",
+              0.42105263157894735
+            ]
+          ],
+          "roster_size": 42
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.653Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 66,
+  "fields": {
+    "character_name": "ベアトリス",
+    "danbooru_tag": "beatrice (re:zero)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Re:ゼロから始める異世界生活",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.662Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 67,
+  "fields": {
+    "character_name": "ベータ",
+    "danbooru_tag": "beta (kagejitsu)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "陰の実力者になりたくて!",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.658Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 68,
+  "fields": {
+    "character_name": "ポルノ",
+    "danbooru_tag": "porno (dohna dohna)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ドーナドーナ いっしょにわるいことをしよう",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.667Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 69,
+  "fields": {
+    "character_name": "マチュ",
+    "danbooru_tag": "amate_yuzuriha",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "とらドラ!",
+          "wiki_tag": "toradora!",
+          "top_scores": [
+            [
+              "kihara_maya",
+              0.4444444444444444
+            ],
+            [
+              "kanou_sakura",
+              0.36363636363636365
+            ],
+            [
+              "takasu_yasuko",
+              0.36363636363636365
+            ],
+            [
+              "kitamura_yuusaku",
+              0.3333333333333333
+            ],
+            [
+              "kitamura_yuusaku",
+              0.3333333333333333
+            ]
+          ],
+          "roster_size": 18
+        },
+        {
+          "title": "ゼロの使い魔",
+          "wiki_tag": "zero_no_tsukaima",
+          "top_scores": [
+            [
+              "agnes_chevalier_de_milan",
+              0.4
+            ],
+            [
+              "jean-jacques_francis",
+              0.3333333333333333
+            ],
+            [
+              "colbert_(zero_no_tsukaima)",
+              0.2857142857142857
+            ],
+            [
+              "jessica_(zero_no_tsukaima)",
+              0.2857142857142857
+            ],
+            [
+              "maricorne_(zero_no_tsukaima)",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 26
+        },
+        {
+          "title": "機動戦士Gundam GQuuuuuuX",
+          "wiki_tag": "gundam_gquuuuuux",
+          "top_scores": [
+            [
+              "comoli_harcourt",
+              0.46153846153846156
+            ],
+            [
+              "kanchana",
+              0.46153846153846156
+            ],
+            [
+              "police_zaku",
+              0.4444444444444444
+            ],
+            [
+              "atharv",
+              0.36363636363636365
+            ],
+            [
+              "elmeth",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 40
+        },
+        {
+          "title": "灼眼のシャナ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.676Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 70,
+  "fields": {
+    "character_name": "マーゴ",
+    "danbooru_tag": "housho_margo",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "housho_margo",
+              0.8
+            ],
+            [
+              "sakuraba_ema",
+              0.5
+            ],
+            [
+              "natsume_an-an",
+              0.4
+            ],
+            [
+              "saeki_miria",
+              0.4
+            ],
+            [
+              "shito_alisa",
+              0.4
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.671Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 71,
+  "fields": {
+    "character_name": "ミタ",
+    "danbooru_tag": "mita (miside)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "MiSide：ミサイド",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.680Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 72,
+  "fields": {
+    "character_name": "ミヤコ",
+    "danbooru_tag": "miyako_(blue_archive)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ブルーアーカイブ",
+          "wiki_tag": "blue_archive",
+          "top_scores": [],
+          "roster_size": 1
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.690Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 73,
+  "fields": {
+    "character_name": "ミリア",
+    "danbooru_tag": "saeki_miria",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "saeki_miria",
+              1.0
+            ],
+            [
+              "sakuraba_ema",
+              0.5
+            ],
+            [
+              "nikaido_hiro",
+              0.4444444444444444
+            ],
+            [
+              "hasumi_leia",
+              0.4444444444444444
+            ],
+            [
+              "housho_margo",
+              0.4
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.694Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 74,
+  "fields": {
+    "character_name": "ムラサメ",
+    "danbooru_tag": "murasame_(senren)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "千恋万花",
+          "wiki_tag": "senren_banka",
+          "top_scores": [
+            [
+              "arichi_masaomi",
+              0.6666666666666666
+            ],
+            [
+              "hitachi_mako",
+              0.3333333333333333
+            ],
+            [
+              "maniwa_roka",
+              0.3333333333333333
+            ],
+            [
+              "murasame_(senren)",
+              0.25
+            ],
+            [
+              "lena_liechtenauer",
+              0.2
+            ]
+          ],
+          "roster_size": 7
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.699Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 75,
+  "fields": {
+    "character_name": "ユキ",
+    "danbooru_tag": "tsukishiro_yuki",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "tsukishiro_yuki",
+              1.0
+            ],
+            [
+              "nikaido_hiro",
+              0.25
+            ],
+            [
+              "hasumi_leia",
+              0.25
+            ],
+            [
+              "saeki_miria",
+              0.2222222222222222
+            ],
+            [
+              "shito_alisa",
+              0.2222222222222222
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.708Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 76,
+  "fields": {
+    "character_name": "ユリア",
+    "danbooru_tag": "julia barnes",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.713Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 77,
+  "fields": {
+    "character_name": "ラインハルト",
+    "danbooru_tag": "reinhard van astrea",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Re:ゼロから始める異世界生活",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.717Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 78,
+  "fields": {
+    "character_name": "リディア",
+    "danbooru_tag": "lydia eldridge",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.721Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 79,
+  "fields": {
+    "character_name": "ルイズ",
+    "danbooru_tag": "louise_francoise_le_blanc_de_la_valliere",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "とらドラ!",
+          "wiki_tag": "toradora!",
+          "top_scores": [
+            [
+              "takasu_ryuuji",
+              0.5454545454545454
+            ],
+            [
+              "takasu_ryuuji",
+              0.5454545454545454
+            ],
+            [
+              "koigakubo_yuri",
+              0.4444444444444444
+            ],
+            [
+              "haruta_kouji",
+              0.4
+            ],
+            [
+              "kushieda_minori",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 18
+        },
+        {
+          "title": "ゼロの使い魔",
+          "wiki_tag": "zero_no_tsukaima",
+          "top_scores": [
+            [
+              "jean-jacques_francis",
+              0.3333333333333333
+            ],
+            [
+              "henrietta_de_tristain",
+              0.3076923076923077
+            ],
+            [
+              "colbert_(zero_no_tsukaima)",
+              0.2857142857142857
+            ],
+            [
+              "jessica_(zero_no_tsukaima)",
+              0.2857142857142857
+            ],
+            [
+              "maricorne_(zero_no_tsukaima)",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 26
+        },
+        {
+          "title": "機動戦士Gundam GQuuuuuuX",
+          "wiki_tag": "gundam_gquuuuuux",
+          "top_scores": [
+            [
+              "amate_yuzuriha",
+              0.46153846153846156
+            ],
+            [
+              "shiiko_sugai",
+              0.4
+            ],
+            [
+              "comoli_harcourt",
+              0.3076923076923077
+            ],
+            [
+              "hambrabi",
+              0.3076923076923077
+            ],
+            [
+              "gquuuuuux",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 40
+        },
+        {
+          "title": "灼眼のシャナ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.726Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 80,
+  "fields": {
+    "character_name": "レイア",
+    "danbooru_tag": "hasumi_leia",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "hasumi_leia",
+              0.75
+            ],
+            [
+              "saeki_miria",
+              0.6666666666666666
+            ],
+            [
+              "sakuraba_ema",
+              0.5714285714285714
+            ],
+            [
+              "shito_alisa",
+              0.4444444444444444
+            ],
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.730Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 81,
+  "fields": {
+    "character_name": "七彩",
+    "danbooru_tag": "narutaki nanairo",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.797Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 82,
+  "fields": {
+    "character_name": "世凪",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "白昼夢の白写真",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.270Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 83,
+  "fields": {
+    "character_name": "仁奈",
+    "danbooru_tag": "iseri_nina",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "mori_minami",
+              0.6
+            ],
+            [
+              "chihaya_anon",
+              0.5
+            ],
+            [
+              "misumi_uika",
+              0.5
+            ],
+            [
+              "sumita_mana",
+              0.5
+            ],
+            [
+              "misumi_uika",
+              0.5
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "ijichi_nijika",
+              0.6
+            ],
+            [
+              "gotoh_naoki",
+              0.4444444444444444
+            ],
+            [
+              "ijichi_seika",
+              0.4444444444444444
+            ],
+            [
+              "iwashita_shima",
+              0.4444444444444444
+            ],
+            [
+              "shimizu_eliza",
+              0.4444444444444444
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.262Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 84,
+  "fields": {
+    "character_name": "依瑠",
+    "danbooru_tag": "natsume_eru",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.755Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 85,
+  "fields": {
+    "character_name": "光姫",
+    "danbooru_tag": "senba_kouki",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "抜きゲーみたいな島に住んでる貧乳はどうすりゃいいですか?",
+          "wiki_tag": "nukigee_mitai_na_shima_ni_sunderu_watashi_wa_dou_surya_ii_desu_ka?",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.776Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 86,
+  "fields": {
+    "character_name": "凛",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "白昼夢の白写真",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.373Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 87,
+  "fields": {
+    "character_name": "初華",
+    "danbooru_tag": "misumi_uika",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラーメン大好き小泉さん",
+          "wiki_tag": "ramen_daisuki_koizumi-san",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.807Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 88,
+  "fields": {
+    "character_name": "千奈",
+    "danbooru_tag": "kuramoto china",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラブライブ！",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "少女☆歌劇レヴュースタァライト",
+          "wiki_tag": "shoujo_kageki_revue_starlight",
+          "top_scores": [
+            [
+              "hoshimi_junna",
+              0.6
+            ],
+            [
+              "daiba_nana",
+              0.4444444444444444
+            ],
+            [
+              "aijo_karen",
+              0.4
+            ],
+            [
+              "honami_hisame",
+              0.36363636363636365
+            ],
+            [
+              "giraffe_(revue_starlight)",
+              0.26666666666666666
+            ]
+          ],
+          "roster_size": 18
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.279Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 89,
+  "fields": {
+    "character_name": "千秋",
+    "danbooru_tag": "nanami chiaki",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ダンガンロンパ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.274Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 90,
+  "fields": {
+    "character_name": "喜多ちゃん",
+    "danbooru_tag": "kita_ikuyo",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "kaname_raana",
+              0.46153846153846156
+            ],
+            [
+              "togawa_sadaharu",
+              0.375
+            ],
+            [
+              "togawa_kiyotsugu",
+              0.35294117647058826
+            ],
+            [
+              "chihaya_anon",
+              0.3333333333333333
+            ],
+            [
+              "shiina_taki",
+              0.3333333333333333
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "pa-san",
+              0.42857142857142855
+            ],
+            [
+              "gotoh_michiyo",
+              0.4
+            ],
+            [
+              "jimihen",
+              0.4
+            ],
+            [
+              "gotoh_naoki",
+              0.3076923076923077
+            ],
+            [
+              "ijichi_seika",
+              0.3076923076923077
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.763Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 91,
+  "fields": {
+    "character_name": "圭",
+    "danbooru_tag": "natsume_kei_(sakura_no_uta)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.768Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 92,
+  "fields": {
+    "character_name": "夢野",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "王者の盤狂わせ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.331Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 93,
+  "fields": {
+    "character_name": "大河",
+    "danbooru_tag": "aisaka_taiga",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "とらドラ!",
+          "wiki_tag": "toradora!",
+          "top_scores": [
+            [
+              "aisaka_taiga",
+              1.0
+            ],
+            [
+              "aisaka_taiga",
+              1.0
+            ],
+            [
+              "kawashima_ami",
+              0.5
+            ],
+            [
+              "kihara_maya",
+              0.4444444444444444
+            ],
+            [
+              "tomiie_kouta",
+              0.4
+            ]
+          ],
+          "roster_size": 18
+        },
+        {
+          "title": "ゼロの使い魔",
+          "wiki_tag": "zero_no_tsukaima",
+          "top_scores": [
+            [
+              "colbert_(zero_no_tsukaima)",
+              0.5714285714285714
+            ],
+            [
+              "jessica_(zero_no_tsukaima)",
+              0.5714285714285714
+            ],
+            [
+              "maricorne_(zero_no_tsukaima)",
+              0.5714285714285714
+            ],
+            [
+              "osmond_(zero_no_tsukaima)",
+              0.5714285714285714
+            ],
+            [
+              "reynald_(zero_no_tsukaima)",
+              0.5714285714285714
+            ]
+          ],
+          "roster_size": 26
+        },
+        {
+          "title": "機動戦士Gundam GQuuuuuuX",
+          "wiki_tag": "gundam_gquuuuuux",
+          "top_scores": [
+            [
+              "gihren_zabi",
+              0.4444444444444444
+            ],
+            [
+              "kycilia_zabi",
+              0.4444444444444444
+            ],
+            [
+              "gates_capa",
+              0.4444444444444444
+            ],
+            [
+              "annqi",
+              0.4
+            ],
+            [
+              "shiiko_sugai",
+              0.4
+            ]
+          ],
+          "roster_size": 40
+        },
+        {
+          "title": "灼眼のシャナ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.288Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 94,
+  "fields": {
+    "character_name": "天使",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "スカイコード",
+          "wiki_tag": "sky_chord",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.308Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 95,
+  "fields": {
+    "character_name": "寧",
+    "danbooru_tag": "onda nei",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.323Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 96,
+  "fields": {
+    "character_name": "小泉さん",
+    "danbooru_tag": "koizumi_(ramen_daisuki_koizumi-san)",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラーメン大好き小泉さん",
+          "wiki_tag": "ramen_daisuki_koizumi-san",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.811Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 97,
+  "fields": {
+    "character_name": "心鈴",
+    "danbooru_tag": "honma misuzu",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.821Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 98,
+  "fields": {
+    "character_name": "愛の天使ジャスティスフロン",
+    "danbooru_tag": "love_&_justice",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BMS",
+          "wiki_tag": "black_magick_ss",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.739Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 99,
+  "fields": {
+    "character_name": "愛音",
+    "danbooru_tag": "chihaya_anon",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "togawa_sakiko",
+              0.5454545454545454
+            ],
+            [
+              "yuutenji_nyamu_(magician_of_passion)",
+              0.46153846153846156
+            ],
+            [
+              "chihaya_anon",
+              0.4444444444444444
+            ],
+            [
+              "nagasaki_soyo",
+              0.4444444444444444
+            ],
+            [
+              "shiina_taki",
+              0.4444444444444444
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.743Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 100,
+  "fields": {
+    "character_name": "早苗",
+    "danbooru_tag": "dekomori_sanae",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "中二病でも恋がしたい！",
+          "wiki_tag": "chuunibyou_demo_koi_ga_shitai!",
+          "top_scores": [
+            [
+              "dekomori_sanae",
+              1.0
+            ],
+            [
+              "shichimiya_satone",
+              0.7272727272727273
+            ],
+            [
+              "nibutani_shinka",
+              0.36363636363636365
+            ],
+            [
+              "togashi_yuuta",
+              0.2
+            ],
+            [
+              "takanashi_rikka",
+              0.2
+            ]
+          ],
+          "roster_size": 13
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.284Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 101,
+  "fields": {
+    "character_name": "景嵐",
+    "danbooru_tag": "chang_chin-lan",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "上伊那ぼたん、酔へる姿は百合の花",
+          "wiki_tag": "kamiina_botan_yoeru_sugata_wa_yuri_no_hana",
+          "top_scores": [
+            [
+              "tonami_ibuki",
+              0.2857142857142857
+            ],
+            [
+              "yusa_akane",
+              0.2857142857142857
+            ],
+            [
+              "kitamori_yaeka",
+              0.2857142857142857
+            ],
+            [
+              "gujyo_kanade",
+              0.26666666666666666
+            ],
+            [
+              "chang_chin-lan",
+              0.23529411764705882
+            ]
+          ],
+          "roster_size": 6
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.772Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 102,
+  "fields": {
+    "character_name": "智",
+    "danbooru_tag": "ebizuka_tomo",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.292Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 103,
+  "fields": {
+    "character_name": "杏夏",
+    "danbooru_tag": "tamaki_kyouka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "シャインポスト",
+          "wiki_tag": "shine_post",
+          "top_scores": [
+            [
+              "hinomoto_hinatsu",
+              0.625
+            ],
+            [
+              "yakushiin_asuka",
+              0.42857142857142855
+            ],
+            [
+              "yamada_kanon",
+              0.42857142857142855
+            ],
+            [
+              "totsuka_nanami",
+              0.4
+            ],
+            [
+              "hiumi_nanoka",
+              0.4
+            ]
+          ],
+          "roster_size": 29
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.748Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 104,
+  "fields": {
+    "character_name": "桃香",
+    "danbooru_tag": "kawaragi_momoka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "takamatsu_tomori",
+              0.5
+            ],
+            [
+              "togawa_sakiko_(master_of_melodia)",
+              0.42857142857142855
+            ],
+            [
+              "nagasaki_soyo",
+              0.4
+            ],
+            [
+              "misumi_uika",
+              0.4
+            ],
+            [
+              "sumita_mana",
+              0.4
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.311Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 105,
+  "fields": {
+    "character_name": "森夏",
+    "danbooru_tag": "nibutani_shinka",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "中二病でも恋がしたい！",
+          "wiki_tag": "chuunibyou_demo_koi_ga_shitai!",
+          "top_scores": [
+            [
+              "takanashi_rikka",
+              0.42857142857142855
+            ],
+            [
+              "takanashi_rikka",
+              0.42857142857142855
+            ],
+            [
+              "tsuyuri_kumin",
+              0.42857142857142855
+            ],
+            [
+              "nibutani_shinka",
+              0.4
+            ],
+            [
+              "isshiki_makoto",
+              0.4
+            ]
+          ],
+          "roster_size": 13
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.824Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 106,
+  "fields": {
+    "character_name": "楽奈",
+    "danbooru_tag": "kaname_raana",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "kaname_raana",
+              0.7272727272727273
+            ],
+            [
+              "sumita_mana",
+              0.6
+            ],
+            [
+              "chihaya_anon",
+              0.4
+            ],
+            [
+              "shiina_taki",
+              0.4
+            ],
+            [
+              "yuutenji_nyamu",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 39
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.759Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 107,
+  "fields": {
+    "character_name": "沙耶",
+    "danbooru_tag": "shiun saya",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.788Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 108,
+  "fields": {
+    "character_name": "燈",
+    "danbooru_tag": "takamatsu_tomori",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "demoted_reason": "tag collision with '桃香' (higher score)",
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "takamatsu_tomori",
+              0.4444444444444444
+            ],
+            [
+              "wakaba_mutsumi",
+              0.4
+            ],
+            [
+              "wakaba_mutsumi_(cautus)",
+              0.36363636363636365
+            ],
+            [
+              "togawa_kiyotsugu",
+              0.3333333333333333
+            ],
+            [
+              "chihaya_anon",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ぼっち・ざ・ろっく!",
+          "wiki_tag": "bocchi_the_rock!",
+          "top_scores": [
+            [
+              "gotoh_hitori",
+              0.4444444444444444
+            ],
+            [
+              "gotoh_hitori",
+              0.4444444444444444
+            ],
+            [
+              "yamada_ryo",
+              0.3333333333333333
+            ],
+            [
+              "sato_aiko",
+              0.2857142857142857
+            ],
+            [
+              "uchida_yuyu",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 20
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.317Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 109,
+  "fields": {
+    "character_name": "牢屋敷メンバー",
+    "danbooru_tag": null,
+    "resolved_via": "",
+    "match_score": null,
+    "debug_info": {
+      "human_decision": "rejected",
+      "original_debug_info": [
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "narehate_(mahou_shoujo_no_majo_saiban)",
+              0.34782608695652173
+            ],
+            [
+              "jogasaki_noah",
+              0.3
+            ],
+            [
+              "tsukishiro_yuki",
+              0.3
+            ],
+            [
+              "natsume_an-an",
+              0.2857142857142857
+            ],
+            [
+              "shito_alisa",
+              0.2857142857142857
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.368Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 110,
+  "fields": {
+    "character_name": "理王",
+    "danbooru_tag": "seibu_rio",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "シャインポスト",
+          "wiki_tag": "shine_post",
+          "top_scores": [
+            [
+              "seibu_rio",
+              0.8571428571428571
+            ],
+            [
+              "nabatame_haru",
+              0.5
+            ],
+            [
+              "nashinoki_remi",
+              0.5
+            ],
+            [
+              "kotomori_airi",
+              0.5
+            ],
+            [
+              "karabayashi_itoha",
+              0.4444444444444444
+            ]
+          ],
+          "roster_size": 29
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.350Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 111,
+  "fields": {
+    "character_name": "直哉",
+    "danbooru_tag": "kusanagi_naoya",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.296Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 112,
+  "fields": {
+    "character_name": "真唯",
+    "danbooru_tag": "ouzuka_mai",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.257Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 113,
+  "fields": {
+    "character_name": "真桜",
+    "danbooru_tag": "taiga maou",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.829Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 114,
+  "fields": {
+    "character_name": "睦",
+    "danbooru_tag": "wakaba_mutsumi",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "wakaba_mutsumi",
+              1.0
+            ],
+            [
+              "yahata_umiri",
+              0.5
+            ],
+            [
+              "wakaba_mutsumi_(cautus)",
+              0.4
+            ],
+            [
+              "togawa_kiyotsugu",
+              0.375
+            ],
+            [
+              "shiina_taki",
+              0.36363636363636365
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.327Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 115,
+  "fields": {
+    "character_name": "祥子",
+    "danbooru_tag": "togawa_sakiko",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "nagasaki_soyo",
+              0.6
+            ],
+            [
+              "togawa_sakiko",
+              0.5
+            ],
+            [
+              "togawa_sadaharu",
+              0.42857142857142855
+            ],
+            [
+              "misumi_uika",
+              0.4
+            ],
+            [
+              "misumi_uika",
+              0.4
+            ]
+          ],
+          "roster_size": 39
+        },
+        {
+          "title": "Bang_Dream!_Ave_Mujica",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ガールズバンドクライ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラブライブ！",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "ラーメン大好き小泉さん",
+          "wiki_tag": "ramen_daisuki_koizumi-san",
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "学園アイドルマスター",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "少女☆歌劇レヴュースタァライト",
+          "wiki_tag": "shoujo_kageki_revue_starlight",
+          "top_scores": [
+            [
+              "yakumo_kyouko",
+              0.6666666666666666
+            ],
+            [
+              "hanayagi_kaoruko",
+              0.6153846153846154
+            ],
+            [
+              "hanare_yatsuki",
+              0.46153846153846156
+            ],
+            [
+              "minase_suzu",
+              0.4
+            ],
+            [
+              "matsue_miko",
+              0.4
+            ]
+          ],
+          "roster_size": 18
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.815Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 116,
+  "fields": {
+    "character_name": "立希",
+    "danbooru_tag": "shiina_taki",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "demoted_reason": "tag collision with '睦' (higher score)",
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "BanG_Dream!_It's_MyGO!!!!!",
+          "wiki_tag": "bang_dream!_it's_mygo!!!!!",
+          "top_scores": [
+            [
+              "wakaba_mutsumi",
+              0.5
+            ],
+            [
+              "togawa_kiyotsugu",
+              0.4444444444444444
+            ],
+            [
+              "matsugi_ririko",
+              0.4
+            ],
+            [
+              "togawa_sadaharu",
+              0.35294117647058826
+            ],
+            [
+              "togawa_sakiko_(sarkaz)",
+              0.35294117647058826
+            ]
+          ],
+          "roster_size": 39
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.358Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 117,
+  "fields": {
+    "character_name": "紗月",
+    "danbooru_tag": "koto_satsuki",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.802Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 118,
+  "fields": {
+    "character_name": "紫陽花",
+    "danbooru_tag": "sena_ajisai",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.792Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 119,
+  "fields": {
+    "character_name": "翠蘭",
+    "danbooru_tag": "liu cuilan",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "マブラヴ ガールズガーデン",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.267Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 120,
+  "fields": {
+    "character_name": "茉子",
+    "danbooru_tag": "hitachi_mako",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "千恋万花",
+          "wiki_tag": "senren_banka",
+          "top_scores": [
+            [
+              "hitachi_mako",
+              1.0
+            ],
+            [
+              "arichi_masaomi",
+              0.5454545454545454
+            ],
+            [
+              "kurama_koharu",
+              0.4
+            ],
+            [
+              "maniwa_roka",
+              0.25
+            ],
+            [
+              "tomotake_yoshino",
+              0.18181818181818182
+            ]
+          ],
+          "roster_size": 7
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.377Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 121,
+  "fields": {
+    "character_name": "莉々子",
+    "danbooru_tag": "hijiri_ririko",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "confirmed",
+      "original_debug_info": [
+        {
+          "title": "ハミダシクリエイティブ",
+          "wiki_tag": "hamidashi_creative",
+          "top_scores": [
+            [
+              "hijiri_ririko",
+              0.5714285714285714
+            ],
+            [
+              "tokiwa_kano",
+              0.3157894736842105
+            ],
+            [
+              "yukige_shiki",
+              0.3
+            ],
+            [
+              "kamakura_shio",
+              0.21052631578947367
+            ],
+            [
+              "ryuukan_ameri",
+              0.2
+            ]
+          ],
+          "roster_size": 7
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.381Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 122,
+  "fields": {
+    "character_name": "藍",
+    "danbooru_tag": "natsume_ai",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.344Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 123,
+  "fields": {
+    "character_name": "遥菜",
+    "danbooru_tag": "amaori_haruna",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.341Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 124,
+  "fields": {
+    "character_name": "霧切響子",
+    "danbooru_tag": "kirigiri_kyoko",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "ダンガンロンパ",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        },
+        {
+          "title": "魔法少女ノ魔女裁判",
+          "wiki_tag": "mahou_shoujo_no_majo_saiban",
+          "top_scores": [
+            [
+              "gokuchou",
+              0.34782608695652173
+            ],
+            [
+              "nikaido_hiro",
+              0.3157894736842105
+            ],
+            [
+              "saeki_miria",
+              0.3
+            ],
+            [
+              "hikami_meruru",
+              0.2857142857142857
+            ],
+            [
+              "sawatari_coco",
+              0.21052631578947367
+            ]
+          ],
+          "roster_size": 17
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.336Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 125,
+  "fields": {
+    "character_name": "香穂",
+    "danbooru_tag": "koyanagi_kaho",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "わたしが恋人になれるわけないじゃん、ムリムリ!（※ムリじゃなかった!?）",
+          "wiki_tag": null,
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.781Z"
+  }
+},
+{
+  "model": "item.characterdanboorulink",
+  "pk": 126,
+  "fields": {
+    "character_name": "麗華",
+    "danbooru_tag": "nakamura_reika",
+    "resolved_via": "human_review",
+    "match_score": 1.0,
+    "debug_info": {
+      "human_decision": "override",
+      "original_debug_info": [
+        {
+          "title": "サクラノ刻",
+          "wiki_tag": "sakura_no_toki",
+          "top_scores": [],
+          "roster_size": 0
+        }
+      ]
+    },
+    "updated_at": "2026-09-05T04:35:00.363Z"
+  }
+}
+]

@@ -140,6 +140,24 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // (Danbooru reverse lookup for a tagger-recognized character that
   // matches nothing in this app's own vocabulary yet) is opt-in.
   const [suggestExternal, setSuggestExternal] = useState(false)
+  // On by default — the weighted-ensemble combiner
+  // (_suggest_for_item_ensemble) is now suggest_tags_view's own default
+  // too. A real 10-seed evaluation showed it winning on character accuracy
+  // in every sampled seed (avg 62.6% vs the old cascade's 51.0%);
+  // unchecking this opts back into the original "first source wins"
+  // cascade instead.
+  const [suggestUseEnsemble, setSuggestUseEnsemble] = useState(true)
+  // Up to 3 ranked character candidates from the last suggestion response,
+  // awaiting review — NOT auto-applied to charList (see applySuggestion's
+  // own comment on why: an ensemble/cascade "match" can still be the wrong
+  // person, and silently committing every candidate it returns was an
+  // actual bug this replaced — see _suggest_for_item's own comment on
+  // filtering unmatched tagger candidates). Each candidate carries
+  // `contributors` (see _character_breakdown) so a human can tell whether
+  // a wrong-looking suggestion traces back to the tagger's own
+  // recognition, the Danbooru link table, or neither ever firing at all.
+  const [charCandidates, setCharCandidates] = useState([])
+  const [expandedCandidate, setExpandedCandidate] = useState(null)
   // Only offered once tagger_capabilities/ confirms the heavier 'timm'
   // backend is actually installed on this server (see requirements-timm.txt
   // — not every deployment opts into torch).
@@ -178,12 +196,16 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       added = true
       return [...prev, ...toAdd]
     })
-    setCharList(prev => {
-      const toAdd = (j.characters || []).map(c => c.name).filter(n => !prev.includes(n))
-      if(toAdd.length === 0) return prev
-      added = true
-      return [...prev, ...toAdd]
-    })
+    // Characters are NOT auto-applied — up to 3 ranked candidates are
+    // surfaced for review instead (see charCandidates' own comment). A
+    // "matched" candidate can still be the wrong person (a tagger
+    // misidentification, or a Danbooru link pointing at the wrong tag),
+    // so silently committing every candidate returned was an actual bug
+    // this replaced, not just an interaction-design choice.
+    const newCandidates = j.characters || []
+    if(newCandidates.length > 0) added = true
+    setCharCandidates(newCandidates)
+    setExpandedCandidate(null)
     setTags(prev => {
       const existing = parseList(prev)
       const toAdd = (j.tags || []).map(t => t.name).filter(n => !existing.includes(n))
@@ -207,6 +229,37 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     setTitleCandidates(prev => prev.filter(x => x !== t))
   }
 
+  // Toggle (not one-way accept): a candidate stays visible with its
+  // diagnostic breakdown after being added, in case its contributors are
+  // still worth checking, or the user changes their mind — unlike
+  // acceptTitleCandidate, which removes the option once taken (titles have
+  // no per-candidate diagnostics to keep referring back to).
+  function toggleCharCandidate(name){
+    setCharList(prev => prev.includes(name) ? prev.filter(c => c !== name) : [...prev, name])
+  }
+
+  const SOURCE_LABELS = {
+    hashtag: 'ハッシュタグ', artist_history: '作家履歴(強)', artist_history_weak: '作家履歴(弱)',
+    tag_similarity: 'タグ類似度(強)', tag_similarity_weak: 'タグ類似度(弱)',
+    tagger: 'タガー直接認識', tagger_group: 'タガー+キャラグループ', classifier: '独自分類器', danbooru: 'Danbooru照合',
+  }
+  const MATCH_METHOD_LABELS = { direct: '既存表記と直接一致', danbooru_link: 'Danbooruリンク経由で翻訳' }
+
+  // "この画像/投稿を直接見て判断した"わけではなく、"他のアイテムから類推した"
+  // ソース — 単独だと誤りやすいので、候補カード上に常時マーカーを出す(展開しな
+  // いと見えない根拠パネルとは別に)。hashtag/tagger/classifier/danbooru は
+  // このアイテム自身の内容(投稿文・画像)を直接見ているので対象外。
+  const LOW_PRIORITY_SOURCES = new Set(['artist_history', 'artist_history_weak', 'tag_similarity', 'tag_similarity_weak'])
+
+  function candidateSourceTier(contributors){
+    if(!contributors || contributors.length === 0) return null
+    const sources = new Set(contributors.map(ct => ct.source))
+    const hasLow = [...sources].some(s => LOW_PRIORITY_SOURCES.has(s))
+    if(!hasLow) return null
+    const hasNormal = [...sources].some(s => !LOW_PRIORITY_SOURCES.has(s))
+    return hasNormal ? 'mixed' : 'low_only'
+  }
+
   // If EditQueueManager already ran bulk suggestion for this item, apply the
   // cached result immediately instead of re-running inference (~5s+/image).
   useEffect(()=>{
@@ -221,7 +274,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     try{
       const resp = await fetch(`/api/items/${item.id}/suggest_tags/`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ external: suggestExternal, model: suggestModel === 'canary' ? 'timm' : 'default' }),
+        body: JSON.stringify({
+          external: suggestExternal,
+          model: suggestModel === 'canary' ? 'timm' : 'default',
+          use_ensemble: suggestUseEnsemble,
+        }),
       })
       const j = await resp.json().catch(()=>({}))
       if(!resp.ok){ setSuggestError(j.detail || `提案の取得に失敗しました (${resp.status})`); return }
@@ -292,6 +349,10 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
           <input type="checkbox" checked={suggestExternal} onChange={e=>setSuggestExternal(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />
           Danbooruで新規タイトルも照合(外部通信)
         </label>
+        <label style={{marginLeft:10, fontSize:11, color:'#94a3b8', cursor:'pointer'}} title="複数の情報源を重み付けして統合する新方式(実験的)。従来方式より実データでキャラ推定精度が高いことを確認済み">
+          <input type="checkbox" checked={suggestUseEnsemble} onChange={e=>setSuggestUseEnsemble(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />
+          統合型の推論を使う(実験的)
+        </label>
         {haveTimm && (
           <select value={suggestModel} onChange={e=>setSuggestModel(e.target.value)} disabled={suggesting} style={{marginLeft:10, fontSize:11}}>
             <option value="default">標準モデル(軽量・高速)</option>
@@ -341,6 +402,66 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                 {t}
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {charCandidates.length > 0 && (
+        <div style={{marginBottom:10, padding:'0 14px'}}>
+          <div style={{fontSize:11, color:'#94a3b8', marginBottom:6}}>
+            AI提案候補(スコア高い順、クリックで追加/解除。どれも違う場合は下のCharactersで直接手動選択してください):
+          </div>
+          <div style={{display:'flex', flexDirection:'column', gap:6}}>
+            {charCandidates.map(c => {
+              const isAdded = charList.includes(c.name)
+              const isExpanded = expandedCandidate === c.name
+              const tier = candidateSourceTier(c.contributors)
+              return (
+                <div key={c.name} style={{border:'1px solid #334155', borderRadius:6, background:'#1e293b'}}>
+                  <div style={{display:'flex', alignItems:'center', gap:8, padding:'6px 10px'}}>
+                    <button className="btn" onClick={()=>toggleCharCandidate(c.name)}
+                      style={{fontSize:12, background: isAdded ? '#166534' : '#334155', color:'#f1f5f9'}}>
+                      {isAdded ? '✓ 追加済み' : '＋ 追加'}
+                    </button>
+                    <span style={{fontSize:13, color:'#f1f5f9', fontWeight:600}}>{c.name}</span>
+                    <span style={{fontSize:11, color:'#94a3b8'}}>score {c.score}</span>
+                    {tier === 'low_only' && (
+                      <span title="作家履歴・タグ類似度など、他アイテムからの類推のみが根拠です。画像やハッシュタグを直接見て判断したものではありません"
+                        style={{fontSize:11, padding:'2px 6px', borderRadius:4, background:'#78350f', color:'#fde68a'}}>
+                        ⚠ 類推のみ
+                      </span>
+                    )}
+                    {tier === 'mixed' && (
+                      <span title="作家履歴・タグ類似度による類推と、それ以外の根拠(ハッシュタグ/タガー直接認識/分類器など)が両方とも支持しています"
+                        style={{fontSize:11, padding:'2px 6px', borderRadius:4, background:'#1e3a8a', color:'#bfdbfe'}}>
+                        🔀 混合根拠
+                      </span>
+                    )}
+                    {c.contributors && (
+                      <button className="btn" onClick={()=>setExpandedCandidate(isExpanded ? null : c.name)}
+                        style={{fontSize:11, marginLeft:'auto', background:'transparent', color:'#60a5fa'}}>
+                        {isExpanded ? '詳細を閉じる ▲' : '根拠を見る ▼'}
+                      </button>
+                    )}
+                  </div>
+                  {isExpanded && c.contributors && (
+                    <div style={{padding:'0 10px 8px', fontSize:11, color:'#cbd5e1'}}>
+                      {c.contributors.map((ct, i) => (
+                        <div key={i} style={{padding:'3px 0', borderTop: i>0 ? '1px solid #334155' : 'none'}}>
+                          <span style={{color:'#93c5fd'}}>{SOURCE_LABELS[ct.source] || ct.source}</span>
+                          {' '}(確信度 {ct.confidence})
+                          {ct.raw_name && ct.raw_name !== c.name && (
+                            <> — タガー認識: <span style={{color:'#fbbf24'}}>「{ct.raw_name}」</span>
+                              {ct.match_method && <> → {MATCH_METHOD_LABELS[ct.match_method] || ct.match_method}</>}
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

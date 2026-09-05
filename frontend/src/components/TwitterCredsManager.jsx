@@ -28,6 +28,7 @@ export default function TwitterCredsManager({ onClose }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [pollStatus, setPollStatus] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -42,6 +43,13 @@ export default function TwitterCredsManager({ onClose }) {
     } finally {
       setLoading(false)
     }
+
+    // Best-effort — the poller service may not be running in every
+    // deployment, so a failure here shouldn't block the panel itself.
+    try {
+      const r2 = await fetch('/api/twitter_poll/status/', { credentials: 'same-origin' })
+      if (r2.ok) setPollStatus(await r2.json())
+    } catch (_) {}
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -96,6 +104,20 @@ export default function TwitterCredsManager({ onClose }) {
               </>
             ) : '—'}
           </div>
+
+          {pollStatus && (
+            <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', borderRadius: 6 }}>
+              <div style={{ marginBottom: 4 }}>
+                ブックマーク/いいね自動取得: 最終成功 {formatDate(pollStatus.last_success_at)}
+                {' '}— 未処理キュー {pollStatus.pending_count}件
+              </div>
+              {pollStatus.consecutive_failures > 0 && (
+                <div style={{ color: '#f87171' }}>
+                  {pollStatus.consecutive_failures}回連続で失敗中 ({formatDate(pollStatus.last_error_at)}): {pollStatus.last_error}
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>auth_token</label>

@@ -44,7 +44,6 @@ import importlib.util
 import io
 import logging
 import os
-import re
 import threading
 
 import numpy as np
@@ -83,36 +82,39 @@ _KAOMOJIS = {
     '>_<', '3_3', '6_9', '>_o', '@_@', '^_^', 'o_o', 'u_u', 'x_x', '|_|', '||_||',
 }
 
-_COUNT_TAG_RE = re.compile(r'^(\d+)\+?girls$')
-
-
-def _situation_hint(rating, general_tag_names):
-    """Derive a single situation_hint from the rating + booru people-count
-    tags. Checked against the FULL general-tag set (before it's capped to
-    general_limit for the returned `tags` field) so a low-ranked-but-present
-    count tag still counts — these are usually very high-confidence in
-    practice, but the cap is about avoiding tag clutter, not about hiding
-    structural signals from this logic.
+def _situation_hint(rating, general_tag_names, person_count=None):
+    """Derive a single situation_hint from the rating + the person
+    detector's own count (see suggest_tags's 'person_count', which counts
+    boxes from _detect_person_boxes — a direct read of the image, not a
+    tag guess).
 
     R18 takes priority when the rating implies it — `situation` is a single
     value in this app's model, and content warning takes precedence over
-    composition. Only "1girl"+"solo" -> SOLO and "multiple girls" / an
-    explicit 3+ count tag -> MULTIPLE are mapped; 2-person compositions
-    (which could plausibly mean CP/pairing) are deliberately left unmapped
-    since that's a judgment call, not something the tags settle on their own.
+    composition. MULTIPLE is decided purely from person_count >= 2. This
+    used to be inferred from booru people-count tags instead ("multiple
+    girls" / an explicit "3+girls" tag), but that could disagree with the
+    detector (e.g. a tag-based miss on a genuinely 2-person image, or a
+    "3+girls" tag on a background crowd that isn't really the composition)
+    — unified onto person_count as the single source of truth so there's
+    only one answer to "is this MULTIPLE" instead of two that can drift
+    apart. `person_count=None` (a caller that never ran person detection,
+    e.g. the threshold-sweep dev helper) just means MULTIPLE can never be
+    inferred here — not an error.
+
+    "1girl"+"solo" -> SOLO is unaffected by this and stays tag-based: a
+    2-person composition (which could plausibly mean CP/pairing) is still
+    deliberately left unmapped when person_count isn't >= 2 either, since
+    that's a judgment call the tags alone don't settle.
     """
     if rating in RATING_TO_SITUATION_HINT:
         return RATING_TO_SITUATION_HINT[rating]
 
+    if person_count is not None and person_count >= 2:
+        return 'MULTIPLE'
+
     names = set(general_tag_names)
     if 'solo' in names and '1girl' in names:
         return 'SOLO'
-    if 'multiple girls' in names:
-        return 'MULTIPLE'
-    for name in names:
-        m = _COUNT_TAG_RE.match(name)
-        if m and int(m.group(1)) >= 3:
-            return 'MULTIPLE'
     return None
 
 
@@ -221,11 +223,17 @@ def _prepare_image_onnx(image_bytes, target_size):
 
 
 def _tags_from_predictions(preds, tag_names, rating_idx, general_idx, character_idx,
-                            general_threshold, character_threshold, general_limit):
+                            general_threshold, character_threshold, general_limit,
+                            person_count=None):
     """Shared by both backends: raw per-tag probabilities -> the same
     {'characters', 'tags', 'tags_full', 'rating', 'rating_scores',
     'situation_hint'} shape, since the two backends only differ in how
-    `preds` gets produced (ONNX session vs. torch forward pass)."""
+    `preds` gets produced (ONNX session vs. torch forward pass).
+
+    `person_count` is passed straight through to _situation_hint (see its
+    own docstring) — this function has no way to compute it itself (that
+    needs the separate person detector, run by the caller), so it's just
+    threaded through as an optional param."""
     ratings = {tag_names[i]: float(preds[i]) for i in rating_idx}
     rating = max(ratings, key=ratings.get) if ratings else None
 
@@ -249,7 +257,7 @@ def _tags_from_predictions(preds, tag_names, rating_idx, general_idx, character_
         'tags_full': [n for n, _ in general_full],
         'rating': rating,
         'rating_scores': {k: round(v, 4) for k, v in ratings.items()},
-        'situation_hint': _situation_hint(rating, (n for n, _ in general_full)),
+        'situation_hint': _situation_hint(rating, (n for n, _ in general_full), person_count),
     }
 
 
@@ -361,6 +369,36 @@ def _raw_predict_timm(image_bytes, model_repo):
     return preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx']
 
 
+def extract_embedding(image_bytes, model_repo=None):
+    """The canary (timm/EVA02) backend's pooled pre-logit embedding for
+    this image — the same forward pass as _raw_predict_timm, up to but not
+    including its final classification head. This retains visual
+    information the tag-probability output has already thrown away (the
+    tag vocabulary is a bottleneck by design), which is why a downstream
+    classifier trained on THIS instead of the tag probabilities is
+    expected to do better — see train_character_classifier's
+    --classifier/architecture-comparison notes.
+
+    ONNX has no equivalent here (its published graph ends at the tag
+    logits — there's no accessible intermediate layer without surgically
+    editing the ONNX graph, which isn't worth doing for an experiment);
+    only the canary/timm backend supports this.
+    """
+    if not HAVE_TIMM:
+        raise RuntimeError(
+            "extract_embedding needs the 'timm' backend (torch/timm installed) — see "
+            'requirements-timm.txt / the INSTALL_TIMM_TAGGER build arg.'
+        )
+    repo = model_repo or TIMM_MODEL_REPO
+    state = _load_timm(repo)
+    import torch
+    tensor = _prepare_image_timm(image_bytes, state['transform'])
+    with torch.inference_mode():
+        features = state['model'].forward_features(tensor)
+        embedding = state['model'].forward_head(features, pre_logits=True)
+    return embedding.squeeze(0).numpy().astype(np.float32)
+
+
 def _raw_predict(image_bytes, model_repo, backend):
     """The forward pass alone, before any threshold is applied — split out
     from _tags_from_predictions so a threshold sweep (see
@@ -374,11 +412,11 @@ def _raw_predict(image_bytes, model_repo, backend):
     return _raw_predict_onnx(image_bytes, model_repo)
 
 
-def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend):
+def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend, person_count=None):
     preds, tag_names, rating_idx, general_idx, character_idx = _raw_predict(image_bytes, model_repo, backend)
     result = _tags_from_predictions(
         preds, tag_names, rating_idx, general_idx, character_idx,
-        general_threshold, character_threshold, general_limit,
+        general_threshold, character_threshold, general_limit, person_count,
     )
     # Internal-only — the raw (pre-threshold) general-tag probability
     # vector, for suggest_tags() to surface as 'general_probs' on the
@@ -417,6 +455,40 @@ def _detect_person_boxes(image_bytes):
 
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     results = detect_person(image, conf_threshold=_PERSON_DETECT_CONF_THRESHOLD)
+    ordered = sorted(results, key=lambda r: -r[2])
+    return [tuple(int(v) for v in box) for box, _label, _score in ordered]
+
+
+_HEAD_DETECT_CONF_THRESHOLD = 0.3
+
+
+def _detect_head_boxes(image_bytes):
+    """[(x1, y1, x2, y2), ...] in the original image's pixel coordinates,
+    most-confident first — same contract as _detect_person_boxes (never
+    raises; empty list on failure), but for the anime HEAD detector
+    (dghs-imgutils's deepghs/anime_head_detection) instead of the person
+    detector. Its box covers the entire head silhouette including hair —
+    "include the entire head, not only the face parts" per the model's own
+    dataset description — deliberately NOT a tight face-only crop, since
+    hair color/style is one of the most stable identifying traits for an
+    anime character design (unlike real human hair, which isn't identity-
+    stable and is why real face-recognition pipelines crop it out).
+
+    This exists as an alternative crop source to _detect_person_boxes for
+    the character classifier: a person-box includes the costume, which
+    changes across outfits for the "same" character and can teach the
+    classifier to key on clothing rather than identity; a head-box crops
+    that out entirely while keeping the face+hair region the person-box
+    also contains, so it's a strict subset of what the person-box already
+    captures, not a different modality. Verified live against a real
+    2-character DB image — produced exactly 2 correctly-separated head
+    boxes matching the item's confirmed character count.
+    """
+    from imgutils.detect import detect_heads
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    results = detect_heads(image, conf_threshold=_HEAD_DETECT_CONF_THRESHOLD)
     ordered = sorted(results, key=lambda r: -r[2])
     return [tuple(int(v) for v in box) for box, _label, _score in ordered]
 
@@ -477,15 +549,24 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     predicts on exactly this) and `person_count` (how many boxes the
     person detector found) — additive fields, safe for any existing caller
     that only reads the keys documented above.
-    """
-    result = _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend)
-    general_probs = result.pop('_general_probs')
 
+    Person detection runs FIRST (not after, as it did before `situation_hint`
+    was unified onto person_count — see _situation_hint) so its count is
+    already known by the time the whole-image pass computes situation_hint;
+    otherwise MULTIPLE could never be inferred from that pass at all.
+    """
     try:
         boxes = _detect_person_boxes(image_bytes)
     except Exception:
         logger.exception('Person detection failed — falling back to whole-image character tagging')
         boxes = []
+    person_count = len(boxes)
+
+    result = _suggest_tags_single_pass(
+        image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
+        person_count=person_count,
+    )
+    general_probs = result.pop('_general_probs')
 
     if len(boxes) >= 2:
         merged = {}
@@ -509,7 +590,7 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
             result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
 
     result['general_probs'] = general_probs
-    result['person_count'] = len(boxes)
+    result['person_count'] = person_count
     return result
 
 
@@ -541,8 +622,10 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
         logger.exception('Person detection failed — falling back to whole-image character tagging')
         boxes = []
 
+    person_count = len(boxes)
+
     crop_raws = []
-    if len(boxes) >= 2:
+    if person_count >= 2:
         for box in boxes[:_MAX_PERSON_CROPS]:
             try:
                 crop_bytes = _crop_with_padding(image_bytes, box)
@@ -552,7 +635,7 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
 
     results = {}
     for threshold in character_thresholds:
-        result = _tags_from_predictions(*whole_raw, general_threshold, threshold, general_limit)
+        result = _tags_from_predictions(*whole_raw, general_threshold, threshold, general_limit, person_count)
         if crop_raws:
             merged = {}
             for crop_raw in crop_raws:
@@ -563,6 +646,7 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
                         merged[c['name']] = c
             if merged:
                 result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
+        result['person_count'] = person_count
         results[threshold] = result
 
     return results

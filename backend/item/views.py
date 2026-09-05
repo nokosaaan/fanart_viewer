@@ -10,12 +10,13 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
 from django.db.models import Q
-from collections import Counter
+from collections import Counter, defaultdict
 import re
 from urllib.parse import urljoin, urlparse
 
-from .models import Item, PreviewImage, CharacterGroup
+from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink
 from .twitter_creds import has_credentials as _have_twitter_creds
+from . import danbooru_lookup
 from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
 from .serializers import ItemSerializer, CharacterGroupSerializer
 from security.ssrf_guard import validate_url, SSRFError
@@ -275,6 +276,14 @@ def _normalize_char_name(name):
     return re.sub(r'\s+', ' ', (name or '').strip().lower().replace('_', ' '))
 
 
+# Below this, a CharacterDanbooruLink is stored but not trusted for
+# production matching — see link_danbooru_characters' own review process
+# (a wrong tag collision on the SAME tag is caught automatically there,
+# but a merely-low-confidence match to a DIFFERENT tag isn't, and is left
+# for human review rather than being silently applied here).
+_DANBOORU_LINK_MIN_SCORE = 0.6
+
+
 def _match_tagger_characters(candidates):
     """Cross-reference raw tagger character-tag names (Danbooru-style,
     lowercase/space-separated English) against the app's own character
@@ -285,36 +294,120 @@ def _match_tagger_characters(candidates):
     tagger's inherent gap (its public tag list has no copyright/series
     tags at all, so it can never suggest a title on its own).
 
-    Only catches same-spelling matches after normalization — it can't
-    bridge e.g. a Japanese-named existing entry to the tagger's romaji
-    output. `matched` on each returned item tells the caller which is which.
+    Two ways a candidate can match:
+    1. Same-spelling after normalization (a DB character name that's
+       already itself in Danbooru's romaji form).
+    2. Via CharacterDanbooruLink — bridges e.g. a Japanese-named existing
+       entry ("博麗霊夢") to the tagger's own romaji output ("hakurei
+       reimu"), which the identity-only normalization in (1) alone can
+       never do (see link_danbooru_characters, which populates this table
+       from Danbooru's own per-title character rosters, not a guess made
+       here). Only links at or above _DANBOORU_LINK_MIN_SCORE are used —
+       lower-confidence ones are kept in the table for a human to review,
+       not applied automatically.
+
+    Either way, if the matched character belongs to a CharacterGroup, that
+    group's `titles` are surfaced as title suggestions too — backfilling
+    the tagger's inherent gap (its public tag list has no copyright/series
+    tags at all, so it can never suggest a title on its own). `titles` is
+    empty on every real CharacterGroup in this DB as of this writing
+    (verified live), so this falls back to `group.name` ONLY when it's a
+    confirmed exact match against this DB's own known title vocabulary —
+    verified live that 37 of 43 real CharacterGroups name themselves
+    exactly after one real title this way, but the other 6 are genuinely
+    a genre/brand/franchise umbrella (e.g. "Fate", spanning several
+    distinct real titles) where treating group.name as a title would be
+    wrong — exactly the risk of CharacterGroup's free-form naming this
+    fallback exists to avoid guessing past.
+
+    `matched` on each returned item tells the caller which is which.
+    `raw_name`/`match_method` ('direct'|'danbooru_link'|None) are carried
+    through so a caller building a diagnostic breakdown (see
+    _character_breakdown) can show a human WHY a suggestion came out the
+    way it did — the tagger's own raw output vs. what it was resolved to,
+    and via which route — so a wrong suggestion can be traced to the
+    tagger's recognition itself, the Danbooru link table, or (if
+    unmatched) neither ever having a chance to fire at all.
     """
     existing_by_norm = {}
+    group_by_char_norm = {}
     for group in CharacterGroup.objects.all():
         for c in (group.characters or []):
-            # A group-alias match always resolves to the GROUP's own name,
-            # never to whichever alias string happened to match — the alias
-            # list exists purely to bridge recognition (e.g. tagger names a
-            # character "sherry" while this app's own convention for that
-            # character is the group's Japanese name "シェリー"), not to
-            # decide what gets displayed as the suggestion.
-            existing_by_norm.setdefault(_normalize_char_name(c), []).append((group.name, group))
+            # A CharacterGroup is a classification bucket (which title, or
+            # more broadly genre/brand/medium, a character belongs to) —
+            # NOT a per-character alias list. Each entry in `characters` is
+            # its own distinct real character, so a match must resolve to
+            # THAT entry's own spelling, never to group.name (which is the
+            # classification's own label, e.g. a genre or brand name, and
+            # would be nonsense to show as a "character").
+            norm_c = _normalize_char_name(c)
+            existing_by_norm.setdefault(norm_c, []).append((c, group))
+            group_by_char_norm[norm_c] = group
     for item in Item.objects.only('characters'):
         for c in (item.characters or []):
             if c:
                 existing_by_norm.setdefault(_normalize_char_name(c), []).append((c, None))
 
+    danbooru_link_by_norm = {}
+    for link in CharacterDanbooruLink.objects.exclude(danbooru_tag__isnull=True).exclude(danbooru_tag=''):
+        if (link.match_score or 0) >= _DANBOORU_LINK_MIN_SCORE:
+            danbooru_link_by_norm[_normalize_char_name(link.danbooru_tag)] = link.character_name
+
+    known_titles = set()
+    for titles in Item.objects.exclude(titles=[]).exclude(titles__isnull=True).values_list('titles', flat=True):
+        known_titles.update(titles or [])
+
+    def titles_for_group(group):
+        """Walks from `group` UP through its parent chain (see
+        CharacterGroup.parent — mirrors Danbooru's own wiki hierarchy,
+        e.g. a franchise like "Muv-Luv" with a narrower sub-title like
+        "Muv-Luv Girls Garden" under it), returning the titles of the
+        FIRST ancestor (starting at the group itself) that resolves one —
+        via its own `titles` field, or the exact-known-title name fallback.
+        A character assigned to a specific sub-title's group resolves
+        there directly; one assigned only at a broader/franchise level
+        (nothing more specific known) resolves against that broader
+        group instead once it climbs to it — still a real, just less
+        specific, title, not a guess. `seen` bounds the walk against a
+        cyclic `parent` chain (validated against at write time — see
+        CharacterGroupSerializer.validate_parent — but the ORM enforces
+        nothing here, so this is a defensive backstop, not just a
+        formality)."""
+        node, seen = group, set()
+        while node is not None and node.pk not in seen:
+            seen.add(node.pk)
+            if node.titles:
+                return node.titles
+            if node.name in known_titles:
+                return [node.name]
+            node = node.parent
+        return []
+
     matched, unmatched = [], []
     suggested_titles = set()
     for cand in candidates:
-        hits = existing_by_norm.get(_normalize_char_name(cand['name']))
+        norm = _normalize_char_name(cand['name'])
+        hits = existing_by_norm.get(norm)
         if hits:
             existing_name, group = hits[0]
-            matched.append({'name': existing_name, 'score': cand['score'], 'matched': True})
-            if group:
-                suggested_titles.update(group.titles or [])
-        else:
-            unmatched.append({'name': cand['name'], 'score': cand['score'], 'matched': False})
+            matched.append({
+                'name': existing_name, 'score': cand['score'], 'matched': True,
+                'raw_name': cand['name'], 'match_method': 'direct',
+            })
+            suggested_titles.update(titles_for_group(group))
+            continue
+        linked_name = danbooru_link_by_norm.get(norm)
+        if linked_name:
+            matched.append({
+                'name': linked_name, 'score': cand['score'], 'matched': True,
+                'raw_name': cand['name'], 'match_method': 'danbooru_link',
+            })
+            suggested_titles.update(titles_for_group(group_by_char_norm.get(_normalize_char_name(linked_name))))
+            continue
+        unmatched.append({
+            'name': cand['name'], 'score': cand['score'], 'matched': False,
+            'raw_name': cand['name'], 'match_method': None,
+        })
 
     return matched + unmatched, sorted(suggested_titles)
 
@@ -601,7 +694,7 @@ def _merge_unique(*lists):
 
 def _suggest_for_item(item, external=False, tagger_backend='onnx',
                        general_threshold=0.35, character_threshold=0.85,
-                       tag_limit_for_matching=None):
+                       tag_limit_for_matching=None, use_classifier=False):
     """Suggest titles/characters/tags/situation for `item`. Extracted from
     ItemViewSet.suggest_tags_view (the actual HTTP endpoint, now a thin
     wrapper around this) so it can also be called directly against an
@@ -623,6 +716,19 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
     and the DB signal, when available, is usually both faster and more
     precise (it's drawn from what this user already curated, not a model's
     guess).
+
+    `use_classifier`: test-only hook, never set by suggest_tags_view
+    (always False there — the live endpoint doesn't consult the
+    supplementary classifier at all yet). When True, and the tagger's own
+    direct character recognition didn't resolve `characters`, tries
+    item.tagger.predict_character (see train_character_classifier) right
+    alongside it, at the same priority tier — before falling through to
+    tag-similarity attempt 2. Exists so evaluate_full_pipeline (the
+    cascade) and evaluate_ensemble (the weighted combiner) can be compared
+    with the SAME set of signals available to both, isolating "which
+    combination strategy wins" from "does the classifier help at all" —
+    see the classifier-architecture-comparison discussion for why those
+    two questions need to stay separate.
 
     `tag_limit_for_matching`: test-only hook, never set by
     suggest_tags_view (always None there = current, unbounded production
@@ -743,7 +849,12 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                 source = 'tagger' if source == 'none' else 'db+tagger'
                 if want_characters and not characters:
                     matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
-                    characters = matched_chars
+                    # Only keep entries the tagger's output actually
+                    # resolved to a real DB character — an unmatched entry
+                    # is a raw, untranslated tagger string (e.g. "hakurei
+                    # reimu") that has no business being auto-applied as a
+                    # suggested character.
+                    characters = [c for c in matched_chars if c.get('matched')]
                     if want_titles:
                         titles = _merge_unique(titles, tagger_titles)
 
@@ -765,6 +876,22 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                             if looked_up:
                                 titles = _merge_unique(titles, [looked_up])
                                 source = f'{source}+danbooru' if 'danbooru' not in source else source
+
+                    # Same priority tier as the tagger's own direct
+                    # recognition just above — only tried because that
+                    # didn't resolve anything, and only trusted on
+                    # single-subject images (see tagger.predict_character's
+                    # docstring: it was never trained on multi-character
+                    # crops, so a blended multi-person image would be a
+                    # meaningless extrapolation for it).
+                    if use_classifier and want_characters and not characters \
+                            and tagger_result.get('person_count', 0) <= 1:
+                        char_name, confidence = tagger.predict_character(
+                            tagger_result['general_probs'], tagger_backend,
+                        )
+                        if char_name:
+                            characters = [{'name': char_name, 'score': confidence, 'matched': True, 'source': 'classifier'}]
+                            source = 'tagger' if source == 'none' else 'db+tagger'
                 if want_tags:
                     tags = tagger_result['tags']
                 if want_situation and not situation_hint:
@@ -920,9 +1047,20 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         if want_characters or want_titles:
             matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
             if want_characters:
+                # Only entries the tagger's output actually resolved to a
+                # real DB character (matched=True) are legitimate candidate
+                # VALUES here — an unmatched entry is still a raw, un-
+                # translated tagger string (e.g. "hakurei reimu"), which
+                # would otherwise compete in _combine_candidates as if it
+                # were a real name and could end up suggested verbatim.
                 for c in matched_chars:
+                    if not c.get('matched'):
+                        continue
                     confidence = c['score'] if c.get('score') is not None else 0.5
-                    char_c.append({'value': c['name'], 'source': 'tagger', 'confidence': confidence})
+                    char_c.append({
+                        'value': c['name'], 'source': 'tagger', 'confidence': confidence,
+                        'raw_name': c.get('raw_name'), 'match_method': c.get('match_method'),
+                    })
             if want_titles:
                 for t in tagger_titles:
                     title_c.append({'value': t, 'source': 'tagger_group', 'confidence': 1.0})
@@ -978,21 +1116,33 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
 # in between) — meant to be swept/tuned against real confirmed-DB accuracy
 # (see evaluate_ensemble --grid-search), not treated as final.
 DEFAULT_ENSEMBLE_WEIGHTS = {
+    # Untested by the grid search below (see hashtag's own note) or
+    # untestable by this offline methodology at all (danbooru — see
+    # evaluate_ensemble's own docstring on why) — kept at their original,
+    # reasoning-based values rather than whatever the grid happened to show.
     'hashtag': 5.0,
+    'danbooru': 3.0,
+    # Empirically tuned: a 6-dimension grid search (evaluate_ensemble
+    # --grid-search) against confirmed real DB items, cross-checked across
+    # a 10-seed sweep (item.views._suggest_for_item's use_classifier flag
+    # vs this combiner, same weights, same items) — the ensemble beat the
+    # old single-source-wins cascade in 10/10 sampled seeds on character
+    # accuracy (avg 62.6% vs 51.0%). 'classifier' consistently topped out
+    # at the grid's max tested value in every winning combination, which is
+    # why it's now the single highest weight here.
     'artist_history': 2.0,
     'artist_history_weak': 1.0,
-    'tag_similarity': 2.0,
-    'tag_similarity_weak': 1.0,
+    'tag_similarity': 1.0,
+    'tag_similarity_weak': 0.5,
     'tagger': 2.0,
     'tagger_group': 2.0,
-    'danbooru': 3.0,
-    'classifier': 3.0,
+    'classifier': 4.0,
 }
 
 # Situation gets its OWN weight scheme, not DEFAULT_ENSEMBLE_WEIGHTS — the
 # tagger's own composition/rating heuristic (see tagger._situation_hint:
-# R18 from `rating` takes priority, then 1girl+solo -> SOLO, a 3+ count tag
-# or "multiple girls" -> MULTIPLE) is a direct read of the image itself and
+# R18 from `rating` takes priority, then person_count >= 2 -> MULTIPLE,
+# then 1girl+solo -> SOLO) is a direct read of the image itself and
 # is considered reliable enough on its own that it isn't worth blending
 # with the DB-derived priors the way title/character are — those exist to
 # cover for the tagger being unavailable/undecided (no image, or a
@@ -1025,6 +1175,89 @@ def _combine_candidates(entries, weights, min_score=0.0, top_k=1):
         scores[e['value']] = scores.get(e['value'], 0.0) + w * e['confidence']
     ranked = sorted((v for v in scores.items() if v[1] >= min_score), key=lambda kv: -kv[1])
     return [v for v, _s in ranked[:top_k]], scores
+
+
+def _character_breakdown(entries, values):
+    """For each of `values` (already-selected character candidates), the
+    individual (source, confidence, raw_name, match_method) entries that
+    contributed to its combined score — lets a human see WHICH signal(s)
+    proposed a given name, and for a tagger-sourced one, whether it needed
+    the Danbooru link bridge to get there at all (raw_name/match_method —
+    see _match_tagger_characters). This is the difference between "the
+    tagger itself misidentified the character" and "the tagger was right
+    but the link table doesn't know that tag yet" when troubleshooting a
+    wrong suggestion — the image/tagger/link split this exists for.
+    """
+    breakdown = {v: [] for v in values}
+    for e in entries:
+        if e['value'] in breakdown:
+            breakdown[e['value']].append({
+                'source': e['source'],
+                'confidence': round(e['confidence'], 4),
+                'raw_name': e.get('raw_name'),
+                'match_method': e.get('match_method'),
+            })
+    return breakdown
+
+
+def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
+                                general_threshold=0.35, character_threshold=0.85):
+    """Weighted-ensemble counterpart to _suggest_for_item — same
+    want_titles/want_characters/want_tags/want_situation contract and
+    return shape (drop-in compatible with suggest_tags_view's response),
+    but resolves each field by summing every applicable source's weighted
+    confidence (_collect_candidates + _combine_candidates, DEFAULT_ENSEMBLE_
+    WEIGHTS/DEFAULT_SITUATION_WEIGHTS) instead of stopping at the first
+    source to answer — see _collect_candidates's own docstring for why the
+    cascade's "first source wins" design has a real structural flaw (a weak
+    DB signal can block a stronger, more specific one from ever running).
+
+    Selected via suggest_tags_view's `use_ensemble` request flag — this is
+    now the endpoint's default (`_suggest_for_item`'s cascade is the
+    opt-out, via `use_ensemble: false`). A real 10-seed sweep against
+    confirmed DB items (both paths given the
+    SAME candidate pool, same tagger backend, same classifier) showed this
+    winning on character accuracy in every sampled seed (avg 62.6% vs the
+    cascade's 51.0%) — see the classifier-architecture-comparison
+    discussion this was built from for the full methodology.
+    """
+    collected = _collect_candidates(
+        item, external=external, tagger_backend=tagger_backend,
+        general_threshold=general_threshold, character_threshold=character_threshold,
+    )
+
+    title_values, _title_scores = _combine_candidates(collected['title'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    # top_k=3 (not more): this is a REVIEW list a human picks from (see
+    # EditFields.jsx's candidate cards), not an auto-apply-everything list
+    # — three ranked options is enough to catch "the right answer wasn't
+    # #1" without turning the review UI into a wall of low-confidence
+    # noise.
+    char_values, char_scores = _combine_candidates(collected['character'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    situation_values, _situation_scores = _combine_candidates(collected['situation'], DEFAULT_SITUATION_WEIGHTS, top_k=1)
+
+    char_breakdown = _character_breakdown(collected['character'], char_values)
+    characters = [
+        {
+            'name': name, 'score': round(char_scores[name], 4), 'matched': True, 'source': 'ensemble',
+            'contributors': char_breakdown[name],
+        }
+        for name in char_values
+    ]
+
+    # Same last-resort OC fallback _suggest_for_item uses — a zero-score
+    # title is just as much "nothing found" as the cascade's empty list.
+    if collected['want_titles'] and not title_values and _looks_like_oc(item.description):
+        title_values = ['OC']
+
+    return {
+        'characters': characters,
+        'tags': collected['tags'],
+        'situation_hint': situation_values[0] if situation_values else None,
+        'suggested_titles': title_values,
+        'title_candidates': [],
+        'source': 'ensemble',
+        'sample_size': 0,
+    }
 
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1993,15 +2226,27 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['post'], url_path='suggest_tags')
     def suggest_tags_view(self, request, pk=None):
         """Suggest titles/characters/tags/situation for this item — a thin
-        HTTP wrapper around _suggest_for_item (module-level function below),
-        which holds the actual logic and is also called directly by
-        item.management.commands.evaluate_full_pipeline for offline accuracy
+        HTTP wrapper around _suggest_for_item_ensemble (the production
+        default — every source's weighted confidence is combined) or
+        _suggest_for_item (opt-out via `use_ensemble: false` — "first
+        source to resolve a field wins"). Both are module-level functions
+        below and are also called directly by item.management.commands.
+        evaluate_full_pipeline/evaluate_ensemble for offline accuracy
         evaluation against an in-memory (never-saved) item, without going
         through a live request.
+
+        use_ensemble defaults to True as of 2026-09 — a real 10-seed
+        evaluation showed the ensemble winning on character accuracy in
+        every sampled seed (see _suggest_for_item_ensemble's docstring),
+        and it has since become the default everywhere this endpoint is
+        called from (both EditFields.jsx and EditQueueManager.jsx default
+        their own checkboxes to checked too). The cascade remains
+        available as an explicit opt-out, not removed.
         """
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
         external = bool(data.get('external'))
+        use_ensemble = bool(data.get('use_ensemble', True))
         tagger_backend = 'timm' if data.get('model') == 'timm' else 'onnx'
         if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
             return Response(
@@ -2014,7 +2259,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             general_threshold, character_threshold = 0.35, 0.85
 
-        result = _suggest_for_item(
+        suggest_fn = _suggest_for_item_ensemble if use_ensemble else _suggest_for_item
+        result = suggest_fn(
             item, external=external, tagger_backend=tagger_backend,
             general_threshold=general_threshold, character_threshold=character_threshold,
         )
@@ -2103,6 +2349,21 @@ def items_from_db(request):
 
 
 class CharacterGroupViewSet(viewsets.ModelViewSet):
+    # CharacterGroup is a small reference/lookup dataset (a classification
+    # bucket per title/genre/brand — see the model's own docstring), not a
+    # growing log like Item, which legitimately needs paging. Without this,
+    # the list endpoint silently inherited the project's global DRF
+    # pagination (PAGE_SIZE=50, see backend.pagination) — past 50 groups,
+    # anything sorting alphabetically after the 50th (Meta.ordering =
+    # ['name']) was dropped from page 1 and neither frontend consumer
+    # (CharacterGroupManager.jsx / CharacterPicker.jsx) ever fetched a
+    # further page, so those groups silently stopped appearing anywhere in
+    # the UI — reported as "existing groups disappear once many groups
+    # exist". Disabling pagination here always returns the complete list;
+    # at the scale this app's own character/title vocabulary actually
+    # reaches (tens to low hundreds of groups), that's a small enough
+    # payload that paging it would only add complexity for no real benefit.
+    pagination_class = None
     queryset = CharacterGroup.objects.all()
     serializer_class = CharacterGroupSerializer
 
@@ -2137,4 +2398,124 @@ class CharacterGroupViewSet(viewsets.ModelViewSet):
                 return Response({'detail': 'target group not found'}, status=status.HTTP_404_NOT_FOUND)
 
         return Response({'status': 'ok'})
+
+
+class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
+    """Frontend-facing counterpart to item.management.commands.
+    link_danbooru_characters and the one-off interactive review artifact
+    used earlier to bulk-review its first run — makes the same "is this
+    character name linked to a real Danbooru tag, and if not/wrongly, fix
+    it" workflow a permanent part of the app instead of a one-time offline
+    job + throwaway review tool.
+
+    Not a ModelViewSet: `list` needs to show every character name this
+    app's own Items actually use, INCLUDING ones link_danbooru_characters
+    has never even attempted yet (no CharacterDanbooruLink row at all) —
+    a plain queryset over CharacterDanbooruLink alone would silently hide
+    exactly the characters a human most needs to review.
+    """
+
+    def list(self, request):
+        titles_by_char = defaultdict(set)
+        for item in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
+            'characters', 'titles',
+        ).iterator():
+            chars = [c for c in (item.characters or []) if c]
+            titles = [t for t in (item.titles or []) if t]
+            for c in chars:
+                titles_by_char[c].update(titles)
+
+        existing = {link.character_name: link for link in CharacterDanbooruLink.objects.all()}
+
+        results = []
+        for name in sorted(titles_by_char):
+            link = existing.get(name)
+            results.append({
+                'character_name': name,
+                'titles': sorted(titles_by_char[name]),
+                # False = link_danbooru_characters/the resolve action has
+                # never even run for this name yet — distinct from "ran,
+                # found nothing" (attempted=True, danbooru_tag=None).
+                'attempted': link is not None,
+                'danbooru_tag': link.danbooru_tag if link else None,
+                'resolved_via': link.resolved_via if link else '',
+                'match_score': link.match_score if link else None,
+                'debug_info': link.debug_info if link else None,
+                'updated_at': link.updated_at if link else None,
+            })
+        return Response(results)
+
+    @action(detail=False, methods=['post'], url_path='resolve')
+    def resolve(self, request):
+        """Body: {"character_name": "..."}. Live Danbooru re-resolve for
+        ONE character (a handful of HTTP requests to Danbooru's public
+        API — the same per-character cost link_danbooru_characters pays,
+        just triggered on demand instead of batched offline). Also
+        re-checks for cross-character tag collisions since a fresh
+        resolution can newly collide with an existing link — if THIS
+        character loses that check, the response still reflects the
+        post-collision state, not the momentarily-resolved one.
+        """
+        name = (request.data.get('character_name') or '').strip()
+        if not name:
+            return Response({'detail': 'character_name required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        link = danbooru_lookup.resolve_character_link(name)
+        demotions = danbooru_lookup.dedupe_tag_collisions()
+        link.refresh_from_db()
+        return Response({
+            'character_name': link.character_name,
+            'danbooru_tag': link.danbooru_tag,
+            'resolved_via': link.resolved_via,
+            'match_score': link.match_score,
+            'debug_info': link.debug_info,
+            'demotions': demotions,
+        })
+
+    @action(detail=False, methods=['post'], url_path='manual')
+    def manual(self, request):
+        """Body: {"character_name": "...", "danbooru_tag": "..."|null}.
+        Human override, mirroring how the earlier interactive review
+        artifact's decisions were applied to this same table. A null/
+        empty danbooru_tag means "confirmed no match" (a rejection), not
+        "not yet attempted" — this still writes a CharacterDanbooruLink
+        row so the character stops showing up as unattempted.
+
+        A non-empty tag is validated against Danbooru's own API first
+        (danbooru_lookup.tag_exists) — a manually-typed tag is much more
+        likely to be a typo than a real new alias, and a wrong link here
+        would be trusted at suggestion time exactly like an automated one
+        (see views._match_tagger_characters), so it gets the same
+        "never store a guess" treatment as the automated path.
+        """
+        name = (request.data.get('character_name') or '').strip()
+        if not name:
+            return Response({'detail': 'character_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        tag = (request.data.get('danbooru_tag') or '').strip() or None
+
+        if tag and not danbooru_lookup.tag_exists(tag):
+            return Response(
+                {'detail': f'"{tag}" does not appear to be a real Danbooru tag — check spelling.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        link, _ = CharacterDanbooruLink.objects.update_or_create(
+            character_name=name,
+            defaults={
+                'danbooru_tag': tag,
+                'resolved_via': 'human_review',
+                'match_score': 1.0 if tag else None,
+                'debug_info': {'reason': 'manually set' if tag else 'manually rejected — no match'},
+            },
+        )
+        demotions = danbooru_lookup.dedupe_tag_collisions() if tag else []
+        link.refresh_from_db()
+        return Response({
+            'character_name': link.character_name,
+            'danbooru_tag': link.danbooru_tag,
+            'resolved_via': link.resolved_via,
+            'match_score': link.match_score,
+            'debug_info': link.debug_info,
+            'demotions': demotions,
+        })
 

@@ -4,6 +4,7 @@ import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
+import CharacterDanbooruLinkManager from './components/CharacterDanbooruLinkManager'
 import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import EditQueueManager from './components/EditQueueManager'
@@ -28,6 +29,7 @@ function AppMain({ role, onLogout }){
   const [includeR18, setIncludeR18] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
+  const [charLinkOpen, setCharLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   // Mailbox-style queue: fetching an item's image candidates (ScrollList)
   // appends here instead of popping an inline modal, so accidentally
@@ -426,6 +428,7 @@ function AppMain({ role, onLogout }){
             ...(readOnly ? [] : [
               { divider: true },
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
+              { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
               { label: '取得キュー', onClick: () => setFetchQueueOpen(true), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
               { label: '取得キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('fetchQueue') },
               { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
@@ -501,6 +504,7 @@ function AppMain({ role, onLogout }){
         </React.Suspense>
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
+      {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
       {fetchQueueOpen && (
         <FetchQueueManager

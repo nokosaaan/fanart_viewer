@@ -48,8 +48,8 @@ SITUATION IS SCORED SEPARATELY from title/character, using its own fixed
 weights (views.DEFAULT_SITUATION_WEIGHTS, override with
 --situation-weights) that are NOT swept by --grid-search: the tagger's own
 composition/rating heuristic (tagger._situation_hint — R18 from `rating`
-takes priority, then 1girl+solo -> SOLO, a 3+ count tag/"multiple girls" ->
-MULTIPLE) is a direct read of the image and is trusted on its own rather
+takes priority, then person_count >= 2 -> MULTIPLE, then 1girl+solo ->
+SOLO) is a direct read of the image and is trusted on its own rather
 than blended against DB priors the way title/character are. --grid-search
 still REPORTS situation accuracy for context, but every combo in the grid
 uses the exact same situation_weights, so it can't explain any difference

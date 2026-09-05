@@ -54,6 +54,26 @@ services:
       - db
     # No ports exposed — cloudflared routes traffic internally via Docker network.
 
+  # poller:
+  #   build:
+  #     context: ./backend
+  #     args:
+  #       INSTALL_TIMM_TAGGER: ${INSTALL_TIMM_TAGGER:-1}
+  #   # See docker-compose.yml's poller service for why entrypoint is cleared.
+  #   entrypoint: []
+  #   command: ["sh", "/app/poller_entrypoint.sh"]
+  #   restart: always
+  #   volumes:
+  #     - ./backend/data:/app/data
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - DATABASE_HOST=db
+  #     - DATABASE_PORT=5432
+  #     - DJANGO_DEBUG=0
+  #   depends_on:
+  #     - db
+
   # One-shot service to build the React frontend.
   # Run before first deploy and after any frontend changes:
   #   docker compose -f docker-compose.prod.yml run --rm frontend-build

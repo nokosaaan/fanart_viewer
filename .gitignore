@@ -7,6 +7,7 @@
 /frontend/.env
 /frontend/package-lock.json
 # /scripts/*
+/backend/data/tagger
 /backend/data/*.json
 # /backend/backend/data/*.json
 /backend/.env/

@@ -35,4 +35,22 @@ class PreviewSerializer(serializers.Serializer):
 class CharacterGroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = CharacterGroup
-        fields = ('id', 'name', 'characters', 'titles', 'created_at')
+        fields = ('id', 'name', 'characters', 'titles', 'parent', 'created_at')
+
+    def validate_parent(self, value):
+        """`parent` is self-referential, so nothing at the DB level stops a
+        group being its own parent or two groups pointing at each other —
+        either would make the ancestor walk in views._match_tagger_
+        characters loop forever without the defensive `seen` guard there,
+        so reject both here instead of relying on that guard alone."""
+        if value is None or self.instance is None:
+            return value
+        if value.pk == self.instance.pk:
+            raise serializers.ValidationError('A group cannot be its own parent.')
+        node, seen = value, set()
+        while node is not None and node.pk not in seen:
+            if node.pk == self.instance.pk:
+                raise serializers.ValidationError('This would create a circular group hierarchy.')
+            seen.add(node.pk)
+            node = node.parent
+        return value

@@ -58,6 +58,12 @@ class Command(BaseCommand):
         parser.add_argument('--external', action='store_true',
                              help='Also enable the Danbooru reverse-lookup step (external network '
                                   'calls) — off by default, matching the UI checkbox\'s default state')
+        parser.add_argument('--use-classifier', action='store_true',
+                             help="Also try item.tagger.predict_character (see train_character_classifier) "
+                                  "at the same priority tier as the tagger's own direct character "
+                                  "recognition — off by default (the live suggest_tags endpoint doesn't "
+                                  "use it yet). Enable this to give the cascade the SAME signals "
+                                  "evaluate_ensemble has, for a fair 'combination strategy' comparison.")
         parser.add_argument('--model', choices=['default', 'canary'], default='default',
                              help="Tagger backend to run: 'default' (small ONNX model, always available) "
                                   "or 'canary' (the larger, more recently-trained 'timm' backend — see "
@@ -73,6 +79,7 @@ class Command(BaseCommand):
         limit = options['limit']
         seed = options['seed']
         external = options['external']
+        use_classifier = options['use_classifier']
         model_choice = options['model']
         tagger_backend = 'timm' if model_choice == 'canary' else 'onnx'
         if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
@@ -132,7 +139,8 @@ class Command(BaseCommand):
                 blank.situation = ''
 
                 with patch.object(tagger, 'suggest_tags', return_value=cached_tagger_result):
-                    result = views._suggest_for_item(blank, external=external, tag_limit_for_matching=n)
+                    result = views._suggest_for_item(blank, external=external, tag_limit_for_matching=n,
+                                                      use_classifier=use_classifier)
 
                 if set(result['suggested_titles']) & set(item.titles or []):
                     hits[n]['title'] += 1

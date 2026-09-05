@@ -36,14 +36,32 @@ tag, this tries two increasingly-approximate ways to find the correct one:
 Only a confident, unambiguous match from either method is proposed;
 anything else is reported as needing a human decision.
 
+IMPORTANT SAFETY CHECK: a CharacterGroup's `characters` list is supposed to
+be alternate SPELLINGS of the same one character (group.name is its
+canonical name) — but if a group actually bundles multiple genuinely
+different characters (a leftover "all characters from title X" catch-all,
+the same kind of data-quality issue as this project's known 'white'/
+'牢屋敷メンバー' training labels), querying each of its Japanese-native
+entries independently can yield DIFFERENT resolved tags. Silently trusting
+whichever entry happened to resolve first would then propose that one
+answer for the whole group — including totally unrelated aliases. So every
+Japanese-native entry in the group is checked, and a proposal is only made
+when they all agree; any disagreement is reported as a likely
+multi-character group needing to be split, not guessed through.
+
 Dry-run by default — prints every bad alias and its proposed fix (or "no
 confident match", or "already correct") without touching the DB. Pass
 --apply to actually replace bad aliases with their proposed fix (only the
-UNAMBIGUOUS ones — anything flagged as needing manual review is never
-auto-applied, no matter what).
+UNAMBIGUOUS ones — anything flagged as needing manual review, including a
+group-name disagreement, is never auto-applied, no matter what). Pass
+--show-scores to also print the top-5 scored roster candidates behind
+every proposal (or non-proposal) — use this to sanity-check a specific
+group before trusting --apply, or to paste concrete numbers when a
+proposal still looks wrong.
 
 Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py audit_character_aliases
+  docker compose -f docker-compose.prod.yml exec web python manage.py audit_character_aliases --show-scores
   docker compose -f docker-compose.prod.yml exec web python manage.py audit_character_aliases --apply
 """
 import time
@@ -70,15 +88,58 @@ class Command(BaseCommand):
         parser.add_argument('--apply', action='store_true',
                              help='Actually replace bad aliases with their proposed fix (only when the '
                                   'fix is unambiguous) instead of just reporting them.')
+        parser.add_argument('--show-scores', action='store_true',
+                             help='Print the top-5 scored roster candidates behind every proposal/'
+                                  'non-proposal, for sanity-checking or pasting concrete numbers.')
+
+    def _resolve_via_roster(self, japanese_names, titles, show_scores):
+        """Queries find_tag_via_title_roster for EVERY japanese_names entry
+        (not just the first that resolves) and only returns a proposal
+        when they all agree — see the module docstring's safety-check
+        section for why. Returns (proposal_or_None, disagreement_or_None).
+        """
+        results = {}  # jp_name -> (tag_or_None, debug_info)
+        for jp_name in japanese_names:
+            results[jp_name] = find_tag_via_title_roster(jp_name, titles)
+            if show_scores:
+                tag, debug_info = results[jp_name]
+                for d in debug_info:
+                    self.stdout.write(
+                        f'    [{jp_name}] title="{d["title"]}" -> wiki_tag={d["wiki_tag"]} '
+                        f'roster_size={d["roster_size"]} top_scores={d["top_scores"]}'
+                    )
+
+        proposals = {jp: tag for jp, (tag, _debug) in results.items() if tag}
+        distinct = set(proposals.values())
+        if len(distinct) > 1:
+            return None, proposals  # disagreement — likely a multi-character group
+        if len(distinct) == 1:
+            return distinct.pop(), None
+        return None, None
+
+    def _resolve_via_other_names_fallback(self, japanese_names, titles):
+        """Same all-must-agree safety check as _resolve_via_roster, applied
+        to the less-reliable find_tag_via_other_names fallback — a
+        multi-character group is just as capable of producing disagreeing
+        (and individually wrong) proposals through this path."""
+        proposals = {jp: find_tag_via_other_names(jp, titles) for jp in japanese_names}
+        proposals = {jp: tag for jp, tag in proposals.items() if tag}
+        distinct = set(proposals.values())
+        if len(distinct) > 1:
+            return None, proposals
+        if len(distinct) == 1:
+            return distinct.pop(), None
+        return None, None
 
     def handle(self, *args, **options):
         apply_fixes = options['apply']
+        show_scores = options['show_scores']
         groups = list(CharacterGroup.objects.all())
         if not groups:
             self.stdout.write('No CharacterGroups found.')
             return
 
-        n_checked = n_ok = n_fixed = n_needs_review = 0
+        n_checked = n_ok = n_fixed = n_needs_review = n_disagreement = 0
         t0 = time.time()
 
         for group in groups:
@@ -98,19 +159,31 @@ class Command(BaseCommand):
                     n_ok += 1
                     continue
 
-                proposal = None
-                method = None
-                for jp_name in japanese_names:
-                    proposal = find_tag_via_title_roster(jp_name, group.titles)
-                    if proposal:
-                        method = 'roster'
-                        break
+                proposal, disagreement = self._resolve_via_roster(japanese_names, group.titles, show_scores)
+                method = 'roster' if proposal else None
+                if disagreement:
+                    n_needs_review += 1
+                    n_disagreement += 1
+                    self.stdout.write(self.style.ERROR(
+                        f'[{group.name}] "{alias}": this group\'s Japanese names resolve to DIFFERENT '
+                        f'Danbooru characters ({disagreement}) — looks like a multi-character group that '
+                        'needs to be split, not a single alias fix. Skipped.'
+                    ))
+                    continue
+
                 if not proposal:
-                    for jp_name in japanese_names:
-                        proposal = find_tag_via_other_names(jp_name, group.titles)
-                        if proposal:
-                            method = 'other_names (less reliable — double-check this one)'
-                            break
+                    proposal, disagreement = self._resolve_via_other_names_fallback(japanese_names, group.titles)
+                    if disagreement:
+                        n_needs_review += 1
+                        n_disagreement += 1
+                        self.stdout.write(self.style.ERROR(
+                            f'[{group.name}] "{alias}": this group\'s Japanese names resolve to DIFFERENT '
+                            f'Danbooru characters via the fallback method ({disagreement}) — looks like a '
+                            'multi-character group. Skipped.'
+                        ))
+                        continue
+                    if proposal:
+                        method = 'other_names (less reliable — double-check this one)'
 
                 if proposal:
                     n_fixed += 1
@@ -135,7 +208,7 @@ class Command(BaseCommand):
         self.stdout.write(
             f'\nChecked {n_checked} aliases across {len(groups)} groups in {time.time() - t0:.0f}s: '
             f'{n_ok} already correct, {n_fixed} {"fixed" if apply_fixes else "fixable"}, '
-            f'{n_needs_review} need manual review.'
+            f'{n_needs_review} need manual review ({n_disagreement} of those look like multi-character groups).'
         )
         if not apply_fixes and n_fixed:
             self.stdout.write('Re-run with --apply to actually write the fixable ones.')
