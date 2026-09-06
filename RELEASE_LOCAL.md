@@ -211,9 +211,38 @@ docker compose -f docker-compose.prod.yml exec web python manage.py train_charac
 
 canaryはDanbooruリンクと組み合わせて初めて真価を発揮するが、推論速度が本番機材（ラズパイ等）で実用的かは要確認。
 
-### 4. 動作確認
+### 特徴量キャッシュ（--feature-cache / --use-cache）
 
-フロントエンドの「統合型の推論を使う」チェックボックス・モデル選択（標準/canary）で実際に数件試す。両方ともデフォルトOFF（先取り式・ONNX標準）のままなので、切り替える場合は明示的な設定変更が必要。
+学習コマンドで一番時間がかかるのは分類器のfit自体ではなく、**画像ごとにタガーを1回通す特徴抽出**部分（特にcanaryは1枚約7.7秒＝全画像で数時間かかることもある）。`--exclude`や`--min-images`を変えて何度か試したい場合、毎回特徴抽出からやり直すと非常に無駄なので、キャッシュを使うこと。
+
+```bash
+# 初回: 特徴抽出＋学習と同時に、抽出結果をキャッシュに保存
+docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \
+  --min-images 15 --exclude 牢屋敷メンバー \
+  --feature-cache /app/data/tagger/character_features_canary.joblib
+
+# 2回目以降: --exclude/--min-images/--test-sizeだけ変えて再fit（特徴抽出はスキップ、数秒で終わる）
+docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \
+  --use-cache /app/data/tagger/character_features_canary.joblib \
+  --exclude 牢屋敷メンバー,別の除外キャラ --min-images 20
+```
+
+注意点:
+- キャッシュは`--backend`（ONNX/canary）ごとに別ファイルにすること（特徴の次元・意味が違うため使い回せない）
+- `--use-cache`はキャッシュ作成時の`--min-images`より**低い**値を指定しても、そのキャラの画像自体はキャッシュに含まれていない（キャッシュ作成時点で足切りされている）ため反映されない。キャラの対象範囲を広げたい場合は初回の`--feature-cache`作成時に低めの`--min-images`を使っておくと、後から絞り込む分には自由に使い回せる
+- DBに新しい画像・キャラを追加した後は、キャッシュは古いままなので**再抽出（`--feature-cache`を付けた実行）が必要**。`--use-cache`は「同じデータで学習パラメータだけ変えたい」時専用
+
+### 4. 学習後は必ずwebコンテナを再起動する
+
+`train_character_classifier`は`docker compose ... exec web`で**既に動いているwebコンテナの中に別プロセスとして**入り込んで実行される。保存先(`/app/data/tagger/character_classifier_<backend>.joblib`)はbind mount（`./backend/data:/app/data`）なのでファイル自体はホスト側に永続化されるが、実際にリクエストを処理しているgunicornワーカー側は`tagger.py`の`_classifier_state`にモデルをプロセス起動後の初回利用時にメモリキャッシュしているため、学習をやり直してファイルを差し替えても**再起動しない限り古いモデル（または無し）のまま**になる。
+
+```bash
+docker compose -f docker-compose.prod.yml restart web
+```
+
+### 5. 動作確認
+
+フロントエンドの「統合型の推論を使う」チェックボックスは現在デフォルトON（統合型が本番デフォルト）。モデル選択（標準/canary）は引き続き手動選択のまま、実際に数件試す。
 
 ---
 
