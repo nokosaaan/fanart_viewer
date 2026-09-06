@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -60,6 +60,24 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
   const scoped = selectedTitles.length > 0 && matchingGroups.length > 0
   const visibleGroups = scoped ? matchingGroups : groups
 
+  // Tree structure (mirrors CharacterGroupManager.jsx's own
+  // childrenByParentId): computed over `visibleGroups` only, so a child
+  // whose parent got filtered out by title-scoping still renders — just as
+  // a top-level node instead of vanishing — rather than being silently
+  // dropped because its parent isn't in scope.
+  const visibleGroupIds = useMemo(() => new Set(visibleGroups.map(g => g.id)), [visibleGroups])
+  const childrenByParentId = useMemo(() => {
+    const m = new Map()
+    visibleGroups.forEach(g => {
+      if (g.parent == null || !visibleGroupIds.has(g.parent)) return
+      if (!m.has(g.parent)) m.set(g.parent, [])
+      m.get(g.parent).push(g)
+    })
+    m.forEach(list => list.sort((a, b) => a.name.localeCompare(b.name)))
+    return m
+  }, [visibleGroups, visibleGroupIds])
+  const topLevelGroups = visibleGroups.filter(g => g.parent == null || !visibleGroupIds.has(g.parent))
+
   async function createGroupForTitle() {
     const name = newGroupName.trim()
     if (!name) return
@@ -109,6 +127,47 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
   ])
   const hiddenSelected = charList.filter(c => !shownChars.has(c))
 
+  // Recursive tree node (mirrors CharacterGroupManager.jsx's own
+  // renderGroupNode): a group's chips plus its own child groups, indented
+  // beneath it. Unlike CharacterGroupManager, child groups stay nested even
+  // while `query` has text — here `query` only filters which characters
+  // show inside each already-visible group, it never hides groups
+  // themselves, so there's no "child matched but its parent didn't" case
+  // to fall back flat for.
+  function renderGroupNode(g, depth) {
+    const chars = filterChars(Array.isArray(g.characters) ? g.characters : [])
+    const children = childrenByParentId.get(g.id) || []
+    if (chars.length === 0 && children.length === 0) return null
+
+    const isCollapsed = searching ? false : collapsed[g.id]
+    const selectedInGroup = chars.filter(c => charList.includes(c)).length
+    return (
+      <React.Fragment key={g.id}>
+        <div className="cp-group" style={depth ? { marginLeft: depth * 16 } : undefined}>
+          <button className="cp-group-header" onClick={() => setCollapsed(p => ({ ...p, [g.id]: !p[g.id] }))}>
+            <span className="cp-toggle">{isCollapsed ? '▶' : '▼'}</span>
+            <span className="cp-group-name">{depth > 0 && '↳ '}{g.name}</span>
+            {selectedInGroup > 0 && <span className="cp-selected-badge">{selectedInGroup}</span>}
+          </button>
+          {!isCollapsed && chars.length > 0 && (
+            <div className="cp-chips">
+              {chars.map(char => (
+                <button
+                  key={char}
+                  className={`cp-chip${charList.includes(char) ? ' cp-chip-on' : ''}`}
+                  onClick={() => toggle(char)}
+                >{char}</button>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* A closed toggle hides this group's own child groups too, same as
+            CharacterGroupManager's tree. */}
+        {!isCollapsed && children.map(child => renderGroupNode(child, depth + 1))}
+      </React.Fragment>
+    )
+  }
+
   return (
     <div className="cp-root">
       <div className="cp-search-row">
@@ -131,32 +190,7 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
         <div className="cp-hint">このタイトルに紐づくグループはまだありません（全グループを表示中）。下のボタンから作成できます</div>
       )}
 
-      {visibleGroups.map(g => {
-        const chars = filterChars(Array.isArray(g.characters) ? g.characters : [])
-        if (chars.length === 0) return null
-        const isCollapsed = searching ? false : collapsed[g.id]
-        const selectedInGroup = chars.filter(c => charList.includes(c)).length
-        return (
-          <div key={g.id} className="cp-group">
-            <button className="cp-group-header" onClick={() => setCollapsed(p => ({ ...p, [g.id]: !p[g.id] }))}>
-              <span className="cp-toggle">{isCollapsed ? '▶' : '▼'}</span>
-              <span className="cp-group-name">{g.name}</span>
-              {selectedInGroup > 0 && <span className="cp-selected-badge">{selectedInGroup}</span>}
-            </button>
-            {!isCollapsed && (
-              <div className="cp-chips">
-                {chars.map(char => (
-                  <button
-                    key={char}
-                    className={`cp-chip${charList.includes(char) ? ' cp-chip-on' : ''}`}
-                    onClick={() => toggle(char)}
-                  >{char}</button>
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
+      {topLevelGroups.map(g => renderGroupNode(g, 0))}
 
       {selectedTitles.length > 0 && (
         creatingGroup ? (

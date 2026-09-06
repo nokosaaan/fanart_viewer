@@ -19,9 +19,17 @@ const chipStyle = {
 // Renders text with #hashtags visually distinguished, so a quick glance
 // confirms whether _extract_full_text actually captured the hashtags a
 // post used (the signal _match_hashtags relies on) rather than requiring
-// the user to compare against the source tweet by eye.
+// the user to compare against the source tweet by eye. The split pattern
+// mirrors the backend's own extraction regex exactly (item/views.py's
+// `_HASHTAG_RE = re.compile(r'#(\w+)', re.UNICODE)`) — \w in Python is
+// Unicode-aware (matches Japanese letters too), so this uses \p{L}\p{N}_
+// with the `u` flag as JS's equivalent. Previously this used a much more
+// permissive `#[^\s#]+` pattern (stops only at whitespace/#), so e.g.
+// "#鬼滅の刃/劇場版" was highlighted in full even though the backend only
+// ever matches up to the slash ("鬼滅の刃") — misleadingly implying more
+// was recognized than actually gets matched by _match_hashtags.
 function HighlightedText({ text }){
-  const parts = String(text || '').split(/(#[^\s#]+)/g)
+  const parts = String(text || '').split(/(#[\p{L}\p{N}_]+)/gu)
   return parts.map((part, i) => (
     part.startsWith('#')
       ? <span key={i} style={{color:'#93c5fd', fontWeight:600}}>{part}</span>
@@ -163,6 +171,12 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // — not every deployment opts into torch).
   const [suggestModel, setSuggestModel] = useState('default')
   const [haveTimm, setHaveTimm] = useState(false)
+  // This item's individual preview images (see ItemViewSet.previews), so
+  // the user can pick a specific one to run inference on instead of always
+  // the single largest image (suggest_tags_view's own default — see
+  // _select_image_bytes). null = "let the server pick" (largest image).
+  const [images, setImages] = useState([])
+  const [selectedImageIndex, setSelectedImageIndex] = useState(null)
 
   useEffect(()=>{
     fetch('/api/items/all_titles/')
@@ -171,7 +185,9 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setAllChars(d) }).catch(()=>{})
     fetch('/api/items/tagger_capabilities/')
       .then(r=>r.json()).then(d=>setHaveTimm(!!d.have_timm)).catch(()=>{})
-  }, [])
+    fetch(`/api/items/${item.id}/previews/`)
+      .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setImages(d) }).catch(()=>{})
+  }, [item.id])
 
   function parseList(str){
     if(str == null) return []
@@ -221,7 +237,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
 
     setTitleCandidates(j.title_candidates || [])
 
-    setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null })
+    // j.image_index: which PreviewImage the tagger actually ran on (null
+    // when there was no image to infer from, e.g. tags-only result from
+    // hashtags/DB history). Surfaced in the UI so it's never ambiguous
+    // which image a suggestion is based on — see _select_image_bytes.
+    setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null, imageIndex: j.image_index ?? null })
   }
 
   function acceptTitleCandidate(t){
@@ -278,6 +298,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
           external: suggestExternal,
           model: suggestModel === 'canary' ? 'timm' : 'default',
           use_ensemble: suggestUseEnsemble,
+          image_index: selectedImageIndex,
         }),
       })
       const j = await resp.json().catch(()=>({}))
@@ -332,11 +353,54 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <button className="btn" style={{padding:'4px 10px'}} onClick={onClose}>✕</button>
       </div>
 
-      {item.description && (
-        <div style={{...SECTION.wrap, background:'#0f172a'}}>
-          <label style={SECTION.label}>取得した本文(確認用) <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— ハッシュタグが正しく取れているか確認できます</span></label>
+      <div style={{...SECTION.wrap, background:'#0f172a'}}>
+        <label style={SECTION.label}>取得した本文(確認用) <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— ハッシュタグが正しく取れているか確認できます</span></label>
+        {item.description ? (
           <div style={{fontSize:13, color:'#cbd5e1', whiteSpace:'pre-wrap', wordBreak:'break-word'}}>
             <HighlightedText text={item.description} />
+          </div>
+        ) : (
+          // Explicit rather than hiding the whole block, so an empty result
+          // reads as "nothing was captured for this item" (e.g. imported
+          // before description capture existed, or the fetcher used
+          // doesn't return post text) instead of looking like the panel
+          // itself failed to load.
+          <div style={{fontSize:13, color:'#64748b', fontStyle:'italic'}}>
+            本文情報なし（取得時に保存されていないか、未取得です）
+          </div>
+        )}
+      </div>
+
+      {images.length > 1 && (
+        <div style={{...SECTION.wrap, background:'#0f172a'}}>
+          <label style={SECTION.label}>推論に使う画像 <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— 未選択なら最も大きい画像が自動で使われます</span></label>
+          <div style={{display:'flex', flexWrap:'wrap', gap:8}}>
+            <button
+              onClick={()=>setSelectedImageIndex(null)}
+              title="自動選択(最大サイズの画像)"
+              style={{
+                width:56, height:56, borderRadius:6, cursor:'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                background:'#1e293b', color:'#94a3b8', fontSize:11,
+                border: selectedImageIndex === null ? '2px solid #3b82f6' : '1px solid #334155',
+              }}
+            >自動</button>
+            {images.map(img => (
+              <button
+                key={img.index}
+                onClick={()=>setSelectedImageIndex(img.index)}
+                title={`${img.index + 1}枚目でこの画像に対して提案する`}
+                style={{
+                  width:56, height:56, borderRadius:6, padding:0, cursor:'pointer', overflow:'hidden', position:'relative',
+                  border: selectedImageIndex === img.index ? '2px solid #3b82f6' : '1px solid #334155',
+                }}
+              >
+                <img src={`/api/items/${item.id}/preview/?index=${img.index}`} alt={`${img.index + 1}枚目`}
+                  style={{width:'100%', height:'100%', objectFit:'cover', display:'block'}} />
+                <span style={{position:'absolute', right:2, bottom:2, fontSize:10, color:'#fff',
+                  background:'rgba(0,0,0,0.6)', borderRadius:3, padding:'0 3px'}}>{img.index + 1}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -370,6 +434,9 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                     : suggestionResult.source === 'tagger' ? '画像解析から'
                     : '既存データ＋画像解析から'}
                   {suggestionResult.source.includes('danbooru') && '（Danbooru照合で新規タイトルを推論）'}</>
+              )}
+              {images.length > 1 && suggestionResult.imageIndex != null && (
+                <> （{suggestionResult.imageIndex + 1}枚目の画像を使用）</>
               )}
             </>
           ) : (

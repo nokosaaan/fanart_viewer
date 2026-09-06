@@ -79,6 +79,25 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   const bulkSuggestingRef = useRef(false)
   const [bulkProgress, setBulkProgress] = useState(null) // {done, total, skipped}
 
+  // Kill switch for every bulk loop below (runSuggestFor, bulkSaveTagsOnly)
+  // — set on unmount, which fires whether this panel is closed as an
+  // overlay in the main window or as a popped-out standalone window (a
+  // popped-out window closing tears down its whole JS context anyway, so
+  // this mostly matters for the overlay case: without it, a bulk loop mid-
+  // flight when the user closes the panel just kept running to completion
+  // in the background — still hitting suggest_tags/update_fields and
+  // mutating state on an unmounted component). Checked at the top of every
+  // loop iteration and again right after each await, so a request already
+  // in flight at the moment of closing never gets its result applied.
+  // abortRef additionally cuts the in-flight fetch itself short instead of
+  // just discarding its result once it eventually resolves.
+  const cancelledRef = useRef(false)
+  const abortRef = useRef(null)
+  useEffect(() => {
+    abortRef.current = new AbortController()
+    return () => { cancelledRef.current = true; abortRef.current.abort() }
+  }, [])
+
   // Bulk-save state for the "tags-only missing" fast path below.
   const [bulkSaving, setBulkSaving] = useState(false)
   const [bulkSaveProgress, setBulkSaveProgress] = useState(null) // {done, total, failed}
@@ -125,6 +144,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
     let done = 0, skipped = 0
     setBulkProgress({ done, total: targets.length, skipped })
     for(const it of targets){
+      if(cancelledRef.current) return  // panel closed mid-run — stop immediately, no further state touches
       try{
         const resp = await fetch(`/api/items/${it.id}/suggest_tags/`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -133,8 +153,11 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
             model: model === 'canary' ? 'timm' : 'default',
             use_ensemble: !!useEnsemble,
           }),
+          signal: abortRef.current.signal,
         })
+        if(cancelledRef.current) return  // closed while this request was in flight — discard its result
         const j = await resp.json().catch(()=>({}))
+        if(cancelledRef.current) return
         if(resp.ok){
           suggestionsRef.current = { ...suggestionsRef.current, [it.id]: j }
           setSuggestions(suggestionsRef.current)
@@ -142,6 +165,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
           skipped++
         }
       }catch(e){
+        if(cancelledRef.current || (e && e.name === 'AbortError')) return
         console.error('Suggest failed for item', it.id, e)
         skipped++
       }
@@ -270,6 +294,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
     setBulkSaveProgress({ done, total: targets.length, failed })
     const savedIds = []
     for(const it of targets){
+      if(cancelledRef.current) return  // panel closed mid-run — stop immediately, no further state touches
       try{
         const payload = {
           titles: it.titles || [],
@@ -282,9 +307,12 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
           credentials: 'same-origin',
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          signal: abortRef.current.signal,
         })
+        if(cancelledRef.current) return  // closed while this request was in flight — discard its result
         const j = await resp.json().catch(()=>({}))
+        if(cancelledRef.current) return
         if(resp.ok){
           savedIds.push(it.id)
           notify('item-updated', { id: it.id, item: j.item })
@@ -292,6 +320,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
           failed++
         }
       }catch(e){
+        if(cancelledRef.current || (e && e.name === 'AbortError')) return
         console.error('Bulk tag save failed for item', it.id, e)
         failed++
       }

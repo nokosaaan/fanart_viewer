@@ -692,9 +692,40 @@ def _merge_unique(*lists):
     return out
 
 
+def _select_image_bytes(item, image_index=None):
+    """Pick which of `item`'s images to feed the tagger for inference.
+
+    `image_index`: 0-based position in item.preview_images ordered by
+    `order` — the same indexing scheme as ItemViewSet.preview's own
+    `?index=N` query param (and previews/{idx}/), so a caller can request
+    inference on a specific image the user is looking at in the preview
+    carousel. Out of range or None falls back to the original default:
+    the single largest-by-byte-size PreviewImage (a reasonable pick when
+    the caller has no specific image in mind — usually the highest-
+    quality/most-complete one). Falls back further to the denormalized
+    item.preview_data only when there are no PreviewImage rows at all
+    (no index concept there, since it's a single inline field).
+
+    Returns (image_bytes | None, resolved_index | None) — resolved_index
+    is the index actually used (echoed back to the client so it's never
+    ambiguous which image a suggestion result is based on), or None when
+    there were no PreviewImage rows to index into.
+    """
+    imgs = list(item.preview_images.order_by('order'))
+    if imgs:
+        if image_index is not None and 0 <= image_index < len(imgs):
+            return bytes(imgs[image_index].data), image_index
+        best_idx = max(range(len(imgs)), key=lambda i: len(imgs[i].data or b''))
+        return bytes(imgs[best_idx].data), best_idx
+    if item.preview_data:
+        return bytes(item.preview_data), None
+    return None, None
+
+
 def _suggest_for_item(item, external=False, tagger_backend='onnx',
                        general_threshold=0.35, character_threshold=0.85,
-                       tag_limit_for_matching=None, use_classifier=False):
+                       tag_limit_for_matching=None, use_classifier=False,
+                       image_index=None):
     """Suggest titles/characters/tags/situation for `item`. Extracted from
     ItemViewSet.suggest_tags_view (the actual HTTP endpoint, now a thin
     wrapper around this) so it can also be called directly against an
@@ -753,6 +784,7 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
     titles, characters, tags, situation_hint = [], [], [], None
     title_candidates = []  # low-confidence fallback — see _suggest_from_similar_tags's docstring
     source = 'none'
+    resolved_image_index = None
 
     def _remaining():
         return (want_titles and not titles) or (want_characters and not characters) or (want_situation and not situation_hint)
@@ -825,13 +857,7 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
 
     needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
     if needs_tagger and HAVE_TAGGER:
-        imgs = list(item.preview_images.order_by('order'))
-        if imgs:
-            image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
-        elif item.preview_data:
-            image_bytes = bytes(item.preview_data)
-        else:
-            image_bytes = None
+        image_bytes, resolved_image_index = _select_image_bytes(item, image_index)
 
         if image_bytes is not None:
             try:
@@ -927,6 +953,7 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
         'title_candidates': title_candidates,
         'source': source,
         'sample_size': db['sample_size'] if db else 0,
+        'image_index': resolved_image_index,
     }
 
 
@@ -954,10 +981,12 @@ def _append_tag_similarity_candidates(sim, title_c, char_c, situation_c,
 
 def _collect_candidates(item, external=False, tagger_backend='onnx',
                          general_threshold=0.35, character_threshold=0.85,
-                         tag_limit_for_matching=None):
-    """Research/evaluation counterpart to _suggest_for_item (see
-    item.management.commands.evaluate_ensemble) — NOT wired into the live
-    suggest_tags endpoint. _suggest_for_item stops at the first source that
+                         tag_limit_for_matching=None, image_index=None):
+    """Candidate-collecting counterpart to _suggest_for_item, used both by
+    _suggest_for_item_ensemble (the live suggest_tags endpoint's default —
+    see that function's own docstring) and directly by
+    item.management.commands.evaluate_ensemble for offline evaluation.
+    _suggest_for_item stops at the first source that
     resolves a field, on the reasoning that DB signals are generally more
     reliable than the image model's guess; in practice that means a weak
     DB signal (e.g. an artist's history that barely clears its own
@@ -1018,14 +1047,9 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
                                            want_titles, want_characters, want_situation)
 
     tagger_result = None
+    resolved_image_index = None
     if (want_titles or want_characters or want_tags or want_situation) and HAVE_TAGGER:
-        imgs = list(item.preview_images.order_by('order'))
-        if imgs:
-            image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
-        elif item.preview_data:
-            image_bytes = bytes(item.preview_data)
-        else:
-            image_bytes = None
+        image_bytes, resolved_image_index = _select_image_bytes(item, image_index)
 
         if image_bytes is not None:
             try:
@@ -1107,6 +1131,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         'title': title_c, 'character': char_c, 'situation': situation_c, 'tags': tags_out,
         'want_titles': want_titles, 'want_characters': want_characters,
         'want_tags': want_tags, 'want_situation': want_situation,
+        'image_index': resolved_image_index,
     }
 
 
@@ -1201,7 +1226,8 @@ def _character_breakdown(entries, values):
 
 
 def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
-                                general_threshold=0.35, character_threshold=0.85):
+                                general_threshold=0.35, character_threshold=0.85,
+                                image_index=None):
     """Weighted-ensemble counterpart to _suggest_for_item — same
     want_titles/want_characters/want_tags/want_situation contract and
     return shape (drop-in compatible with suggest_tags_view's response),
@@ -1224,6 +1250,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     collected = _collect_candidates(
         item, external=external, tagger_backend=tagger_backend,
         general_threshold=general_threshold, character_threshold=character_threshold,
+        image_index=image_index,
     )
 
     title_values, _title_scores = _combine_candidates(collected['title'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
@@ -1257,6 +1284,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         'title_candidates': [],
         'source': 'ensemble',
         'sample_size': 0,
+        'image_index': collected['image_index'],
     }
 
 
@@ -2259,10 +2287,23 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             general_threshold, character_threshold = 0.35, 0.85
 
+        # 0-based position within item.preview_images (same indexing as
+        # the `preview`/`previews` actions' own ?index=N / previews/{idx}/)
+        # — lets the client run inference against a specific image instead
+        # of always the single largest one. Omitted/invalid falls back to
+        # that same default (see _select_image_bytes).
+        image_index = data.get('image_index')
+        if image_index is not None:
+            try:
+                image_index = int(image_index)
+            except (TypeError, ValueError):
+                image_index = None
+
         suggest_fn = _suggest_for_item_ensemble if use_ensemble else _suggest_for_item
         result = suggest_fn(
             item, external=external, tagger_backend=tagger_backend,
             general_threshold=general_threshold, character_threshold=character_threshold,
+            image_index=image_index,
         )
         return Response(result)
 

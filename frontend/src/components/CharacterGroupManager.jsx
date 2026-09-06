@@ -22,7 +22,14 @@ export default function CharacterGroupManager({ onClose }) {
   const [addCharInput, setAddCharInput] = useState('')
   const [addTitleTarget, setAddTitleTarget] = useState(null)  // groupId
   const [addTitleInput, setAddTitleInput] = useState('')
-  const [moveState, setMoveState] = useState(null)   // {char, fromGroupId}
+  // {chars: string[]} — the character(s) currently targeted by the move
+  // popover. Always an array so the single-chip ⇄ shortcut and the
+  // multi-select "N件を移動" bar share one code path; each character's
+  // current group is looked up fresh via groupOf() at move time rather
+  // than captured up front, since a checkbox selection can span multiple
+  // source groups (and ungrouped) at once.
+  const [moveState, setMoveState] = useState(null)
+  const [selectedChars, setSelectedChars] = useState(new Set())
   const [query, setQuery] = useState('')
   const [parentPickerFor, setParentPickerFor] = useState(null)  // groupId whose parent is being set
 
@@ -133,14 +140,33 @@ export default function CharacterGroupManager({ onClose }) {
     } catch (e) { alert('削除失敗: ' + e.message) }
   }
 
-  async function moveCharacter(char, fromGroupId, toGroupId) {
+  // Moves one or more characters to `toGroupId` (or null = 未分類). Each
+  // character's current group is resolved individually via groupOf() so a
+  // multi-select spanning several source groups (or a mix of grouped/
+  // ungrouped) works in one action — the backend endpoint only ever moves
+  // one character at a time, so this is a sequential loop rather than a
+  // single bulk request (fine at this app's scale: tens of characters per
+  // group, not thousands).
+  async function moveCharacters(chars, toGroupId) {
     try {
-      await apiCall('/api/character-groups/move_character/', 'POST', {
-        character: char, from_group_id: fromGroupId, to_group_id: toGroupId,
-      })
+      for (const char of chars) {
+        const from = groupOf(char)
+        await apiCall('/api/character-groups/move_character/', 'POST', {
+          character: char, from_group_id: from ? from.id : null, to_group_id: toGroupId,
+        })
+      }
       setMoveState(null)
+      setSelectedChars(new Set())
       load()
     } catch (e) { alert('移動失敗: ' + e.message) }
+  }
+
+  function toggleSelectChar(char) {
+    setSelectedChars(prev => {
+      const next = new Set(prev)
+      if (next.has(char)) next.delete(char); else next.add(char)
+      return next
+    })
   }
 
   async function removeFromGroup(char, groupId) {
@@ -310,10 +336,12 @@ export default function CharacterGroupManager({ onClose }) {
           {!isCollapsed && (
             <div className="cgm-panel-chips">
               {chars.map(char => (
-                <span key={char} className="cgm-panel-chip">
+                <span key={char} className={`cgm-panel-chip${selectedChars.has(char) ? ' cgm-panel-chip-selected' : ''}`}>
+                  <input type="checkbox" className="cgm-chip-checkbox" title="複数選択して一括移動"
+                    checked={selectedChars.has(char)} onChange={() => toggleSelectChar(char)} />
                   {char}
                   <button className="cgm-chip-btn" title="グループを変更"
-                    onClick={() => setMoveState({ char, fromGroupId: g.id })}>⇄</button>
+                    onClick={() => setMoveState({ chars: [char] })}>⇄</button>
                   <button className="cgm-chip-btn cgm-chip-del" title="このグループから外す"
                     onClick={() => removeFromGroup(char, g.id)}>×</button>
                 </span>
@@ -333,7 +361,11 @@ export default function CharacterGroupManager({ onClose }) {
             />
           )}
         </div>
-        {children.map(child => renderGroupNode(child, depth + 1))}
+        {/* Child groups nest under their parent's collapse state too — a
+            closed parent (▶) hides its children along with its own
+            character chips, instead of always showing the full subtree
+            regardless of toggle state. */}
+        {!isCollapsed && children.map(child => renderGroupNode(child, depth + 1))}
       </React.Fragment>
     )
   }
@@ -355,6 +387,20 @@ export default function CharacterGroupManager({ onClose }) {
           />
         </div>
 
+        {selectedChars.size > 0 && (
+          <div className="cgm-panel-search cgm-select-bar" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12 }}>{selectedChars.size}件選択中</span>
+            <button className="btn" style={{ fontSize: 12 }}
+              onClick={() => setMoveState({ chars: [...selectedChars] })}>
+              選択した{selectedChars.size}件を移動
+            </button>
+            <button className="btn" style={{ fontSize: 12 }}
+              onClick={() => setSelectedChars(new Set())}>
+              選択解除
+            </button>
+          </div>
+        )}
+
         <div className="cgm-panel-body">
           {/* Groups */}
           {visibleGroups.length === 0 && searching && (
@@ -373,10 +419,12 @@ export default function CharacterGroupManager({ onClose }) {
               </div>
               <div className="cgm-panel-chips">
                 {shownUngrouped.map(char => (
-                  <span key={char} className="cgm-panel-chip cgm-panel-chip-ungrouped">
+                  <span key={char} className={`cgm-panel-chip cgm-panel-chip-ungrouped${selectedChars.has(char) ? ' cgm-panel-chip-selected' : ''}`}>
+                    <input type="checkbox" className="cgm-chip-checkbox" title="複数選択して一括移動"
+                      checked={selectedChars.has(char)} onChange={() => toggleSelectChar(char)} />
                     {char}
                     <button className="cgm-chip-btn" title="グループに割り当て"
-                      onClick={() => setMoveState({ char, fromGroupId: null })}>⇄</button>
+                      onClick={() => setMoveState({ chars: [char] })}>⇄</button>
                   </span>
                 ))}
               </div>
@@ -407,24 +455,32 @@ export default function CharacterGroupManager({ onClose }) {
           </div>
         </div>
 
-        {/* Move popover */}
+        {/* Move popover — moveState.chars is always an array, whether opened
+            from a single chip's ⇄ shortcut or the multi-select bar below,
+            so this one popup handles both. Each character keeps its own
+            current group looked up fresh in moveCharacters(), so a mixed
+            selection (spanning several groups, or grouped+ungrouped) still
+            resolves correctly per-character rather than assuming one
+            shared source group. */}
         {moveState && (
           <div className="cgm-move-overlay" onClick={() => setMoveState(null)}>
             <div className="cgm-move-popup" onClick={e => e.stopPropagation()}>
-              <div className="cgm-move-title">「{moveState.char}」を移動</div>
+              <div className="cgm-move-title">
+                {moveState.chars.length === 1
+                  ? `「${moveState.chars[0]}」を移動`
+                  : `選択した${moveState.chars.length}件を移動`}
+              </div>
               <div className="cgm-move-options">
-                {sortedGroups.filter(g => g.id !== moveState.fromGroupId).map(g => (
+                {sortedGroups.map(g => (
                   <button key={g.id} className="cgm-move-option"
-                    onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, g.id)}>
+                    onClick={() => moveCharacters(moveState.chars, g.id)}>
                     {g.name}
                   </button>
                 ))}
-                {moveState.fromGroupId !== null && (
-                  <button className="cgm-move-option cgm-move-ungrouped"
-                    onClick={() => moveCharacter(moveState.char, moveState.fromGroupId, null)}>
-                    未分類に移動
-                  </button>
-                )}
+                <button className="cgm-move-option cgm-move-ungrouped"
+                  onClick={() => moveCharacters(moveState.chars, null)}>
+                  未分類に移動
+                </button>
               </div>
               <button className="cgm-move-cancel" onClick={() => setMoveState(null)}>キャンセル</button>
             </div>

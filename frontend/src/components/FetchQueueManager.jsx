@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { saveImagesChunked } from '../lib/saveImages'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 import { notify, postSync, onSync } from '../lib/crossWindowSync'
@@ -55,6 +55,18 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
   const [bulkProgress, setBulkProgress] = useState(null) // {done, total}
   const [bulkSummary, setBulkSummary] = useState(null)
 
+  // Kill switch for runBulkFetch — see EditQueueManager.jsx's identical
+  // cancelledRef/abortRef pair for the full reasoning (applies here the
+  // same way: closing this panel, overlay or standalone, must stop a
+  // mid-flight bulk fetch from continuing to hit fetch_and_save_preview in
+  // the background).
+  const cancelledRef = useRef(false)
+  const abortRef = useRef(null)
+  useEffect(() => {
+    abortRef.current = new AbortController()
+    return () => { cancelledRef.current = true; abortRef.current.abort() }
+  }, [])
+
   const openEntry = queue.find(q => q.id === openId) || null
 
   // Items on the currently displayed page that don't already have a preview
@@ -72,10 +84,12 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
     setBulkSummary(null)
     let queued = 0, savedDirect = 0, failed = 0
     for(let i=0; i<pendingItems.length; i++){
+      if(cancelledRef.current) return  // panel closed mid-run — stop immediately, no further state touches
       setBulkProgress({ done: i, total: pendingItems.length })
       const it = pendingItems[i]
       try{
-        const res = await fetchPreviewCandidates(it.id, it.link)
+        const res = await fetchPreviewCandidates(it.id, it.link, { signal: abortRef.current.signal })
+        if(cancelledRef.current) return  // closed while this request was in flight — discard its result
         const body = res.body || {}
         if(res.ok && body.status === 'saved'){
           savedDirect++
@@ -87,6 +101,7 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
           failed++
         }
       }catch(e){
+        if(cancelledRef.current || (e && e.name === 'AbortError')) return
         console.error('Bulk fetch failed for item', it.id, e)
         failed++
       }
