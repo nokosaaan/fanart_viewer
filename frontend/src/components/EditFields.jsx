@@ -409,9 +409,9 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <button className="btn" onClick={runSuggest} disabled={suggesting} style={{fontSize:13}}>
           {suggesting ? '画像を解析中…' : (suggestionResult ? '🏷 再提案' : '🏷 AIでキャラ・タグを提案')}
         </button>
-        <label style={{marginLeft:10, fontSize:11, color:'#94a3b8', cursor:'pointer'}}>
+        <label style={{marginLeft:10, fontSize:11, color:'#94a3b8', cursor:'pointer'}} title="新規タイトルの逆引きに加え、ハッシュタグと登録済みキャラ名の表記違い(例: カタカナ表記のハッシュタグ↔登録済みのローマ字名)もDanbooruの別名情報で突き合わせます">
           <input type="checkbox" checked={suggestExternal} onChange={e=>setSuggestExternal(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />
-          Danbooruで新規タイトルも照合(外部通信)
+          Danbooruで新規タイトル・ハッシュタグの表記違いも照合(外部通信)
         </label>
         <label style={{marginLeft:10, fontSize:11, color:'#94a3b8', cursor:'pointer'}} title="複数の情報源を重み付けして統合する新方式(実験的)。従来方式より実データでキャラ推定精度が高いことを確認済み">
           <input type="checkbox" checked={suggestUseEnsemble} onChange={e=>setSuggestUseEnsemble(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />

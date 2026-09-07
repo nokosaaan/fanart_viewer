@@ -417,7 +417,16 @@ def _match_tagger_characters(candidates):
     return matched + unmatched, sorted(suggested_titles)
 
 
-def _match_hashtags(description):
+# Cap on how many not-directly-matching hashtags get a Danbooru alias
+# lookup per call — most hashtags in a real post are spoiler/series tags
+# that were never going to resolve to a character alias at all (DB-cached
+# as a negative after the first miss, but that doesn't help the very FIRST
+# time a given post's hashtags are seen), so this bounds worst-case Danbooru
+# calls for one suggestion request rather than firing one per hashtag.
+_HASHTAG_ALIAS_LOOKUP_CAP = 5
+
+
+def _match_hashtags(description, external=False):
     """Direct match of hashtags from the source post's own text (see
     Item.description) against the app's existing title/character
     vocabulary. This is the single most reliable signal available when
@@ -426,7 +435,21 @@ def _match_hashtags(description):
 
     Same normalized-string-match limitation as _match_tagger_characters:
     only catches hashtags that already spell a title/character the same
-    way something in this app's vocabulary does.
+    way something in this app's vocabulary does — this app's own vocabulary
+    mixes Japanese and romaji names across different characters (whichever
+    form was registered for each), and a hashtag can just as easily be
+    written in the OTHER script than however that particular character
+    happens to be registered (e.g. hashtag "キュアエクレール" vs a
+    registered "cure eclair", or the reverse).
+
+    `external`: when true, any hashtag that doesn't match directly also
+    gets a Danbooru wiki-alias lookup (see
+    danbooru_lookup.find_registered_character_via_alias) — the one network
+    call in this function, so gated behind the same explicit opt-in as the
+    rest of this pipeline's Danbooru use (see suggest_tags_view's
+    `external` flag). Capped at _HASHTAG_ALIAS_LOOKUP_CAP per call and
+    cached per hashtag text (DanbooruAliasCache), so this cost is paid at
+    most once per hashtag ever seen, not once per suggestion run.
     """
     hashtags = _extract_hashtags(description)
     if not hashtags:
@@ -440,17 +463,34 @@ def _match_hashtags(description):
                 title_by_norm.setdefault(_normalize_char_name(name), name)
 
     char_by_norm = {}
+    all_char_names = []
     for group in CharacterGroup.objects.all():
         for c in (group.characters or []):
             char_by_norm.setdefault(_normalize_char_name(c), c)
+            all_char_names.append(c)
     for chars in Item.objects.exclude(characters=[]).values_list('characters', flat=True):
         for c in (chars or []):
             if c:
                 char_by_norm.setdefault(_normalize_char_name(c), c)
+                all_char_names.append(c)
+
+    matched_titles = {title_by_norm[h] for h in normalized_hashtags if h in title_by_norm}
+    matched_chars = {char_by_norm[h] for h in normalized_hashtags if h in char_by_norm}
+
+    if external:
+        unmatched = [h for h in hashtags if _normalize_char_name(h) not in char_by_norm]
+        for h in unmatched[:_HASHTAG_ALIAS_LOOKUP_CAP]:
+            try:
+                bridged = danbooru_lookup.find_registered_character_via_alias(h, all_char_names)
+            except Exception:
+                logging.exception('Danbooru alias lookup failed for hashtag %r', h)
+                continue
+            if bridged:
+                matched_chars.add(bridged)
 
     return {
-        'titles': sorted({title_by_norm[h] for h in normalized_hashtags if h in title_by_norm}),
-        'characters': sorted({char_by_norm[h] for h in normalized_hashtags if h in char_by_norm}),
+        'titles': sorted(matched_titles),
+        'characters': sorted(matched_chars),
     }
 
 
@@ -801,7 +841,7 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
     # other no-image-analysis DB lookups — the frontend only
     # distinguishes "used the image model" from "didn't").
     if want_titles or want_characters:
-        hashtag_hits = _match_hashtags(item.description)
+        hashtag_hits = _match_hashtags(item.description, external=external)
         if want_titles and hashtag_hits['titles']:
             titles = _merge_unique(titles, hashtag_hits['titles'])
             source = 'db'
@@ -1024,7 +1064,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
     title_c, char_c, situation_c, tags_out = [], [], [], []
 
     if want_titles or want_characters:
-        hashtag_hits = _match_hashtags(item.description)
+        hashtag_hits = _match_hashtags(item.description, external=external)
         if want_titles:
             for t in hashtag_hits['titles']:
                 title_c.append({'value': t, 'source': 'hashtag', 'confidence': 1.0})

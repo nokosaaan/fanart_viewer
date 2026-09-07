@@ -43,6 +43,24 @@ export default function RegionAnnotator({ item, onSaved }) {
   const [notice, setNotice] = useState('')
   const [activeBoxId, setActiveBoxId] = useState(null)  // box whose character-picker popover is open
   const [charQuery, setCharQuery] = useState('')
+  // Suggestion pool for the character-picker popover: this item's own
+  // characters PLUS every character registered in any CharacterGroup (the
+  // app-wide curated vocabulary, same source CharacterPicker.jsx uses
+  // elsewhere) — not just names already on this item, so a character who
+  // hasn't been added to charList yet can still be picked here directly.
+  const [groupCharNames, setGroupCharNames] = useState([])
+
+  useEffect(() => {
+    fetch('/api/character-groups/')
+      .then(r => r.json()).then(d => {
+        const list = Array.isArray(d) ? d : (d.results || [])
+        const names = new Set()
+        for (const g of list) {
+          for (const c of (g.characters || [])) if (c) names.add(c)
+        }
+        setGroupCharNames([...names])
+      }).catch(() => {})
+  }, [])
 
   const imgRef = useRef(null)
   const containerRef = useRef(null)
@@ -192,7 +210,8 @@ export default function RegionAnnotator({ item, onSaved }) {
     }
   }
 
-  const charSuggestions = (item.characters || []).filter(c =>
+  const allKnownChars = [...new Set([...(item.characters || []), ...groupCharNames])]
+  const charSuggestions = allKnownChars.filter(c =>
     !charQuery.trim() || c.toLowerCase().includes(charQuery.trim().toLowerCase())
   )
   const activeBox = boxes.find(b => b.id === activeBoxId) || null

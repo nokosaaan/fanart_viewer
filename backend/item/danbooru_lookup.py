@@ -447,6 +447,86 @@ def find_tag_via_other_names(japanese_name: str, expected_titles) -> str | None:
     return None  # zero or ambiguous (2+) — a human should decide, not this function
 
 
+def _normalize_for_alias_match(name: str) -> str:
+    """Same normalization as views._normalize_char_name (whitespace
+    collapse, lowercase, underscore->space) — duplicated here (rather than
+    imported) since views.py already imports this module and importing
+    back would be circular; this is a one-line rule, not worth coupling
+    the two modules over."""
+    import re
+    return re.sub(r'\s+', ' ', (name or '').strip().lower().replace('_', ' '))
+
+
+def find_registered_character_via_alias(hashtag_text: str, known_character_names) -> str | None:
+    """Bridges a hashtag written in a different script than this app's own
+    registered name for the same character — e.g. a katakana hashtag like
+    "キュアエクレール" when this app's own vocabulary already has "cure
+    eclair" registered (or the reverse: a romaji hashtag when the app's own
+    name is in Japanese). Danbooru's own wiki pages already list this kind
+    of cross-script alias for most well-known characters (`other_names`),
+    maintained far more thoroughly by that community than this app ever
+    could alone — so this searches other_names_match for the hashtag text
+    and checks whether exactly one matching tag's underscore-normalized
+    form equals one of `known_character_names` (this app's own vocabulary).
+
+    Same "never guess" posture as find_tag_via_other_names: 2+ of this
+    app's own characters matching would mean genuine ambiguity (extremely
+    unlikely — it would require Danbooru to list the same hashtag as an
+    alias for two DIFFERENT characters this app also happens to have
+    registered), so that case returns None rather than picking one.
+
+    Cached (including negative results) in DanbooruAliasCache, keyed by
+    the normalized hashtag text, so a given hashtag is only ever looked up
+    once — most hashtags are spoiler/series tags that will never resolve
+    to a character alias at all, and re-querying those on every suggestion
+    run would be pure waste.
+    """
+    from .models import DanbooruAliasCache
+
+    norm = _normalize_for_alias_match(hashtag_text)
+    if not norm:
+        return None
+
+    cached = DanbooruAliasCache.objects.filter(hashtag_norm=norm).first()
+    if cached is not None:
+        return cached.resolved_character_name
+
+    known_by_norm = {}
+    for name in known_character_names or []:
+        if name:
+            known_by_norm.setdefault(_normalize_for_alias_match(name), name)
+
+    resolved = None
+    try:
+        resp = requests.get(
+            _WIKI_PAGES_ENDPOINT,
+            params={"search[other_names_match]": f"*{hashtag_text}*", "limit": 50},
+            headers={"User-Agent": "fanart-viewer/1.0 (personal archival tool)"},
+            timeout=10,
+        )
+        if resp.ok:
+            pages = resp.json()
+            if isinstance(pages, list):
+                hits = set()
+                for p in pages:
+                    if not isinstance(p, dict):
+                        continue
+                    tag_norm = _normalize_for_alias_match((p.get('title') or '').replace('_', ' '))
+                    if tag_norm in known_by_norm:
+                        hits.add(known_by_norm[tag_norm])
+                if len(hits) == 1:
+                    resolved = next(iter(hits))
+        else:
+            logger.warning("danbooru_lookup.find_registered_character_via_alias: HTTP %s for %r",
+                            resp.status_code, hashtag_text)
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("danbooru_lookup.find_registered_character_via_alias: request failed for %r: %s",
+                        hashtag_text, e)
+
+    DanbooruAliasCache.objects.update_or_create(hashtag_norm=norm, defaults={'resolved_character_name': resolved})
+    return resolved
+
+
 def _query_danbooru(tag: str) -> str | None:
     try:
         resp = requests.get(

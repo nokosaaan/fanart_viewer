@@ -165,6 +165,26 @@ class DanbooruTitleCache(models.Model):
         return f"{self.character_tag} -> {self.title or '(no match)'}"
 
 
+class DanbooruAliasCache(models.Model):
+    """Caches hashtag-text -> this app's own already-registered character
+    name, resolved via Danbooru's wiki page `other_names` aliases (see
+    item.danbooru_lookup.find_registered_character_via_alias). Bridges a
+    hashtag written in a different script than however this app's own
+    vocabulary happens to have that same character registered — e.g. a
+    katakana hashtag ("キュアエクレール") when the app's own Item.characters
+    already has the romaji form ("cure eclair") registered, or the reverse.
+    `resolved_character_name` is null when Danbooru had no matching alias
+    (also cached, to avoid re-querying a hashtag that will never resolve —
+    most hashtags are just spoiler/series tags, not character aliases).
+    """
+    hashtag_norm = models.CharField(max_length=200, unique=True)
+    resolved_character_name = models.CharField(max_length=255, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.hashtag_norm} -> {self.resolved_character_name or '(no match)'}"
+
+
 class CharacterDanbooruLink(models.Model):
     """Links this app's own character name (Japanese, as stored in
     Item.characters) to the matching Danbooru character tag (e.g.
