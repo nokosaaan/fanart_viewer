@@ -17,6 +17,15 @@ class Item(models.Model):
     # suggestion (see item.views._extract_hashtags) — more reliable than
     # any image-based inference, since they're the artist's own words.
     description = models.TextField(blank=True, default='')
+    # Set once manage.py backfill_descriptions has confirmed this item's
+    # description status via a successful API call — regardless of whether
+    # text was actually found (a genuinely textless/deleted/inaccessible
+    # tweet still counts as "checked"). Lets that command's queryset skip
+    # already-checked items on a re-run instead of re-querying Twitter for
+    # the same empty-description items every time; left null after a failed
+    # attempt (network/auth error) so those DO get retried later, since the
+    # failure there was ours, not a fact about the tweet.
+    description_checked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     preview_data = models.BinaryField(null=True, blank=True)
     preview_content_type = models.CharField(max_length=100, null=True, blank=True)

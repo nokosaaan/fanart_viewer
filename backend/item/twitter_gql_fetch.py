@@ -330,12 +330,16 @@ def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> tuple[l
     endpoint = f"https://twitter.com/i/api/graphql/{_TWEET_DETAIL_QUERY_ID}/TweetDetail"
     headers = _build_headers(auth_token, ct0)
 
+    # Rate-limit-aware GET (same helper fetch_account_retweets/_resolve_user_id
+    # use) instead of a plain requests.get — matters most for callers that hit
+    # this once per item in a loop (manage.py backfill_descriptions), which
+    # previously had no way to notice "getting close to the limit" and back
+    # off before actually being cut off with a hard 429.
     try:
-        resp = requests.get(
+        resp = _get_with_ratelimit_backoff(
             endpoint,
-            params={"variables": variables, "features": features, "fieldToggles": field_toggles},
-            headers=headers,
-            timeout=15,
+            {"variables": variables, "features": features, "fieldToggles": field_toggles},
+            headers,
         )
     except requests.RequestException as e:
         raise TwitterGQLError(f"Request failed: {e}") from e
