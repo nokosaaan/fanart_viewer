@@ -230,6 +230,11 @@ export default function CharacterGroupManager({ onClose }) {
   }).slice(0, 10)
 
   const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name))
+  // Always the FULL hierarchy, independent of the search box above — the
+  // move-target picker's tree (see renderMoveOption) shouldn't hide a
+  // group just because it doesn't match whatever's currently typed into
+  // the main list's search filter.
+  const allTopLevelGroups = sortedGroups.filter(g => g.parent == null)
 
   const q = query.trim().toLowerCase()
   const searching = q.length > 0
@@ -370,6 +375,34 @@ export default function CharacterGroupManager({ onClose }) {
     )
   }
 
+  // Move-target picker's own tree render (see the popover below) — same
+  // parent/child nesting as renderGroupNode, and reuses that SAME
+  // `collapsed` state (keyed by group id) so a branch already collapsed
+  // in the main list starts collapsed here too, rather than tracking a
+  // second, independent collapse state for this one-shot picker.
+  function renderMoveOption(g, depth) {
+    const children = childrenByParentId.get(g.id) || []
+    const isCollapsed = collapsed[g.id]
+    return (
+      <React.Fragment key={g.id}>
+        <div style={{ display: 'flex', alignItems: 'center', paddingLeft: depth ? depth * 16 : 0 }}>
+          {children.length > 0 ? (
+            <button className="cgm-toggle" onClick={() => setCollapsed(p => ({ ...p, [g.id]: !p[g.id] }))}>
+              {isCollapsed ? '▶' : '▼'}
+            </button>
+          ) : (
+            <span style={{ display: 'inline-block', width: 14, flexShrink: 0 }} />
+          )}
+          <button className="cgm-move-option" style={{ flex: 1 }}
+            onClick={() => moveCharacters(moveState.chars, g.id)}>
+            {g.name}
+          </button>
+        </div>
+        {!isCollapsed && children.map(child => renderMoveOption(child, depth + 1))}
+      </React.Fragment>
+    )
+  }
+
   return (
     <div className="cgm-panel-backdrop" onClick={onClose}>
       <div className="cgm-panel" onClick={e => e.stopPropagation()}>
@@ -471,12 +504,7 @@ export default function CharacterGroupManager({ onClose }) {
                   : `選択した${moveState.chars.length}件を移動`}
               </div>
               <div className="cgm-move-options">
-                {sortedGroups.map(g => (
-                  <button key={g.id} className="cgm-move-option"
-                    onClick={() => moveCharacters(moveState.chars, g.id)}>
-                    {g.name}
-                  </button>
-                ))}
+                {allTopLevelGroups.map(g => renderMoveOption(g, 0))}
                 <button className="cgm-move-option cgm-move-ungrouped"
                   onClick={() => moveCharacters(moveState.chars, null)}>
                   未分類に移動
