@@ -9,6 +9,8 @@ import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import EditQueueManager from './components/EditQueueManager'
 import RegionLabelQueueManager from './components/RegionLabelQueueManager'
+import ManualAddItem from './components/ManualAddItem'
+import EditFields from './components/EditFields'
 import RetweetFetchManager from './components/RetweetFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import HeaderMenu from './components/HeaderMenu'
@@ -52,9 +54,17 @@ function AppMain({ role, onLogout }){
   // would otherwise require re-fetching. Reviewed/processed from the header
   // "取得キュー" button (FetchQueueManager). In-memory only — cleared on reload.
   const [fetchQueue, setFetchQueue] = useState([])
-  const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
-  const [editQueueOpen, setEditQueueOpen] = useState(false)
-  const [regionQueueOpen, setRegionQueueOpen] = useState(false)
+  const [manualAddOpen, setManualAddOpen] = useState(false)
+  // The item ManualAddItem just created — opened straight into the normal
+  // edit form (titles/characters/tags/situation are empty at creation
+  // time on purpose, same as any other freshly-fetched item) instead of
+  // asking for that metadata in the upload dialog itself.
+  const [pendingNewItem, setPendingNewItem] = useState(null)
+  function handleItemCreated(item){
+    setItems(prev => [item, ...(Array.isArray(prev) ? prev : [])])
+    setManualAddOpen(false)
+    setPendingNewItem(item)
+  }
   const [retweetFetchOpen, setRetweetFetchOpen] = useState(false)
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
@@ -445,12 +455,10 @@ function AppMain({ role, onLogout }){
               { divider: true },
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
               { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
-              { label: '取得キュー', onClick: () => setFetchQueueOpen(true), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
-              { label: '取得キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('fetchQueue') },
-              { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
-              { label: '編集キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('editQueue') },
-              { label: '領域ラベル付けキュー', onClick: () => setRegionQueueOpen(true) },
-              { label: '領域ラベル付けキューを別ウィンドウで開く', onClick: () => openStandaloneWindow('regionQueue') },
+              { label: '取得キュー', onClick: () => openStandaloneWindow('fetchQueue'), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
+              { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
+              { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
+              { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
               { label: 'アカウントのRTを取得', onClick: () => setRetweetFetchOpen(true) },
               { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
@@ -524,17 +532,17 @@ function AppMain({ role, onLogout }){
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
-      {fetchQueueOpen && (
-        <FetchQueueManager
-          queue={fetchQueue}
-          onRemove={removeFromFetchQueue}
-          onClose={()=>setFetchQueueOpen(false)}
-          currentPageItems={paginatedItems}
-          onEnqueueFetch={enqueueFetchResult}
+      {manualAddOpen && <ManualAddItem onClose={()=>setManualAddOpen(false)} onCreated={handleItemCreated} />}
+      {pendingNewItem && (
+        <EditFields
+          item={pendingNewItem}
+          onClose={()=>setPendingNewItem(null)}
+          onSaved={(updated)=>{
+            setItems(prev => Array.isArray(prev) ? prev.map(it => it.id === updated.id ? { ...it, ...updated } : it) : prev)
+            setPendingNewItem(null)
+          }}
         />
       )}
-      {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} currentPageItems={paginatedItems} />}
-      {regionQueueOpen && <RegionLabelQueueManager onClose={()=>setRegionQueueOpen(false)} currentPageItems={paginatedItems} />}
       {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
     </div>

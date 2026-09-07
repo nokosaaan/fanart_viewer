@@ -26,9 +26,14 @@ function timeAgo(ts){
 // via props, so in standalone mode this mirrors it over BroadcastChannel
 // instead: request the current queue on mount, apply every subsequent sync,
 // and route removals back through the main window (the source of truth)
-// rather than mutating local state directly. The per-page bulk-fetch button
-// is hidden in standalone mode since "current page" is a main-window-only
-// concept.
+// rather than mutating local state directly.
+//
+// The bulk-fetch button's TARGET LIST differs by mode for the same reason:
+// non-standalone scopes to `currentPageItems` (the main window's current
+// page — a concept standalone has no access to), while standalone instead
+// queries /api/items/missing_preview/ directly (see that view's own
+// docstring) so the button still has something to work with when opened as
+// its own window with no page to inherit.
 export default function FetchQueueManager({ queue: queueProp, onRemove: onRemoveProp, onClose, currentPageItems, onEnqueueFetch, standalone = false }){
   const [mirroredQueue, setMirroredQueue] = useState([])
   useEffect(() => {
@@ -38,6 +43,55 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
   }, [standalone])
 
   const queue = standalone ? mirroredQueue : queueProp
+
+  // Standalone-only: this window's own view of "items with no preview yet",
+  // loaded from the server instead of inherited via props. Same before_id
+  // cursor pagination as EditQueueManager's `incomplete` load — see
+  // ItemViewSet.missing_preview_queue's own docstring for why.
+  const [missingItems, setMissingItems] = useState([])
+  const [missingCount, setMissingCount] = useState(0)
+  const [missingHasMore, setMissingHasMore] = useState(false)
+  const [missingNextBeforeId, setMissingNextBeforeId] = useState(null)
+  const [missingLoading, setMissingLoading] = useState(false)
+  const [missingLoadingMore, setMissingLoadingMore] = useState(false)
+
+  async function loadMissing(){
+    if(!standalone) return
+    setMissingLoading(true)
+    try{
+      const r = await fetch('/api/items/missing_preview/')
+      const data = await r.json().catch(()=>({}))
+      const list = data.results || []
+      setMissingItems(list)
+      setMissingCount(data.count ?? list.length)
+      setMissingHasMore(!!data.has_more)
+      setMissingNextBeforeId(data.next_before_id ?? null)
+    }catch(e){
+      console.error('Failed to load missing-preview items', e)
+      setMissingItems([]); setMissingCount(0); setMissingHasMore(false); setMissingNextBeforeId(null)
+    }finally{
+      setMissingLoading(false)
+    }
+  }
+
+  useEffect(() => { loadMissing() }, [standalone])
+
+  async function loadMoreMissing(){
+    if(!missingHasMore || missingNextBeforeId == null || missingLoadingMore) return
+    setMissingLoadingMore(true)
+    try{
+      const r = await fetch(`/api/items/missing_preview/?before_id=${missingNextBeforeId}`)
+      const data = await r.json().catch(()=>({}))
+      const list = data.results || []
+      setMissingItems(prev => [...prev, ...list])
+      setMissingHasMore(!!data.has_more)
+      setMissingNextBeforeId(data.next_before_id ?? null)
+    }catch(e){
+      console.error('Failed to load more missing-preview items', e)
+    }finally{
+      setMissingLoadingMore(false)
+    }
+  }
 
   function removeEntry(entryId){
     if(standalone){
@@ -69,9 +123,12 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
 
   const openEntry = queue.find(q => q.id === openId) || null
 
-  // Items on the currently displayed page that don't already have a preview
-  // and have a source link to fetch from — the bulk button's target set.
-  const pendingItems = (currentPageItems || []).filter(it => it && !it.has_preview && it.link)
+  // Bulk button's target set: the current page's not-yet-fetched items in
+  // overlay mode, or this window's own server-loaded list in standalone
+  // mode (see missingItems above).
+  const pendingItems = standalone
+    ? missingItems
+    : (currentPageItems || []).filter(it => it && !it.has_preview && it.link)
 
   function openEntryFor(entry){
     setOpenId(entry.id)
@@ -109,6 +166,11 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
     setBulkProgress({ done: pendingItems.length, total: pendingItems.length })
     setBulkRunning(false)
     setBulkSummary(`完了: キューに${queued}件追加 / 直接保存${savedDirect}件 / 失敗${failed}件`)
+    // Standalone's own list is a point-in-time server snapshot (unlike
+    // overlay mode's currentPageItems, which the main window keeps live via
+    // the 'item-preview-updated' listener) — reload it fresh so items just
+    // saved directly drop off instead of being offered again next click.
+    if(standalone) loadMissing()
   }
 
   async function save(entry, images){
@@ -141,19 +203,27 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
         <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
       </div>
 
-      {!standalone && (
-        <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
-          <button className="btn" onClick={runBulkFetch} disabled={bulkRunning || pendingItems.length===0}>
-            {bulkRunning
-              ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
+      <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+        <button className="btn" onClick={runBulkFetch} disabled={bulkRunning || pendingItems.length===0 || (standalone && missingLoading)}>
+          {bulkRunning
+            ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
+            : standalone
+              ? `未取得アイテムを一括取得 (${pendingItems.length}件${missingCount > pendingItems.length ? `/全${missingCount}件` : ''})`
               : `このページを一括取得 (${pendingItems.length}件)`}
+        </button>
+        {standalone && missingHasMore && (
+          <button className="btn" onClick={loadMoreMissing} disabled={missingLoadingMore || bulkRunning}>
+            {missingLoadingMore ? '読み込み中…' : 'もっと読み込む'}
           </button>
-          {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
-          {!bulkRunning && !bulkSummary && pendingItems.length===0 && (currentPageItems || []).length>0 && (
-            <span style={{fontSize:12, color:'#6b7280'}}>このページは全て取得済みです</span>
-          )}
-        </div>
-      )}
+        )}
+        {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
+        {!bulkRunning && !bulkSummary && standalone && !missingLoading && pendingItems.length===0 && (
+          <span style={{fontSize:12, color:'#6b7280'}}>未取得のアイテムはありません 🎉</span>
+        )}
+        {!bulkRunning && !bulkSummary && !standalone && pendingItems.length===0 && (currentPageItems || []).length>0 && (
+          <span style={{fontSize:12, color:'#6b7280'}}>このページは全て取得済みです</span>
+        )}
+      </div>
 
         {queue.length === 0 ? (
           <div className="cgm-panel-body">

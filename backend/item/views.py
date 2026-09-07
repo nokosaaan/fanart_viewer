@@ -10,6 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
 from django.db.models import Q
+from django.utils import timezone
 from collections import Counter, defaultdict
 import re
 from urllib.parse import urljoin, urlparse
@@ -66,6 +67,10 @@ except Exception:
 
 
 MIN_IMAGE_FETCH_BYTES = 50000
+# Sanity cap for ItemViewSet.create_manual's direct file upload — generous
+# enough for any real fanart image, just guards against an accidental
+# multi-hundred-MB upload.
+MAX_MANUAL_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 def _fetch_image_via_requests(url, min_size=None):
@@ -2317,6 +2322,46 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'next_before_id': batch[-1].id if (has_more and batch) else None,
         })
 
+    @action(detail=False, methods=['get'], url_path='missing_preview')
+    def missing_preview_queue(self, request):
+        """Items with no preview image at all (and a link to fetch one
+        from) — feeds FetchQueueManager.jsx's bulk-fetch button when it's
+        running as a popped-out standalone window, which has no main-window
+        page of items to scope to the way the overlay mode does (see that
+        component's own comments). Same before_id cursoring as
+        `incomplete`/`region_label_queue` above, for the same reason: an
+        item drops out of this queryset the moment it's fetched, so an
+        offset/page-number cursor would skip items on "load more" the same
+        way those two already had to work around.
+        """
+        queryset = (
+            Item.objects.filter(preview_images__isnull=True, preview_data__isnull=True)
+            .exclude(link='')
+            .order_by('-id')
+            .distinct()
+        )
+        total_count = queryset.count()
+
+        before_id = request.GET.get('before_id')
+        if before_id:
+            try:
+                queryset = queryset.filter(id__lt=int(before_id))
+            except (TypeError, ValueError):
+                pass
+
+        page_size = 50
+        batch = list(queryset[:page_size + 1])
+        has_more = len(batch) > page_size
+        batch = batch[:page_size]
+
+        serializer = self.get_serializer(batch, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': total_count,
+            'has_more': has_more,
+            'next_before_id': batch[-1].id if (has_more and batch) else None,
+        })
+
     @action(detail=True, methods=['post'], url_path='suggest_tags')
     def suggest_tags_view(self, request, pk=None):
         """Suggest titles/characters/tags/situation for this item — a thin
@@ -2434,6 +2479,73 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'updated', 'updated': updates, 'item': serializer.data})
+
+    @action(detail=False, methods=['post'], url_path='create_manual')
+    def create_manual(self, request):
+        """Manually register a new Item from locally-held image file(s) —
+        for when the original post's URL is dead (deleted/suspended/404)
+        but the image was already saved somewhere before that happened.
+        Bypasses the entire fetch pipeline: images come straight from this
+        multipart upload, never from any URL, so an unreachable link is a
+        non-issue. Reuses the plain viewer/edit-form flow for everything
+        after creation — titles/characters/tags/situation are left empty
+        here on purpose, exactly like any other freshly-fetched item
+        waiting in the edit queue.
+
+        Multipart form fields:
+          images: one or more image files (required — at least one)
+          link:   optional — the original (now-dead) post URL, kept only
+                  as a reference/citation, never fetched from
+          artist: optional
+          source: optional, defaults to 'manual'
+        """
+        files = request.FILES.getlist('images')
+        if not files:
+            return Response({'detail': '画像ファイルを1枚以上指定してください'}, status=status.HTTP_400_BAD_REQUEST)
+
+        for f in files:
+            if not (f.content_type or '').startswith('image/'):
+                return Response({'detail': f'{f.name} は画像ファイルではありません'}, status=status.HTTP_400_BAD_REQUEST)
+            if f.size > MAX_MANUAL_UPLOAD_BYTES:
+                return Response(
+                    {'detail': f'{f.name} が大きすぎます(1ファイルの上限{MAX_MANUAL_UPLOAD_BYTES // (1024 * 1024)}MB)'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        data = request.data
+        link = (data.get('link') or '').strip()
+        artist = (data.get('artist') or '').strip()
+        source = (data.get('source') or 'manual').strip() or 'manual'
+
+        item = Item.objects.create(
+            # No real external id exists for a manually-registered item — a
+            # millisecond timestamp is unique enough in practice. Harmless
+            # even if it happened to coincide with some other source's id,
+            # since every lookup that matches by external_id in this app
+            # (_find_item_by_url and friends) always filters by `source`
+            # too, and nothing ever looks up a 'manual' item that way.
+            external_id=int(timezone.now().timestamp() * 1000),
+            source=source,
+            situation='',
+            titles=[],
+            characters=[],
+            artist=artist,
+            link=link,
+            tags=None,
+        )
+
+        for idx, f in enumerate(files):
+            try:
+                PreviewImage.objects.create(item=item, order=idx, data=f.read(), content_type=f.content_type or 'image/jpeg')
+            except Exception:
+                logging.exception('Failed to save manually-uploaded image %s for item %s', f.name, item.pk)
+
+        if not item.preview_images.exists():
+            item.delete()
+            return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'created', 'item': serializer.data}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], url_path='detect_regions')
     def detect_regions(self, request, pk=None):
