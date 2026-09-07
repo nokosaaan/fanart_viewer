@@ -3,7 +3,7 @@ import EditFields from './EditFields'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 import { notify } from '../lib/crossWindowSync'
 
-function ItemRow({ it, readOnly, onEnqueueFetch }){
+function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
@@ -195,7 +195,14 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
           <div className="col-header">Preview</div>
           <div className="preview-wrap">
             {hasPreviewLocal ? (
-              <img className="preview" src={`/api/items/${it.id}/preview/`} alt="preview" />
+              <img
+                className="preview"
+                src={`/api/items/${it.id}/preview/`}
+                alt="preview"
+                style={{ cursor: onOpenPreview ? 'zoom-in' : undefined }}
+                title="Preview Timelineでこのアイテムを開く"
+                onClick={() => onOpenPreview && onOpenPreview(it.id)}
+              />
             ) : (
               // show link only in preview area; actions are provided next to titles
               <div style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={it.link}>
@@ -293,11 +300,11 @@ function ItemRow({ it, readOnly, onEnqueueFetch }){
   )
 }
 
-export default function ScrollList({items, readOnly=false, onEnqueueFetch}){
+export default function ScrollList({items, readOnly=false, onEnqueueFetch, onOpenPreview}){
   return (
     <div className="scroll-list">
       {items.map(it=> (
-        <ItemRow it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch} />
+        <ItemRow it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch} onOpenPreview={onOpenPreview} />
       ))}
     </div>
   )

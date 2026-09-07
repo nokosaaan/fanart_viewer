@@ -2474,16 +2474,24 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='character_regions')
     def character_regions_view(self, request, pk=None):
-        """Save human-assigned region↔character labels for one image of this
-        item — see Item.character_regions/character_regions_image_index
-        (models.py) and RegionAnnotator.jsx's "保存" button.
+        """Save human-assigned region↔character labels across ALL of this
+        item's images at once — see Item.character_regions (models.py) and
+        RegionAnnotator.jsx's "保存" button.
 
-        Body: `{image_index: int|null, regions: [{box:[x1,y1,x2,y2],
-        character:str}, ...]}`. Any character name used here that isn't
-        already in item.characters is added — labeling a region is itself a
-        confident statement that this character appears in the image, same
-        trust level as picking it from CharacterPicker's free-text "add new"
-        option.
+        Body: `{regions: [{image_index: int|null, box:[x1,y1,x2,y2],
+        characters:[str, ...]}, ...]}`. Each region carries its own
+        image_index (rather than one shared for the whole request) since a
+        single save can include boxes drawn on several different images of
+        the item. `characters` is a list, not one name — a box sometimes
+        needs more than one label (e.g. person-detection merged two
+        overlapping people into a single box) — see the field's own
+        docstring in models.py for how training consumes multi-character
+        regions differently from single-character ones.
+
+        Any character name used here that isn't already in item.characters
+        is added — labeling a region is itself a confident statement that
+        this character appears in the image, same trust level as picking it
+        from CharacterPicker's free-text "add new" option.
         """
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
@@ -2491,37 +2499,44 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not isinstance(regions, list):
             return Response({'detail': 'regions must be a list'}, status=status.HTTP_400_BAD_REQUEST)
 
-        image_index = data.get('image_index')
-        if image_index is not None:
-            try:
-                image_index = int(image_index)
-            except (TypeError, ValueError):
-                return Response({'detail': 'image_index must be an integer or null'}, status=status.HTTP_400_BAD_REQUEST)
-
         cleaned = []
         for r in regions:
             if not isinstance(r, dict):
                 return Response({'detail': 'each region must be an object'}, status=status.HTTP_400_BAD_REQUEST)
+
             box = r.get('box')
-            character = (r.get('character') or '').strip()
             if (not isinstance(box, list) or len(box) != 4
                     or not all(isinstance(v, (int, float)) for v in box)):
                 return Response({'detail': 'each region.box must be [x1, y1, x2, y2]'}, status=status.HTTP_400_BAD_REQUEST)
-            if not character:
-                return Response({'detail': 'each region must have a non-empty character'}, status=status.HTTP_400_BAD_REQUEST)
-            cleaned.append({'box': [int(v) for v in box], 'character': character})
+
+            characters = r.get('characters')
+            if not isinstance(characters, list):
+                return Response({'detail': 'each region.characters must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+            names = [c.strip() for c in characters if isinstance(c, str) and c.strip()]
+            names = list(dict.fromkeys(names))  # de-dupe, preserve order
+            if not names:
+                return Response({'detail': 'each region must have at least one character'}, status=status.HTTP_400_BAD_REQUEST)
+
+            image_index = r.get('image_index')
+            if image_index is not None:
+                try:
+                    image_index = int(image_index)
+                except (TypeError, ValueError):
+                    return Response({'detail': 'region.image_index must be an integer or null'}, status=status.HTTP_400_BAD_REQUEST)
+
+            cleaned.append({'image_index': image_index, 'box': [int(v) for v in box], 'characters': names})
 
         item.character_regions = cleaned
-        item.character_regions_image_index = image_index
 
         existing_chars = list(item.characters or [])
         for r in cleaned:
-            if r['character'] not in existing_chars:
-                existing_chars.append(r['character'])
+            for name in r['characters']:
+                if name not in existing_chars:
+                    existing_chars.append(name)
         item.characters = existing_chars
 
         try:
-            item.save(update_fields=['character_regions', 'character_regions_image_index', 'characters'])
+            item.save(update_fields=['character_regions', 'characters'])
         except Exception as e:
             logging.exception('Failed to save character_regions for item %s', item.pk)
             return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

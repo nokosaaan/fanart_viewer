@@ -615,45 +615,66 @@ class Command(BaseCommand):
         _bootstrap_label's output, which this is designed to sit alongside:
         see handle()'s `manual_rows + pseudo_rows` combination).
 
-        Uses the same image-selection convention as everywhere else
-        (item.views._select_image_bytes) so a region's stored box lines up
-        with the exact image it was drawn against, even for an item with
-        multiple preview images.
+        A region can carry more than one character name (person-detection
+        sometimes merges two overlapping people — e.g. a hug pose — into a
+        single box) — only regions with EXACTLY one name are used here; a
+        crop labeled with 2+ names has an inherently ambiguous identity for
+        single-label classification, so it's counted and skipped rather
+        than taught as any one of them (or, worse, as all of them).
+
+        Regions span potentially several of an item's images (see
+        Item.character_regions' own docstring) — grouped by image_index per
+        item here so each distinct image is only fetched/selected once
+        (item.views._select_image_bytes) no matter how many boxes are on
+        it, rather than once per region.
         """
         from item.views import _select_image_bytes
 
-        items = Item.objects.exclude(character_regions=[]).only(
-            'id', 'character_regions', 'character_regions_image_index',
-        )
+        items = Item.objects.exclude(character_regions=[]).only('id', 'character_regions')
         rows = []
         skipped_mismatch = 0
+        skipped_multi_label = 0
         for item in items.iterator():
             regions = item.character_regions or []
             if not regions:
                 continue
-            image_bytes, _resolved_index = _select_image_bytes(item, item.character_regions_image_index)
-            if image_bytes is None:
-                self.stderr.write(f'item {item.id}: no image available for its manual regions, skipping')
-                continue
+
+            by_image = defaultdict(list)
             for region in regions:
-                box = region.get('box')
-                character = region.get('character')
-                if not box or not character:
+                by_image[region.get('image_index')].append(region)
+
+            for image_index, image_regions in by_image.items():
+                image_bytes, _resolved_index = _select_image_bytes(item, image_index)
+                if image_bytes is None:
+                    self.stderr.write(f'item {item.id}: no image available for its manual regions (image_index={image_index}), skipping')
                     continue
-                try:
-                    crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
-                    feature, names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
-                except Exception as e:
-                    self.stderr.write(f'item {item.id}: manual-region feature extraction failed ({e}), skipping region')
-                    continue
-                if names != expected_general_tag_names:
-                    skipped_mismatch += 1
-                    continue
-                rows.append((character, feature))
+                for region in image_regions:
+                    box = region.get('box')
+                    names = region.get('characters') or []
+                    if not box or not names:
+                        continue
+                    if len(names) != 1:
+                        skipped_multi_label += 1
+                        continue
+                    try:
+                        crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
+                        feature, feat_names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
+                    except Exception as e:
+                        self.stderr.write(f'item {item.id}: manual-region feature extraction failed ({e}), skipping region')
+                        continue
+                    if feat_names != expected_general_tag_names:
+                        skipped_mismatch += 1
+                        continue
+                    rows.append((names[0], feature))
 
         if skipped_mismatch:
             self.stdout.write(self.style.WARNING(
                 f'{skipped_mismatch} manually-labeled region(s) skipped (feature ordering mismatch).'
+            ))
+        if skipped_multi_label:
+            self.stdout.write(self.style.WARNING(
+                f'{skipped_multi_label} manually-labeled region(s) skipped (2+ characters on one box — '
+                'ambiguous identity, not used for single-label training).'
             ))
         self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {items.count()} annotated item(s).')
         return rows

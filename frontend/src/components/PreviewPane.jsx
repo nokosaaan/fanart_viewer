@@ -3,11 +3,17 @@ import { notify } from '../lib/crossWindowSync'
 
 const PANE_PAGE_SIZE = 50
 
-export default function PreviewPane({open, onClose, readOnly, filteredItems}){
+export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId}){
   const [items, setItems] = useState([])
   const allLoadedRef = useRef([]) // full unfiltered set fetched from API
   const [loading, setLoading] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(null)
+  // Guards the initialItemId auto-jump below so it fires exactly once per
+  // "open" — without it, a later `items` refresh (lazy pagination, an
+  // item-preview-updated resync) would re-run the jump and yank the user
+  // back to the originally-clicked item even after they'd navigated
+  // elsewhere with prev()/next().
+  const jumpedItemIdRef = useRef(null)
   const [panePageIndex, setPanePageIndex] = useState(0)
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
@@ -127,6 +133,26 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems}){
     setPanePageIndex(0)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredItems])
+
+  // Jump straight to a specific item's enlarged view — set when the pane is
+  // opened via ScrollList's preview thumbnail (see App.jsx's
+  // openPreviewForItem) rather than the plain header-menu toggle. Matches
+  // by item id, not array index — PreviewPane's own `items` is built from a
+  // separate fetch+filter pipeline (see loadItems above) whose order/length
+  // doesn't correspond to ScrollList's paginatedItems array position, so an
+  // index handed in from there would point at the wrong item.
+  useEffect(()=>{
+    if(!open){ jumpedItemIdRef.current = null; return }
+    if(initialItemId == null) return
+    if(jumpedItemIdRef.current === initialItemId) return
+    if(!items || items.length === 0) return
+    const idx = items.findIndex(it => it && it.id === initialItemId)
+    if(idx !== -1){
+      jumpedItemIdRef.current = initialItemId
+      setPanePageIndex(Math.floor(idx / PANE_PAGE_SIZE))
+      setSelectedIndex(idx)
+    }
+  }, [open, initialItemId, items])
 
   // close preview pane when clicking outside it (but not when clicking the modal)
   useEffect(()=>{

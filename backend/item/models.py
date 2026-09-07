@@ -21,21 +21,26 @@ class Item(models.Model):
     preview_data = models.BinaryField(null=True, blank=True)
     preview_content_type = models.CharField(max_length=100, null=True, blank=True)
     # Human-assigned ground-truth region labels for multi-character images —
-    # [{"box": [x1, y1, x2, y2], "character": "name"}, ...], box in absolute
-    # pixel coordinates of whichever image `character_regions_image_index`
-    # points to (same tuple format as tagger._detect_person_boxes, so a
-    # region here feeds tagger._crop_with_padding directly, no translation
-    # needed — see item.management.commands.train_character_classifier,
-    # which prefers these over its own automatic bootstrap pseudo-labeling
-    # whenever an item has them).
+    # one entry per box, across ALL of this item's preview images (not just
+    # one — an item can have several fetched images, and each may have its
+    # own multi-character content worth labeling):
+    #   [{"image_index": int|None, "box": [x1,y1,x2,y2],
+    #     "characters": ["name", ...]}, ...]
+    # `image_index` is 0-based into item.preview_images ordered by `order`
+    # (same indexing as ItemViewSet.preview's own ?index=N) — None only for
+    # the legacy single-image fallback (no PreviewImage rows at all, just
+    # the denormalized preview_data field — see _select_image_bytes).
+    # `box` is in that one image's absolute pixel coordinates (same tuple
+    # format as tagger._detect_person_boxes, so a region here feeds
+    # tagger._crop_with_padding directly, no translation needed).
+    # `characters` is a list, not a single name, because person-detection
+    # sometimes merges two overlapping people (e.g. a hug pose) into one
+    # box — see item.management.commands.train_character_classifier's
+    # _get_manual_labeled_rows, which only ever treats a region as a clean
+    # single-identity training example when it has EXACTLY one character;
+    # 2+ names on one box are recorded (useful metadata) but skipped for
+    # classifier training since the crop's identity is inherently ambiguous.
     character_regions = models.JSONField(default=list, blank=True)
-    # Which item.preview_images entry (0-based, ordered by `order` — same
-    # indexing as ItemViewSet.preview's own ?index=N) character_regions'
-    # boxes are relative to. None = the largest image (the same default
-    # _select_image_bytes uses elsewhere) — recorded explicitly because an
-    # item can have multiple preview images and a box's coordinates are
-    # only meaningful against the one it was drawn on.
-    character_regions_image_index = models.IntegerField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.external_id} - {self.artist or 'unknown'}"

@@ -10,13 +10,23 @@ const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('
 let _boxIdCounter = 0
 function nextBoxId() { return `box-${++_boxIdCounter}` }
 
-// Lets a human draw/confirm per-character bounding boxes on one image of a
-// multi-character item — the ground-truth counterpart to
+// Lets a human draw/confirm per-character bounding boxes across ALL of an
+// item's images (not just one) — the ground-truth counterpart to
 // train_character_classifier.py's automatic bootstrap pseudo-labeling (see
 // Item.character_regions in models.py and that command's own
-// _get_manual_labeled_rows). Two ways a box gets here:
-//   1. "自動検出" — POSTs /detect_regions/ (tagger._detect_person_boxes) and
-//      seeds unlabeled candidate boxes for the user to just assign names to.
+// _get_manual_labeled_rows). Every box lives in one flat `boxes` array
+// tagged with which image it belongs to (`imageIndex`); switching the
+// currently-displayed image only changes which subset is rendered/editable,
+// it never discards work already done on another image — `save` always
+// sends the full array regardless of which image happens to be showing.
+//
+// A box can carry more than one character name — person-detection
+// sometimes merges two overlapping people (e.g. a hug pose) into a single
+// box, and there was previously no way to record both identities for it.
+//
+// Two ways a box gets here:
+//   1. "自動検出" — POSTs /detect_regions/ (tagger._detect_person_boxes) for
+//      the currently-displayed image and seeds unlabeled candidate boxes.
 //   2. Manual drag-to-draw on the image, for anything the detector missed.
 // Boxes are tracked/edited in the ORIGINAL image's pixel-coordinate space
 // (matching tagger._detect_person_boxes/_crop_with_padding exactly, so no
@@ -24,10 +34,9 @@ function nextBoxId() { return `box-${++_boxIdCounter}` }
 // image's on-screen CSS size at render time and on mouse events.
 export default function RegionAnnotator({ item, onSaved }) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
-  const [selectedImageIndex, setSelectedImageIndex] = useState(null)  // null = auto (largest)
-  const [resolvedImageIndex, setResolvedImageIndex] = useState(null)  // which index is actually displayed
-  const [boxes, setBoxes] = useState([])               // [{id, box:[x1,y1,x2,y2], character:string|null}]
-  const [naturalSize, setNaturalSize] = useState(null) // {width, height}
+  const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
+  const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
+  const [naturalSize, setNaturalSize] = useState(null) // {width, height} of the currently-displayed image
   const [detecting, setDetecting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -42,23 +51,41 @@ export default function RegionAnnotator({ item, onSaved }) {
 
   useEffect(() => {
     fetch(`/api/items/${item.id}/previews/`)
-      .then(r => r.json()).then(d => { if (Array.isArray(d)) setImages(d) }).catch(() => {})
+      .then(r => r.json()).then(d => {
+        if (!Array.isArray(d)) return
+        setImages(d)
+        // Default to the first image only if nothing more specific was
+        // already picked (e.g. by the pre-fill effect below restoring a
+        // previously-labeled image_index).
+        setCurrentImageIndex(prev => prev != null ? prev : (d[0] ? d[0].index : null))
+      }).catch(() => {})
   }, [item.id])
 
   // Pre-fill from any previously saved labels for this item, so re-opening
-  // an already-annotated item shows what's there instead of a blank slate.
+  // an already-annotated item shows what's there (across every image it
+  // was labeled on) instead of a blank slate.
   useEffect(() => {
-    if (item.character_regions_image_index != null) setSelectedImageIndex(item.character_regions_image_index)
     if (Array.isArray(item.character_regions) && item.character_regions.length > 0) {
-      setResolvedImageIndex(item.character_regions_image_index ?? null)
-      setBoxes(item.character_regions.map(r => ({ id: nextBoxId(), box: r.box, character: r.character })))
+      setBoxes(item.character_regions.map(r => ({
+        id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+      })))
+      setCurrentImageIndex(item.character_regions[0].image_index ?? null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const previewUrl = resolvedImageIndex != null
-    ? `/api/items/${item.id}/preview/?index=${resolvedImageIndex}`
+  const previewUrl = currentImageIndex != null
+    ? `/api/items/${item.id}/preview/?index=${currentImageIndex}`
     : `/api/items/${item.id}/preview/`
+
+  // Only the boxes drawn on whichever image is currently displayed —
+  // boxes on other images stay tracked in `boxes` but aren't shown/editable
+  // until the user switches to that image.
+  const visibleBoxes = boxes.filter(b => b.imageIndex === currentImageIndex)
+
+  function labeledCountFor(imageIndex) {
+    return boxes.filter(b => b.imageIndex === imageIndex && b.characters.length > 0).length
+  }
 
   function scale() {
     if (!imgRef.current || !naturalSize) return 1
@@ -80,12 +107,13 @@ export default function RegionAnnotator({ item, onSaved }) {
     try {
       const resp = await fetch(`/api/items/${item.id}/detect_regions/`, {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ image_index: selectedImageIndex }),
+        body: JSON.stringify({ image_index: currentImageIndex }),
       })
       const j = await resp.json().catch(() => ({}))
       if (!resp.ok) throw new Error(j.detail || `自動検出に失敗しました (${resp.status})`)
-      setResolvedImageIndex(j.image_index ?? null)
-      const detected = (j.boxes || []).map(box => ({ id: nextBoxId(), box, character: null }))
+      const resolvedIndex = j.image_index ?? null
+      if (resolvedIndex !== currentImageIndex) setCurrentImageIndex(resolvedIndex)
+      const detected = (j.boxes || []).map(box => ({ id: nextBoxId(), imageIndex: resolvedIndex, box, characters: [] }))
       setBoxes(prev => [...prev, ...detected])
       if (detected.length === 0) setNotice('人物が検出されませんでした。手動でドラッグして矩形を追加してください。')
       else setNotice('')
@@ -117,16 +145,23 @@ export default function RegionAnnotator({ item, onSaved }) {
     setDrawRect(null)
     if (x2 - x1 < 8 || y2 - y1 < 8) return  // too small — treat as an accidental click, not a real box
     const id = nextBoxId()
-    setBoxes(prev => [...prev, { id, box: [x1, y1, x2, y2], character: null }])
+    setBoxes(prev => [...prev, { id, imageIndex: currentImageIndex, box: [x1, y1, x2, y2], characters: [] }])
     setActiveBoxId(id)
     setCharQuery('')
   }
 
-  function assignCharacter(boxId, name) {
+  // Toggles `name` in/out of a box's character list — a box can hold more
+  // than one label (see the component's own top-level comment), so this
+  // never replaces the list or closes the popover, unlike a normal single-
+  // select picker.
+  function toggleCharacter(boxId, name) {
     const trimmed = name.trim()
     if (!trimmed) return
-    setBoxes(prev => prev.map(b => b.id === boxId ? { ...b, character: trimmed } : b))
-    setActiveBoxId(null)
+    setBoxes(prev => prev.map(b => {
+      if (b.id !== boxId) return b
+      const has = b.characters.includes(trimmed)
+      return { ...b, characters: has ? b.characters.filter(c => c !== trimmed) : [...b.characters, trimmed] }
+    }))
     setCharQuery('')
   }
 
@@ -136,7 +171,7 @@ export default function RegionAnnotator({ item, onSaved }) {
   }
 
   async function save() {
-    const labeled = boxes.filter(b => b.character)
+    const labeled = boxes.filter(b => b.characters.length > 0)
     setSaving(true)
     setError('')
     setNotice('')
@@ -144,8 +179,7 @@ export default function RegionAnnotator({ item, onSaved }) {
       const resp = await fetch(`/api/items/${item.id}/character_regions/`, {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
         body: JSON.stringify({
-          image_index: resolvedImageIndex,
-          regions: labeled.map(b => ({ box: b.box, character: b.character })),
+          regions: labeled.map(b => ({ image_index: b.imageIndex, box: b.box, characters: b.characters })),
         }),
       })
       const j = await resp.json().catch(() => ({}))
@@ -161,6 +195,8 @@ export default function RegionAnnotator({ item, onSaved }) {
   const charSuggestions = (item.characters || []).filter(c =>
     !charQuery.trim() || c.toLowerCase().includes(charQuery.trim().toLowerCase())
   )
+  const activeBox = boxes.find(b => b.id === activeBoxId) || null
+  const totalLabeled = boxes.filter(b => b.characters.length > 0).length
 
   return (
     <div>
@@ -171,9 +207,12 @@ export default function RegionAnnotator({ item, onSaved }) {
         <div style={{ marginBottom: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {images.map(img => (
             <button key={img.index} className="btn" style={{ fontSize: 12 }}
-              onClick={() => { setSelectedImageIndex(img.index); setResolvedImageIndex(img.index); setBoxes([]) }}
-              disabled={resolvedImageIndex === img.index}
-            >{img.index + 1}枚目{resolvedImageIndex === img.index ? ' (選択中)' : ''}</button>
+              onClick={() => setCurrentImageIndex(img.index)}
+              disabled={currentImageIndex === img.index}
+            >
+              {img.index + 1}枚目{currentImageIndex === img.index ? ' (表示中)' : ''}
+              {labeledCountFor(img.index) > 0 && ` ✓${labeledCountFor(img.index)}`}
+            </button>
           ))}
         </div>
       )}
@@ -183,7 +222,7 @@ export default function RegionAnnotator({ item, onSaved }) {
           {detecting ? '検出中…' : '🔍 自動検出'}
         </button>
         <span style={{ fontSize: 12, color: '#94a3b8' }}>
-          画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください。
+          画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください(1つの矩形に複数のキャラを割り当てることもできます)。
         </span>
       </div>
 
@@ -203,24 +242,26 @@ export default function RegionAnnotator({ item, onSaved }) {
           onLoad={e => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
         />
 
-        {naturalSize && boxes.map(b => {
+        {naturalSize && visibleBoxes.map(b => {
           const s = scale()
           const [x1, y1, x2, y2] = b.box
+          const isLabeled = b.characters.length > 0
           return (
             <div key={b.id}
               onClick={ev => { ev.stopPropagation(); setActiveBoxId(b.id); setCharQuery('') }}
               style={{
                 position: 'absolute', left: x1 * s, top: y1 * s, width: (x2 - x1) * s, height: (y2 - y1) * s,
-                border: `2px solid ${b.character ? '#22c55e' : '#f59e0b'}`,
-                background: b.character ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
+                border: `2px solid ${isLabeled ? '#22c55e' : '#f59e0b'}`,
+                background: isLabeled ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
                 cursor: 'pointer', boxSizing: 'border-box',
               }}
             >
               <span style={{
                 position: 'absolute', top: -20, left: 0, fontSize: 11, padding: '1px 5px', borderRadius: 3,
-                background: b.character ? '#166534' : '#78350f', color: '#fff', whiteSpace: 'nowrap',
+                background: isLabeled ? '#166534' : '#78350f', color: '#fff', whiteSpace: 'nowrap',
+                maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis',
               }}>
-                {b.character || '?'}
+                {b.characters.join('、') || '?'}
               </span>
               <button
                 onClick={ev => { ev.stopPropagation(); removeBox(b.id) }}
@@ -234,32 +275,53 @@ export default function RegionAnnotator({ item, onSaved }) {
                 <div onClick={ev => ev.stopPropagation()} style={{
                   position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 10,
                   background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 8,
-                  width: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                  width: 220, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
                 }}>
+                  {activeBox && activeBox.characters.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                      {activeBox.characters.map(c => (
+                        <span key={c} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 4, background: '#166534',
+                          color: '#dcfce7', borderRadius: 4, padding: '2px 6px', fontSize: 12,
+                        }}>
+                          {c}
+                          <button onClick={() => toggleCharacter(b.id, c)}
+                            style={{ border: 'none', background: 'none', color: '#dcfce7', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1 }}
+                          >×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <input
                     autoFocus
                     placeholder="キャラ名で検索/新規入力"
                     value={charQuery}
                     onChange={e => setCharQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) assignCharacter(b.id, charQuery) }}
+                    onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) toggleCharacter(b.id, charQuery) }}
                     style={{
                       width: '100%', boxSizing: 'border-box', background: '#0f172a', color: '#f1f5f9',
                       border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
                     }}
                   />
                   <div style={{ maxHeight: 140, overflowY: 'auto' }}>
-                    {charSuggestions.slice(0, 20).map(c => (
-                      <button key={c} onClick={() => assignCharacter(b.id, c)}
-                        style={{
-                          display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
-                          color: '#f1f5f9', padding: '5px 6px', fontSize: 13, cursor: 'pointer', borderRadius: 4,
-                        }}
-                        onMouseEnter={e => e.currentTarget.style.background = '#334155'}
-                        onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                      >{c}</button>
-                    ))}
+                    {charSuggestions.slice(0, 20).map(c => {
+                      const selected = b.characters.includes(c)
+                      return (
+                        <button key={c} onClick={() => toggleCharacter(b.id, c)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
+                            background: selected ? '#334155' : 'none', border: 'none',
+                            color: '#f1f5f9', padding: '5px 6px', fontSize: 13, cursor: 'pointer', borderRadius: 4,
+                          }}
+                          onMouseEnter={e => { if (!selected) e.currentTarget.style.background = '#334155' }}
+                          onMouseLeave={e => { if (!selected) e.currentTarget.style.background = 'none' }}
+                        >
+                          <span style={{ width: 14 }}>{selected ? '✓' : ''}</span>{c}
+                        </button>
+                      )
+                    })}
                     {charQuery.trim() && !charSuggestions.some(c => c.toLowerCase() === charQuery.trim().toLowerCase()) && (
-                      <button onClick={() => assignCharacter(b.id, charQuery)}
+                      <button onClick={() => toggleCharacter(b.id, charQuery)}
                         style={{
                           display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
                           color: '#93c5fd', padding: '5px 6px', fontSize: 13, cursor: 'pointer',
@@ -269,7 +331,7 @@ export default function RegionAnnotator({ item, onSaved }) {
                   </div>
                   <button onClick={() => setActiveBoxId(null)}
                     style={{ marginTop: 6, fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
-                  >キャンセル</button>
+                  >閉じる</button>
                 </div>
               )}
             </div>
@@ -291,10 +353,10 @@ export default function RegionAnnotator({ item, onSaved }) {
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
         <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '8px 20px', fontWeight: 600 }}
           onClick={save} disabled={saving}>
-          {saving ? '保存中…' : '保存'}
+          {saving ? '保存中…' : '保存(全画像分をまとめて保存)'}
         </button>
         <span style={{ fontSize: 12, color: '#94a3b8' }}>
-          {boxes.length === 0 ? '矩形がありません' : `${boxes.filter(b => b.character).length}/${boxes.length}件にキャラ名を割り当て済み(未割当の矩形は保存されません)`}
+          {boxes.length === 0 ? '矩形がありません' : `全${images.length || 1}枚中 ${totalLabeled}/${boxes.length}件の矩形にキャラ名を割り当て済み(未割当の矩形は保存されません)`}
         </span>
       </div>
     </div>

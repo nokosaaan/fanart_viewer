@@ -29,6 +29,20 @@ function AppMain({ role, onLogout }){
   const [includeCP, setIncludeCP] = useState(false)
   const [includeR18, setIncludeR18] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
+  // Set by ScrollList's preview-thumbnail click (see openPreviewForItem) so
+  // PreviewPane opens jumped straight to that item instead of the plain
+  // timeline grid. Cleared whenever the pane closes so a later reopen via
+  // the header menu (not tied to any specific item) doesn't re-jump to a
+  // stale target.
+  const [previewInitialItemId, setPreviewInitialItemId] = useState(null)
+  function openPreviewForItem(itemId){
+    setPreviewInitialItemId(itemId)
+    setPreviewOpen(true)
+  }
+  function closePreview(){
+    setPreviewOpen(false)
+    setPreviewInitialItemId(null)
+  }
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
@@ -426,7 +440,7 @@ function AppMain({ role, onLogout }){
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
           <HeaderMenu items={[
-            { label: 'Preview Timeline', onClick: () => setPreviewOpen(p => !p), active: previewOpen },
+            { label: 'Preview Timeline', onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen },
             ...(readOnly ? [] : [
               { divider: true },
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
@@ -467,7 +481,7 @@ function AppMain({ role, onLogout }){
         setTitleMissingOnly={setTitleMissingOnly}
         readOnly={readOnly}
       />
-      <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} />
+      <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} />
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
           <button className="btn" onClick={loadNextPage} disabled={loadingPages}>{loadingPages ? 'Loading…' : 'Load more pages'}</button>
@@ -504,7 +518,7 @@ function AppMain({ role, onLogout }){
       )}
       {previewOpen && (
         <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
-          <PreviewPane open={previewOpen} onClose={()=>setPreviewOpen(false)} readOnly={readOnly} filteredItems={filtered} />
+          <PreviewPane open={previewOpen} onClose={closePreview} readOnly={readOnly} filteredItems={filtered} initialItemId={previewInitialItemId} />
         </React.Suspense>
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
