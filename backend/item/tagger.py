@@ -82,37 +82,39 @@ _KAOMOJIS = {
     '>_<', '3_3', '6_9', '>_o', '@_@', '^_^', 'o_o', 'u_u', 'x_x', '|_|', '||_||',
 }
 
-def _situation_hint(rating, general_tag_names, person_count=None):
-    """Derive a single situation_hint from the rating + the person
-    detector's own count (see suggest_tags's 'person_count', which counts
-    boxes from _detect_person_boxes — a direct read of the image, not a
-    tag guess).
+# Danbooru/WD14 tag vocabulary for "more than one person" compositions.
+# MULTIPLE briefly used the person detector's own box count instead (see
+# _detect_person_boxes) — reverted back to tags after that produced too
+# many false positives in practice: the detector counts bounding BOXES,
+# not distinct identities, so the SAME character drawn twice in one image
+# (a before/after split, a multi-pose/expression sheet — Danbooru's own
+# "multiple_views" tag covers exactly this) was routinely counted as 2+
+# people. Tag-based detection isn't perfect either (a tag-based miss on a
+# genuinely multi-person image, or a "3+girls" tag firing on an incidental
+# background crowd), but those false negatives/positives were judged less
+# disruptive in practice than the detector's false positives.
+_MULTIPLE_PERSON_TAGS = {
+    '2girls', '3girls', '4girls', '5girls', '6+girls', 'multiple_girls',
+    '2boys', '3boys', '4boys', '5boys', '6+boys', 'multiple_boys',
+    '2others', '3others', 'multiple_others',
+}
+
+
+def _situation_hint(rating, general_tag_names):
+    """Derive a single situation_hint from the rating + the tagger's own
+    people-count tags (see _MULTIPLE_PERSON_TAGS's own comment for why
+    this is tag-based rather than person-detector-box-count-based).
 
     R18 takes priority when the rating implies it — `situation` is a single
     value in this app's model, and content warning takes precedence over
-    composition. MULTIPLE is decided purely from person_count >= 2. This
-    used to be inferred from booru people-count tags instead ("multiple
-    girls" / an explicit "3+girls" tag), but that could disagree with the
-    detector (e.g. a tag-based miss on a genuinely 2-person image, or a
-    "3+girls" tag on a background crowd that isn't really the composition)
-    — unified onto person_count as the single source of truth so there's
-    only one answer to "is this MULTIPLE" instead of two that can drift
-    apart. `person_count=None` (a caller that never ran person detection,
-    e.g. the threshold-sweep dev helper) just means MULTIPLE can never be
-    inferred here — not an error.
-
-    "1girl"+"solo" -> SOLO is unaffected by this and stays tag-based: a
-    2-person composition (which could plausibly mean CP/pairing) is still
-    deliberately left unmapped when person_count isn't >= 2 either, since
-    that's a judgment call the tags alone don't settle.
+    composition.
     """
     if rating in RATING_TO_SITUATION_HINT:
         return RATING_TO_SITUATION_HINT[rating]
 
-    if person_count is not None and person_count >= 2:
-        return 'MULTIPLE'
-
     names = set(general_tag_names)
+    if names & _MULTIPLE_PERSON_TAGS:
+        return 'MULTIPLE'
     if 'solo' in names and '1girl' in names:
         return 'SOLO'
     return None
@@ -223,17 +225,11 @@ def _prepare_image_onnx(image_bytes, target_size):
 
 
 def _tags_from_predictions(preds, tag_names, rating_idx, general_idx, character_idx,
-                            general_threshold, character_threshold, general_limit,
-                            person_count=None):
+                            general_threshold, character_threshold, general_limit):
     """Shared by both backends: raw per-tag probabilities -> the same
     {'characters', 'tags', 'tags_full', 'rating', 'rating_scores',
     'situation_hint'} shape, since the two backends only differ in how
-    `preds` gets produced (ONNX session vs. torch forward pass).
-
-    `person_count` is passed straight through to _situation_hint (see its
-    own docstring) — this function has no way to compute it itself (that
-    needs the separate person detector, run by the caller), so it's just
-    threaded through as an optional param."""
+    `preds` gets produced (ONNX session vs. torch forward pass)."""
     ratings = {tag_names[i]: float(preds[i]) for i in rating_idx}
     rating = max(ratings, key=ratings.get) if ratings else None
 
@@ -257,7 +253,7 @@ def _tags_from_predictions(preds, tag_names, rating_idx, general_idx, character_
         'tags_full': [n for n, _ in general_full],
         'rating': rating,
         'rating_scores': {k: round(v, 4) for k, v in ratings.items()},
-        'situation_hint': _situation_hint(rating, (n for n, _ in general_full), person_count),
+        'situation_hint': _situation_hint(rating, (n for n, _ in general_full)),
     }
 
 
@@ -412,11 +408,11 @@ def _raw_predict(image_bytes, model_repo, backend):
     return _raw_predict_onnx(image_bytes, model_repo)
 
 
-def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend, person_count=None):
+def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend):
     preds, tag_names, rating_idx, general_idx, character_idx = _raw_predict(image_bytes, model_repo, backend)
     result = _tags_from_predictions(
         preds, tag_names, rating_idx, general_idx, character_idx,
-        general_threshold, character_threshold, general_limit, person_count,
+        general_threshold, character_threshold, general_limit,
     )
     # Internal-only — the raw (pre-threshold) general-tag probability
     # vector, for suggest_tags() to surface as 'general_probs' on the
@@ -547,13 +543,11 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     Also includes `general_probs` (the whole image's raw general-tag
     probability vector — see character_classifier.py, which trains and
     predicts on exactly this) and `person_count` (how many boxes the
-    person detector found) — additive fields, safe for any existing caller
-    that only reads the keys documented above.
-
-    Person detection runs FIRST (not after, as it did before `situation_hint`
-    was unified onto person_count — see _situation_hint) so its count is
-    already known by the time the whole-image pass computes situation_hint;
-    otherwise MULTIPLE could never be inferred from that pass at all.
+    person detector found, used only to gate the per-crop character
+    re-derivation above — NOT consulted for `situation_hint`, which is
+    tag-based; see _situation_hint's own comment for why) — additive
+    fields, safe for any existing caller that only reads the keys
+    documented above.
     """
     try:
         boxes = _detect_person_boxes(image_bytes)
@@ -564,7 +558,6 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
 
     result = _suggest_tags_single_pass(
         image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
-        person_count=person_count,
     )
     general_probs = result.pop('_general_probs')
 
@@ -635,7 +628,7 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
 
     results = {}
     for threshold in character_thresholds:
-        result = _tags_from_predictions(*whole_raw, general_threshold, threshold, general_limit, person_count)
+        result = _tags_from_predictions(*whole_raw, general_threshold, threshold, general_limit)
         if crop_raws:
             merged = {}
             for crop_raw in crop_raws:

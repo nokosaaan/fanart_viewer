@@ -1211,8 +1211,9 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
 
 # Situation gets its OWN weight scheme, not DEFAULT_ENSEMBLE_WEIGHTS — the
 # tagger's own composition/rating heuristic (see tagger._situation_hint:
-# R18 from `rating` takes priority, then person_count >= 2 -> MULTIPLE,
-# then 1girl+solo -> SOLO) is a direct read of the image itself and
+# R18 from `rating` takes priority, then a Danbooru people-count tag like
+# "2girls"/"multiple_girls" -> MULTIPLE, then 1girl+solo -> SOLO) is a
+# direct read of the image itself and
 # is considered reliable enough on its own that it isn't worth blending
 # with the DB-derived priors the way title/character are — those exist to
 # cover for the tagger being unavailable/undecided (no image, or a
