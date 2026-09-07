@@ -38,34 +38,27 @@ _BEARER = (
     "%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 )
 
-# GraphQL query ID for TweetDetail.
-# This changes when Twitter redeploys; update from:
-#   https://github.com/fa0311/twitter-openapi or gallery-dl source
-_TWEET_DETAIL_QUERY_ID = "nBS-WpgA6ZG0CyNHD517JQ"
+# GraphQL query ID for TweetDetail. This changes when Twitter redeploys;
+# update from https://github.com/fa0311/twitter-openapi or gallery-dl source
+# (gallery_dl/extractor/twitter.py's tweet_detail).
+#
+# Was "nBS-WpgA6ZG0CyNHD517JQ" with a {"tweetId": ...} variable — that
+# combination started failing live with HTTP 422 GRAPHQL_VALIDATION_FAILED
+# ("variable focalTweetId must be defined"), first noticed via
+# manage.py backfill_descriptions (which, unlike fetch_and_save_preview's
+# cascade, has no earlier-succeeding method to mask a TweetDetail failure —
+# see that view's per-method try/except, which is why this had gone
+# unnoticed). Updated to match gallery-dl's current live TweetDetail call,
+# verified 2026-09 against the actual downloaded source.
+# `_TWEET_DETAIL_FIELD_TOGGLES` was previously omitted entirely — gallery-dl
+# always sends one for this query.
+_TWEET_DETAIL_QUERY_ID = "iFEr5AcP121Og4wx9Yqo3w"
 
-_TWEET_DETAIL_FEATURES = {
-    "creator_subscriptions_tweet_preview_api_enabled": True,
-    "communities_web_enable_tweet_community_results_fetch": True,
-    "c9s_tweet_anatomy_moderator_badge_enabled": True,
-    "articles_preview_enabled": True,
-    "responsive_web_edit_tweet_api_enabled": True,
-    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-    "view_counts_everywhere_api_enabled": True,
-    "longform_notetweets_consumption_enabled": True,
-    "responsive_web_twitter_article_tweet_consumption_enabled": True,
-    "tweet_awards_web_tipping_enabled": False,
-    "creator_subscriptions_quote_tweet_preview_enabled": False,
-    "freedom_of_speech_not_reach_fetch_enabled": True,
-    "standardized_nudges_misinfo": True,
-    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
-    "rweb_video_timestamps_enabled": True,
-    "longform_notetweets_rich_text_read_enabled": True,
-    "longform_notetweets_inline_media_enabled": True,
-    "responsive_web_graphql_exclude_directive_enabled": True,
-    "verified_phone_label_enabled": False,
-    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-    "responsive_web_graphql_timeline_navigation_enabled": True,
-    "responsive_web_enhance_cards_enabled": False,
+_TWEET_DETAIL_FIELD_TOGGLES = {
+    "withArticleRichContentState": True,
+    "withArticlePlainText": False,
+    "withGrokAnalyze": False,
+    "withDisallowedReplyControls": False,
 }
 
 # Query IDs for UserByScreenName (username -> user id) and UserTweets (a
@@ -316,14 +309,23 @@ def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> tuple[l
 
     variables = json.dumps(
         {
-            "tweetId": tweet_id,
-            "withCommunity": False,
+            "focalTweetId": tweet_id,
+            "referrer": "profile",
+            "with_rux_injections": False,
             "includePromotedContent": False,
-            "withVoice": False,
+            "withCommunity": True,
+            "withQuickPromoteEligibilityTweetFields": False,
+            "withBirdwatchNotes": True,
+            "withVoice": True,
         },
         separators=(",", ":"),
     )
-    features = json.dumps(_TWEET_DETAIL_FEATURES, separators=(",", ":"))
+    # Same feature-flag set as UserTweets/Bookmarks/Likes (see those
+    # functions' own comments — Twitter shares one feature set across most
+    # authenticated timeline/detail endpoints; gallery-dl's TweetDetail call
+    # uses this exact same dict too, not a TweetDetail-specific one).
+    features = json.dumps(_USER_TWEETS_FEATURES, separators=(",", ":"))
+    field_toggles = json.dumps(_TWEET_DETAIL_FIELD_TOGGLES, separators=(",", ":"))
 
     endpoint = f"https://twitter.com/i/api/graphql/{_TWEET_DETAIL_QUERY_ID}/TweetDetail"
     headers = _build_headers(auth_token, ct0)
@@ -331,7 +333,7 @@ def fetch_tweet_media_urls(tweet_url: str, auth_token: str, ct0: str) -> tuple[l
     try:
         resp = requests.get(
             endpoint,
-            params={"variables": variables, "features": features},
+            params={"variables": variables, "features": features, "fieldToggles": field_toggles},
             headers=headers,
             timeout=15,
         )
