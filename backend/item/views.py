@@ -40,7 +40,7 @@ try:
 except Exception:
     HAVE_YTDLP = False
 try:
-    from .twitter_gql_fetch import fetch_twitter_media, fetch_account_retweets, TwitterAuthError
+    from .twitter_gql_fetch import fetch_twitter_media, fetch_account_retweets, fetch_tweet_description, TwitterAuthError
     HAVE_TWITTER_GQL = True
 except Exception:
     HAVE_TWITTER_GQL = False
@@ -1555,6 +1555,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     except Exception:
                         logging.exception('yt-dlp fetch failed for %s', target_url)
 
+            # Post text top-up: gallery-dl/twitter_gql/yt-dlp above are the
+            # only sources of `fetched_description`, but all three are
+            # gated behind `if not candidates` — skipped entirely once the
+            # plain HTML/og:image scrape earlier already found an image.
+            # X still server-renders og:image for ordinary public tweets
+            # (link-preview support), so for any NON-sensitive tweet this
+            # meant description silently stayed empty forever, even though
+            # images were fetched successfully — description capture ended
+            # up depending on whether a tweet happened to be sensitive-
+            # flagged, which is not what "did the fetch succeed" should
+            # mean. Always try once more here, purely for the text (no
+            # image re-download — see fetch_tweet_description), whenever
+            # it's still missing.
+            if (not fetched_description and not item.description and HAVE_TWITTER_GQL
+                    and _have_twitter_creds()
+                    and (('twitter.com' in target_url) or ('x.com' in target_url))):
+                try:
+                    fetched_description = fetch_tweet_description(target_url) or ''
+                except TwitterAuthError as e:
+                    logging.warning('Twitter GQL description top-up auth error for %s: %s', target_url, e)
+                except Exception:
+                    logging.exception('Twitter GQL description top-up failed for %s', target_url)
+
             # Poipiku: dedicated fetcher that handles IllustItemThubExpand and
             # the ShowAppendFile AJAX endpoint.  Run for any poipiku.com URL,
             # regardless of whether HTML scraping found something, because the
@@ -2251,6 +2274,49 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'next_before_id': batch[-1].id if (has_more and batch) else None,
         })
 
+    @action(detail=False, methods=['get'], url_path='region_label_queue')
+    def region_label_queue(self, request):
+        """Items eligible for manual multi-character region labeling — feeds
+        RegionLabelQueueManager.jsx, a bulk review UI in the same spirit as
+        `incomplete` above (see its own docstring for why `before_id`
+        cursoring is used instead of page-number pagination — the same
+        "items stop matching as they're worked through" problem applies
+        here identically: labeling an item empties it out of this queryset).
+
+        Excludes situation SOLO (only one person — nothing to disambiguate)
+        and R18 (per explicit user request — kept out of this queue for
+        now), and anything already labeled (`character_regions` non-empty)
+        or with no image to annotate at all.
+        """
+        queryset = (
+            Item.objects.exclude(situation__in=['SOLO', 'R18'])
+            .filter(character_regions=[])
+            .exclude(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
+            .order_by('-id')
+            .distinct()
+        )
+        total_count = queryset.count()
+
+        before_id = request.GET.get('before_id')
+        if before_id:
+            try:
+                queryset = queryset.filter(id__lt=int(before_id))
+            except (TypeError, ValueError):
+                pass
+
+        page_size = 50
+        batch = list(queryset[:page_size + 1])
+        has_more = len(batch) > page_size
+        batch = batch[:page_size]
+
+        serializer = self.get_serializer(batch, many=True)
+        return Response({
+            'results': serializer.data,
+            'count': total_count,
+            'has_more': has_more,
+            'next_before_id': batch[-1].id if (has_more and batch) else None,
+        })
+
     @action(detail=True, methods=['post'], url_path='suggest_tags')
     def suggest_tags_view(self, request, pk=None):
         """Suggest titles/characters/tags/situation for this item — a thin
@@ -2368,6 +2434,100 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'updated', 'updated': updates, 'item': serializer.data})
+
+    @action(detail=True, methods=['post'], url_path='detect_regions')
+    def detect_regions(self, request, pk=None):
+        """Person-detection candidate boxes for one of this item's images —
+        feeds RegionAnnotator.jsx's "自動検出" button. Body: `{image_index:
+        int|null}`, same 0-based/order-sorted indexing as ItemViewSet.preview's
+        own ?index=N (None = the largest image, matching _select_image_bytes'
+        default elsewhere). Returns `{image_index, boxes}` where each box is
+        `[x1, y1, x2, y2]` in that image's own absolute pixel coordinates —
+        the frontend still has to fetch the image itself (via /preview/) to
+        know its natural dimensions for overlay scaling.
+
+        Detection failing isn't an error (tagger._detect_person_boxes never
+        raises — see its own docstring) — an empty `boxes` list just means
+        the user draws every box manually instead.
+        """
+        if not HAVE_TAGGER:
+            return Response({'detail': 'Tagger module not available on this server'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        image_index = data.get('image_index')
+        if image_index is not None:
+            try:
+                image_index = int(image_index)
+            except (TypeError, ValueError):
+                image_index = None
+
+        image_bytes, resolved_index = _select_image_bytes(item, image_index)
+        if image_bytes is None:
+            return Response({'detail': 'No image available for this item'}, status=status.HTTP_404_NOT_FOUND)
+
+        boxes = tagger._detect_person_boxes(image_bytes)
+        return Response({
+            'image_index': resolved_index,
+            'boxes': [list(box) for box in boxes],
+        })
+
+    @action(detail=True, methods=['post'], url_path='character_regions')
+    def character_regions_view(self, request, pk=None):
+        """Save human-assigned region↔character labels for one image of this
+        item — see Item.character_regions/character_regions_image_index
+        (models.py) and RegionAnnotator.jsx's "保存" button.
+
+        Body: `{image_index: int|null, regions: [{box:[x1,y1,x2,y2],
+        character:str}, ...]}`. Any character name used here that isn't
+        already in item.characters is added — labeling a region is itself a
+        confident statement that this character appears in the image, same
+        trust level as picking it from CharacterPicker's free-text "add new"
+        option.
+        """
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        regions = data.get('regions')
+        if not isinstance(regions, list):
+            return Response({'detail': 'regions must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_index = data.get('image_index')
+        if image_index is not None:
+            try:
+                image_index = int(image_index)
+            except (TypeError, ValueError):
+                return Response({'detail': 'image_index must be an integer or null'}, status=status.HTTP_400_BAD_REQUEST)
+
+        cleaned = []
+        for r in regions:
+            if not isinstance(r, dict):
+                return Response({'detail': 'each region must be an object'}, status=status.HTTP_400_BAD_REQUEST)
+            box = r.get('box')
+            character = (r.get('character') or '').strip()
+            if (not isinstance(box, list) or len(box) != 4
+                    or not all(isinstance(v, (int, float)) for v in box)):
+                return Response({'detail': 'each region.box must be [x1, y1, x2, y2]'}, status=status.HTTP_400_BAD_REQUEST)
+            if not character:
+                return Response({'detail': 'each region must have a non-empty character'}, status=status.HTTP_400_BAD_REQUEST)
+            cleaned.append({'box': [int(v) for v in box], 'character': character})
+
+        item.character_regions = cleaned
+        item.character_regions_image_index = image_index
+
+        existing_chars = list(item.characters or [])
+        for r in cleaned:
+            if r['character'] not in existing_chars:
+                existing_chars.append(r['character'])
+        item.characters = existing_chars
+
+        try:
+            item.save(update_fields=['character_regions', 'character_regions_image_index', 'characters'])
+        except Exception as e:
+            logging.exception('Failed to save character_regions for item %s', item.pk)
+            return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'saved', 'item': serializer.data})
 
     @action(detail=False, methods=['get'], url_path='twitter_auth_check')
     def twitter_auth_check(self, request):

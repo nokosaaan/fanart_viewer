@@ -537,32 +537,46 @@ class Command(BaseCommand):
         used_bootstrap = False
 
         if options['include_multi_character']:
+            # Manual region labels (see Item.character_regions, populated via
+            # RegionLabelQueueManager.jsx/RegionAnnotator.jsx) are ground
+            # truth — a human already said "this box is character X" — so
+            # they skip the teacher-classifier confidence gate entirely
+            # unlike the automatic bootstrap path below. This is the ONLY
+            # way a character that never appears alone (only in CP/MULTIPLE
+            # images) gets any multi-character training data at all: the
+            # bootstrap teacher has never seen such a character, so its
+            # confidence for it is never reliable enough to clear
+            # --bootstrap-confidence on its own.
+            manual_rows = self._get_manual_labeled_rows(tagger_backend, options['feature_source'], general_tag_names)
+
             multi_rows = self._get_multi_character_rows(options, tagger_backend, general_tag_names)
             pseudo_rows = self._bootstrap_label(
                 multi_rows, teacher, options['bootstrap_confidence'],
             )
-            if pseudo_rows:
-                X_boot = np.stack([f for _c, f in pseudo_rows])
-                y_boot = np.array([c for c, _f in pseudo_rows])
+
+            combined_extra = manual_rows + pseudo_rows
+            if combined_extra:
+                X_boot = np.stack([f for _c, f in combined_extra])
+                y_boot = np.array([c for c, _f in combined_extra])
                 X_combined = np.concatenate([X_train, X_boot])
                 y_combined = np.concatenate([y_train, y_boot])
                 self.stdout.write(
-                    f'\nAdding {len(pseudo_rows)} bootstrap-labeled crops to the '
-                    f'{len(X_train)} single-character training examples...'
+                    f'\nAdding {len(manual_rows)} manually-labeled + {len(pseudo_rows)} bootstrap-labeled '
+                    f'crops to the {len(X_train)} single-character training examples...'
                 )
                 teacher_test_acc = final_test_acc
                 final_clf, final_train_acc, final_test_acc = fit_and_report(
-                    X_combined, y_combined, 'single-character + bootstrap',
+                    X_combined, y_combined, 'single-character + manual + bootstrap',
                 )
                 used_bootstrap = True
                 self.stdout.write(self.style.SUCCESS(
                     f'\nHoldout accuracy: {teacher_test_acc:.1%} (single-character only) -> '
-                    f'{final_test_acc:.1%} (with bootstrap crops)'
+                    f'{final_test_acc:.1%} (with manual + bootstrap crops)'
                 ))
             else:
                 self.stdout.write(self.style.WARNING(
-                    '\nNo multi-character crops cleared --bootstrap-confidence — keeping the '
-                    'single-character-only classifier.'
+                    '\nNo manually-labeled regions and no multi-character crops cleared '
+                    '--bootstrap-confidence — keeping the single-character-only classifier.'
                 ))
 
         # Save — self-contained: records which backend/tag ordering produced
@@ -592,6 +606,57 @@ class Command(BaseCommand):
             'holdout_accuracy': final_test_acc,
         }, output_path)
         self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
+
+    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names):
+        """[(character, feature), ...] for every human-labeled region across
+        all items with Item.character_regions set (see RegionAnnotator.jsx /
+        ItemViewSet.character_regions_view) — already correctly paired, no
+        teacher-classifier confidence gating needed (unlike
+        _bootstrap_label's output, which this is designed to sit alongside:
+        see handle()'s `manual_rows + pseudo_rows` combination).
+
+        Uses the same image-selection convention as everywhere else
+        (item.views._select_image_bytes) so a region's stored box lines up
+        with the exact image it was drawn against, even for an item with
+        multiple preview images.
+        """
+        from item.views import _select_image_bytes
+
+        items = Item.objects.exclude(character_regions=[]).only(
+            'id', 'character_regions', 'character_regions_image_index',
+        )
+        rows = []
+        skipped_mismatch = 0
+        for item in items.iterator():
+            regions = item.character_regions or []
+            if not regions:
+                continue
+            image_bytes, _resolved_index = _select_image_bytes(item, item.character_regions_image_index)
+            if image_bytes is None:
+                self.stderr.write(f'item {item.id}: no image available for its manual regions, skipping')
+                continue
+            for region in regions:
+                box = region.get('box')
+                character = region.get('character')
+                if not box or not character:
+                    continue
+                try:
+                    crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
+                    feature, names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
+                except Exception as e:
+                    self.stderr.write(f'item {item.id}: manual-region feature extraction failed ({e}), skipping region')
+                    continue
+                if names != expected_general_tag_names:
+                    skipped_mismatch += 1
+                    continue
+                rows.append((character, feature))
+
+        if skipped_mismatch:
+            self.stdout.write(self.style.WARNING(
+                f'{skipped_mismatch} manually-labeled region(s) skipped (feature ordering mismatch).'
+            ))
+        self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {items.count()} annotated item(s).')
+        return rows
 
     def _get_multi_character_rows(self, options, tagger_backend, expected_general_tag_names):
         """Returns [(item_id, candidate_chars, [crop_feature, ...]), ...] for

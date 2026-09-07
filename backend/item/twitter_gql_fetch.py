@@ -434,6 +434,31 @@ def fetch_twitter_media(tweet_url: str) -> tuple[list[tuple[bytes, str]], str]:
     return results, description
 
 
+def fetch_tweet_description(tweet_url: str) -> str:
+    """
+    ツイートURLから本文テキストのみを返す(画像はダウンロードしない —
+    fetch_tweet_media_urls自体、メディアURLの解決のみでCDNへのダウンロード
+    は行わないため、fetch_twitter_media と違い帯域を消費しない)。
+
+    fetch_and_save_preview が(HTMLスクレイピング等、本文を返さない経路で)
+    既に画像取得を終えている場合でも、本文だけは常にこれで補完するために
+    使う軽量版。センシティブ指定でない公開ツイートはog:imageだけで画像が
+    揃ってしまい、本文を返すgallery-dl/twitter_gql/yt-dlpが一度も呼ばれず
+    description が空のまま残る、という実際の不具合の修正に使われている
+    (views.py の fetch_and_save_preview 参照)。
+
+    Raises:
+        TwitterAuthError: 認証エラー
+        RuntimeError: 環境変数/DB未設定
+    """
+    auth_token, ct0 = _get_creds()
+    if not auth_token or not ct0:
+        raise RuntimeError("TWITTER_AUTH_TOKEN/ct0 が設定されていません")
+
+    _media_urls, description = fetch_tweet_media_urls(tweet_url, auth_token, ct0)
+    return description
+
+
 def _get_with_ratelimit_backoff(url: str, params: dict, headers: dict, max_retries: int = 5):
     """GET を投げ、Twitterのレート制限ヘッダーを尊重してリトライする。
 

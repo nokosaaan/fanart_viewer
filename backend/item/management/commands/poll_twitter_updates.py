@@ -151,7 +151,10 @@ class Command(BaseCommand):
 
             SocialFetchQueueItem.objects.get_or_create(
                 external_id=tweet_id,
-                defaults={'kind': kind, 'screen_name': screen_name, 'url': url},
+                defaults={
+                    'kind': kind, 'screen_name': screen_name, 'url': url,
+                    'description': cand.get('description') or '',
+                },
             )
 
     @staticmethod
@@ -220,6 +223,7 @@ class Command(BaseCommand):
                 artist=row.screen_name,
                 link=row.url,
                 tags=None,
+                description=row.description,
             )
 
             ok = self._fetch_item(item, row.url)

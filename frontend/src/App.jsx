@@ -8,6 +8,7 @@ import CharacterDanbooruLinkManager from './components/CharacterDanbooruLinkMana
 import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import EditQueueManager from './components/EditQueueManager'
+import RegionLabelQueueManager from './components/RegionLabelQueueManager'
 import RetweetFetchManager from './components/RetweetFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import HeaderMenu from './components/HeaderMenu'
@@ -39,6 +40,7 @@ function AppMain({ role, onLogout }){
   const [fetchQueue, setFetchQueue] = useState([])
   const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
   const [editQueueOpen, setEditQueueOpen] = useState(false)
+  const [regionQueueOpen, setRegionQueueOpen] = useState(false)
   const [retweetFetchOpen, setRetweetFetchOpen] = useState(false)
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
@@ -433,6 +435,8 @@ function AppMain({ role, onLogout }){
               { label: '取得キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('fetchQueue') },
               { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
               { label: '編集キューを別ウィンドウで開く', onClick: () => openStandaloneWindow('editQueue') },
+              { label: '領域ラベル付けキュー', onClick: () => setRegionQueueOpen(true) },
+              { label: '領域ラベル付けキューを別ウィンドウで開く', onClick: () => openStandaloneWindow('regionQueue') },
               { label: 'アカウントのRTを取得', onClick: () => setRetweetFetchOpen(true) },
               { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
@@ -516,6 +520,7 @@ function AppMain({ role, onLogout }){
         />
       )}
       {editQueueOpen && <EditQueueManager onClose={()=>setEditQueueOpen(false)} currentPageItems={paginatedItems} />}
+      {regionQueueOpen && <RegionLabelQueueManager onClose={()=>setRegionQueueOpen(false)} currentPageItems={paginatedItems} />}
       {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
     </div>
@@ -569,6 +574,9 @@ export default function App() {
   }
   if (standalonePanel === 'fetchQueue') {
     return <FetchQueueManager standalone queue={[]} onRemove={() => {}} onClose={() => window.close()} />
+  }
+  if (standalonePanel === 'regionQueue') {
+    return <RegionLabelQueueManager standalone onClose={() => window.close()} />
   }
 
   return <AppMain role={role} onLogout={handleLogout} />
