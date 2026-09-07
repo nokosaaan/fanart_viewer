@@ -30,6 +30,20 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
 BACKUP_FOLDER_NAME = 'fanart_viewer_backups'
 
+# googleapiclient's own retry logic (_retry_request) already knows how to
+# back off and retry on transient network failures — including ssl.SSLError
+# (e.g. the SSLEOFError seen in practice mid-upload on a flaky Pi network
+# connection) and socket timeouts/resets — but only if `num_retries` is
+# explicitly passed above its default of 0. Every .execute()/.next_chunk()
+# call below was previously leaving that at 0, so a single transient error
+# during a multi-GB upload/download failed the whole backup/restore instead
+# of quietly retrying, as it's designed to.
+_NUM_RETRIES = 5
+# Upload in smaller chunks than MediaIoBaseUpload's 100MB default so a
+# retry after a dropped chunk only has to resend ~10MB, not the whole
+# in-flight chunk — matters more the slower/flakier the upload link is.
+_UPLOAD_CHUNK_SIZE = 10 * 1024 * 1024
+
 
 class DriveBackupError(Exception):
     """Raised for any backup/restore failure with a user-facing message."""
@@ -83,7 +97,7 @@ def _get_or_create_backup_folder(service):
         q=f"name='{BACKUP_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
         fields='files(id,name)',
         spaces='drive',
-    ).execute()
+    ).execute(num_retries=_NUM_RETRIES)
     files = resp.get('files', [])
     if files:
         return files[0]['id']
@@ -91,7 +105,7 @@ def _get_or_create_backup_folder(service):
     folder = service.files().create(
         body={'name': BACKUP_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'},
         fields='id',
-    ).execute()
+    ).execute(num_retries=_NUM_RETRIES)
     return folder['id']
 
 
@@ -158,12 +172,14 @@ def create_backup() -> dict:
         if gzip_proc.returncode != 0:
             raise DriveBackupError(f'gzip失敗: {gzip_err.decode(errors="replace").strip()[:500]}')
 
-        media = MediaFileUpload(dump_path, mimetype='application/gzip', resumable=True)
+        media = MediaFileUpload(
+            dump_path, mimetype='application/gzip', resumable=True, chunksize=_UPLOAD_CHUNK_SIZE,
+        )
         uploaded = service.files().create(
             body={'name': filename, 'parents': [folder_id]},
             media_body=media,
             fields='id,name,createdTime,size',
-        ).execute()
+        ).execute(num_retries=_NUM_RETRIES)
         return uploaded
     finally:
         os.unlink(dump_path)
@@ -205,7 +221,7 @@ def list_backups() -> list:
         fields='files(id,name,createdTime,size)',
         orderBy='createdTime desc',
         pageSize=50,
-    ).execute()
+    ).execute(num_retries=_NUM_RETRIES)
     return resp.get('files', [])
 
 
@@ -234,7 +250,7 @@ def restore_backup(file_id: str, overwrite: bool = False) -> None:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while not done:
-                _, done = downloader.next_chunk()
+                _, done = downloader.next_chunk(num_retries=_NUM_RETRIES)
 
         with open(dump_path, 'rb') as fh:
             is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename

@@ -302,11 +302,9 @@ export default function CharacterGroupManager({ onClose }) {
             <div className="cgm-add-popover cgm-parent-picker">
               <div className="cgm-parent-picker-hint">親グループを選択(タイトルの階層構造 — 例: Fate → Fate/strange Fake):</div>
               <div className="cgm-parent-picker-options">
-                {sortedGroups.filter(other => !excludedForParentPicker.has(other.id)).map(other => (
-                  <button key={other.id} className="cgm-add-suggestion" onClick={() => setParent(g.id, other.id)}>
-                    {other.name}
-                  </button>
-                ))}
+                {sortedGroups
+                  .filter(other => other.parent == null && !excludedForParentPicker.has(other.id))
+                  .map(other => renderParentOption(other, 0, g.id, excludedForParentPicker))}
               </div>
               <button className="cgm-add-cancel" onClick={() => setParentPickerFor(null)}>キャンセル</button>
             </div>
@@ -371,6 +369,35 @@ export default function CharacterGroupManager({ onClose }) {
             character chips, instead of always showing the full subtree
             regardless of toggle state. */}
         {!isCollapsed && children.map(child => renderGroupNode(child, depth + 1))}
+      </React.Fragment>
+    )
+  }
+
+  // Parent-picker popover's own tree render (see the 🌳 popover below) —
+  // same nesting/collapse-reuse idea as renderMoveOption, but a node (and
+  // therefore its whole subtree, never just part of it — see
+  // excludedForParentPicker's own comment) can be excluded entirely: the
+  // group having its parent set can't become its own ancestor, so it and
+  // everything under it are skipped rather than rendered disabled.
+  function renderParentOption(other, depth, targetGroupId, excludedSet) {
+    if (excludedSet.has(other.id)) return null
+    const children = (childrenByParentId.get(other.id) || []).filter(c => !excludedSet.has(c.id))
+    const isCollapsed = collapsed[other.id]
+    return (
+      <React.Fragment key={other.id}>
+        <div style={{ display: 'flex', alignItems: 'center', paddingLeft: depth ? depth * 16 : 0 }}>
+          {children.length > 0 ? (
+            <button className="cgm-toggle" onClick={() => setCollapsed(p => ({ ...p, [other.id]: !p[other.id] }))}>
+              {isCollapsed ? '▶' : '▼'}
+            </button>
+          ) : (
+            <span style={{ display: 'inline-block', width: 14, flexShrink: 0 }} />
+          )}
+          <button className="cgm-add-suggestion" style={{ flex: 1 }} onClick={() => setParent(targetGroupId, other.id)}>
+            {other.name}
+          </button>
+        </div>
+        {!isCollapsed && children.map(child => renderParentOption(child, depth + 1, targetGroupId, excludedSet))}
       </React.Fragment>
     )
   }
