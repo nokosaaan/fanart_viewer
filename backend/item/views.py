@@ -2386,36 +2386,41 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='region_mismatch_queue')
     def region_mismatch_queue(self, request):
-        """Items whose Item.character_regions references a character no
-        longer in Item.characters — feeds RegionLabelQueueManager.jsx's
-        "不整合あり" mode. Region labeling is treated as the more
-        trustworthy source here (a human drew a box around a specific
-        person, vs. just picking a name from a list), so when the two
-        diverge it's surfaced for a human to reconcile rather than
-        train_character_classifier.py silently trusting a region label
-        that may have gone stale (see character_regions_view's own
-        docstring: saving a region only ever ADDS a missing name to
-        item.characters, it never removes one — so the only way to reach
-        this state today is editing item.characters afterward via the
-        normal edit form/queue and removing a name a region still uses).
+        """Items where the character set implied by Item.character_regions
+        doesn't EXACTLY match Item.characters (either direction) — feeds
+        RegionLabelQueueManager.jsx's "不整合あり" mode. Region labeling is
+        treated as the more trustworthy source here (a human drew a box
+        around a specific person, vs. just picking a name from a list),
+        but exact-match (not just "region has a name characters is missing")
+        is deliberate per explicit request: a name only in item.characters
+        with no region box backing it is just as worth a human's eyes as
+        the reverse — it might be a real person the box-detector missed, or
+        it might be stale/wrong. Either way this queue only SURFACES it;
+        _character_breakdown of which is right is left to a human looking
+        at the actual preview image (see region_only_characters /
+        item_only_characters below, and sync_characters_to_regions for the
+        "just trust the regions" resolution once they've decided that).
 
         Re-opening the item in RegionAnnotator and saving again (even with
         no box changes) re-merges the region's characters back into
-        item.characters and resolves the mismatch — or the region itself
-        can be corrected first if THAT'S what was wrong.
+        item.characters — resolves the "region has it, characters doesn't"
+        direction, but NOT the reverse (a name only in item.characters is
+        untouched by that save) — the region itself can also be corrected
+        if THAT'S what was wrong, or sync_characters_to_regions /
+        update_fields used to fix item.characters directly.
 
-        Can't express "a JSON list's elements aren't a subset of another
-        JSON list's elements" as a single portable DB query, so this
-        filters in Python — fine at this app's scale, since the candidate
-        set (items with any character_regions at all) is already a small
-        subset of all items. Same before_id cursoring as the other queue
-        actions, applied to the already-computed mismatch list.
+        Can't express "two JSON lists have the same elements, ignoring
+        order" as a single portable DB query, so this filters in Python —
+        fine at this app's scale, since the candidate set (items with any
+        character_regions at all) is already a small subset of all items.
+        Same before_id cursoring as the other queue actions, applied to the
+        already-computed mismatch list.
         """
         candidates = Item.objects.exclude(character_regions=[]).order_by('-id')
         mismatched = []
         for item in candidates.iterator():
             region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
-            if not region_chars.issubset(set(item.characters or [])):
+            if region_chars != set(item.characters or []):
                 mismatched.append(item)
 
         total_count = len(mismatched)
@@ -2436,7 +2441,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         serialized = self.get_serializer(batch, many=True).data
         for entry, item in zip(serialized, batch):
             region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
-            entry['region_mismatch_characters'] = sorted(region_chars - set(item.characters or []))
+            item_chars = set(item.characters or [])
+            entry['region_only_characters'] = sorted(region_chars - item_chars)
+            entry['item_only_characters'] = sorted(item_chars - region_chars)
 
         return Response({
             'results': serialized,
@@ -2444,6 +2451,26 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'has_more': has_more,
             'next_before_id': batch[-1].id if (has_more and batch) else None,
         })
+
+    @action(detail=True, methods=['post'], url_path='sync_characters_to_regions')
+    def sync_characters_to_regions(self, request, pk=None):
+        """Overwrite Item.characters with EXACTLY the character set implied
+        by Item.character_regions — the "領域ラベル側に統一する" resolution
+        offered by region_mismatch_queue, for when a human has looked at
+        the preview and decided the region boxes are right and
+        item.characters (from the edit queue) is what's stale/wrong.
+        Unlike character_regions_view's save path (which only ever ADDS
+        missing names), this can also REMOVE a name from item.characters
+        that no region box uses — the whole point of this endpoint, since
+        the edit-queue-only-fix side of that same decision is just
+        update_fields on `characters` instead.
+        """
+        item = self.get_object()
+        region_chars = sorted({c for r in (item.character_regions or []) for c in (r.get('characters') or [])})
+        item.characters = region_chars
+        item.save(update_fields=['characters'])
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'saved', 'item': serializer.data})
 
     @action(detail=False, methods=['get'], url_path='missing_preview')
     def missing_preview_queue(self, request):

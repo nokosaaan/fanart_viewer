@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import RegionAnnotator from './RegionAnnotator'
+import CharacterPicker from './CharacterPicker'
 import { notify } from '../lib/crossWindowSync'
+
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+  return m ? m.pop() : ''
+}
+
+const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') }
 
 // Excludes SOLO (only one person — nothing to disambiguate) and R18 (kept
 // out of this queue per explicit request) — mirrors the server-side filter
@@ -13,17 +21,24 @@ function isEligible(it) {
 }
 
 // Mirrors ItemViewSet.region_mismatch_queue's server-side logic, for the
-// currentPageItems (client-side) mode — a region-labeled character that's
-// no longer in item.characters (most likely: someone corrected
-// item.characters afterward via the edit queue and forgot to also fix the
-// region that still names it — see character_regions_view's own docstring:
-// saving a region only ever ADDS a missing name, never removes one).
-function regionMismatchCharacters(it) {
-  if (!Array.isArray(it.character_regions) || it.character_regions.length === 0) return []
+// currentPageItems (client-side) mode — full-consistency (not just
+// subset) comparison between what the region boxes say and
+// item.characters, per explicit request: either direction of divergence
+// is worth a human's eyes with the preview up, not just "region has a name
+// characters is missing".
+function characterDiff(it) {
   const regionChars = new Set()
-  for (const r of it.character_regions) for (const c of (r.characters || [])) regionChars.add(c)
+  for (const r of (it.character_regions || [])) for (const c of (r.characters || [])) regionChars.add(c)
   const itemChars = new Set(it.characters || [])
-  return [...regionChars].filter(c => !itemChars.has(c)).sort()
+  return {
+    regionOnly: [...regionChars].filter(c => !itemChars.has(c)).sort(),
+    itemOnly: [...itemChars].filter(c => !regionChars.has(c)).sort(),
+  }
+}
+
+function isMismatched(it) {
+  const { regionOnly, itemOnly } = characterDiff(it)
+  return regionOnly.length > 0 || itemOnly.length > 0
 }
 
 // Mailbox-style bulk review for manually labeling which detected person is
@@ -47,6 +62,13 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [selectedId, setSelectedId] = useState(null)
+  const [allChars, setAllChars] = useState([])
+  const [charList, setCharList] = useState([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/items/all_characters/').then(r => r.json()).then(d => { if (Array.isArray(d)) setAllChars(d) }).catch(() => {})
+  }, [])
 
   const endpoint = mode === 'mismatch' ? '/api/items/region_mismatch_queue/' : '/api/items/region_label_queue/'
 
@@ -54,7 +76,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
     setSelectedId(null)
 
     if (currentPageItems) {
-      const list = currentPageItems.filter(mode === 'mismatch' ? (it => regionMismatchCharacters(it).length > 0) : isEligible)
+      const list = currentPageItems.filter(mode === 'mismatch' ? isMismatched : isEligible)
       setItems(list)
       setCount(list.length)
       setHasMore(false)
@@ -111,6 +133,50 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
 
   const selected = items.find(it => it.id === selectedId) || null
 
+  // Reset the manual-fix editor to the currently-selected item's own
+  // characters whenever selection changes — otherwise a leftover edit from
+  // the previous item would silently carry over.
+  useEffect(() => {
+    setCharList(selected ? (selected.characters || []) : [])
+  }, [selected && selected.id])
+
+  async function saveManualFix() {
+    if (!selected || saving) return
+    setSaving(true)
+    try {
+      const r = await fetch(`/api/items/${selected.id}/update_fields/`, {
+        method: 'POST', headers: HEADERS, credentials: 'same-origin',
+        body: JSON.stringify({ characters: charList }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data.detail || r.status)
+      notify('item-updated', { id: selected.id, item: data.item })
+      selectNext(selected.id)
+    } catch (e) {
+      alert('保存に失敗: ' + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function syncToRegions() {
+    if (!selected || saving) return
+    setSaving(true)
+    try {
+      const r = await fetch(`/api/items/${selected.id}/sync_characters_to_regions/`, {
+        method: 'POST', headers: HEADERS, credentials: 'same-origin',
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data.detail || r.status)
+      notify('item-updated', { id: selected.id, item: data.item })
+      selectNext(selected.id)
+    } catch (e) {
+      alert('保存に失敗: ' + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const content = (
     <>
       <div className="cgm-panel-header">
@@ -133,7 +199,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
 
       <div className="cgm-panel-search" style={{ fontSize: 12, color: '#6b7280' }}>
         {mode === 'mismatch'
-          ? '領域ラベルに含まれるキャラが編集キューでのキャラ一覧から外れている(=食い違いがある)アイテムです。領域指定の方が信頼度が高いので、どちらが正しいか確認して修正してください。'
+          ? '領域ラベルの内容と編集キューでのキャラ一覧が完全一致していない(どちらかにしか無い名前がある)アイテムです。プレビューを見ながら、手動で修正するか領域ラベル側に統一するか判断してください。'
           : 'situationがSOLO・R18以外で、まだ領域ラベル未設定のアイテムが対象です。検出された矩形をクリックしてキャラ名を割り当て、保存すると次のアイテムに進みます。'}
       </div>
 
@@ -144,7 +210,11 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
             <div className="cgm-empty-hint" style={{ padding: 12 }}>該当するアイテムはありません 🎉</div>
           )}
           {items.map(it => {
-            const mismatchChars = mode === 'mismatch' ? (it.region_mismatch_characters || regionMismatchCharacters(it)) : []
+            const diff = mode === 'mismatch'
+              ? ('region_only_characters' in it
+                  ? { regionOnly: it.region_only_characters || [], itemOnly: it.item_only_characters || [] }
+                  : characterDiff(it))
+              : null
             return (
               <div
                 key={it.id}
@@ -159,9 +229,14 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
                 <div style={{ fontSize: 12, color: '#6b7280' }}>
                   situation: {it.situation || '—'} · キャラ{(it.characters || []).length}件
                 </div>
-                {mode === 'mismatch' && mismatchChars.length > 0 && (
+                {diff && diff.regionOnly.length > 0 && (
                   <div style={{ fontSize: 11, color: '#dc2626', marginTop: 2 }}>
-                    ⚠ {mismatchChars.join(', ')}
+                    領域のみ: {diff.regionOnly.join(', ')}
+                  </div>
+                )}
+                {diff && diff.itemOnly.length > 0 && (
+                  <div style={{ fontSize: 11, color: '#d97706', marginTop: 2 }}>
+                    編集キューのみ: {diff.itemOnly.join(', ')}
                   </div>
                 )}
               </div>
@@ -177,6 +252,49 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
         <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
           {!selected ? (
             <div className="cgm-empty-hint">左のリストから項目を選んでください</div>
+          ) : mode === 'mismatch' ? (
+            (() => {
+              const diff = 'region_only_characters' in selected
+                ? { regionOnly: selected.region_only_characters || [], itemOnly: selected.item_only_characters || [] }
+                : characterDiff(selected)
+              return (
+                <div style={{ background: '#1e293b', borderRadius: 8, padding: '16px 20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
+                    <button className="btn" style={{ padding: '4px 10px' }} onClick={() => selectNext(selected.id)}>スキップ（後で対応）</button>
+                  </div>
+
+                  <img
+                    src={`/api/items/${selected.id}/preview/`}
+                    alt=""
+                    style={{ maxWidth: '100%', maxHeight: 420, display: 'block', margin: '0 auto 16px', borderRadius: 6 }}
+                  />
+
+                  <div style={{ display: 'flex', gap: 24, marginBottom: 16, fontSize: 13 }}>
+                    <div>
+                      <div style={{ color: '#f87171', fontWeight: 600, marginBottom: 4 }}>領域ラベルのみ</div>
+                      <div style={{ color: '#cbd5e1' }}>{diff.regionOnly.length > 0 ? diff.regionOnly.join(', ') : 'なし'}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#fbbf24', fontWeight: 600, marginBottom: 4 }}>編集キューのみ</div>
+                      <div style={{ color: '#cbd5e1' }}>{diff.itemOnly.length > 0 ? diff.itemOnly.join(', ') : 'なし'}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                    <button className="btn" disabled={saving} onClick={syncToRegions}>
+                      領域ラベルに統一(item.charactersを上書き)
+                    </button>
+                  </div>
+
+                  <div style={{ background: '#0f172a', borderRadius: 6, padding: 12 }}>
+                    <div style={{ color: '#f8fafc', fontSize: 13, fontWeight: 600, marginBottom: 8 }}>手動で修正</div>
+                    <CharacterPicker charList={charList} setCharList={setCharList} allChars={allChars} titles={selected.titles || []} />
+                    <button className="btn" style={{ marginTop: 8 }} disabled={saving} onClick={saveManualFix}>この内容で保存</button>
+                  </div>
+                </div>
+              )
+            })()
           ) : (
             <div style={{ background: '#1e293b', borderRadius: 8, padding: '16px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -188,6 +306,17 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
                 item={selected}
                 onSaved={(newItem) => {
                   notify('item-updated', { id: selected.id, item: newItem })
+                  // character_regions_view only ever ADDS a missing name to
+                  // item.characters, so region-has-it-characters-doesn't
+                  // can never be true right after a save — but the reverse
+                  // (a name in item.characters no box here labels) isn't
+                  // touched by that save at all, so it's still possible
+                  // and worth flagging immediately rather than only at the
+                  // next visit to "不整合あり".
+                  const diff = characterDiff(newItem)
+                  if (diff.itemOnly.length > 0) {
+                    alert(`編集キューのキャラ一覧に、今回のラベル付けのどのボックスにも登場しない名前があります: ${diff.itemOnly.join(', ')}\n「不整合あり」キューで確認・修正してください。`)
+                  }
                   selectNext(selected.id)
                 }}
               />
