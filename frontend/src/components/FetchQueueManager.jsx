@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { saveImagesChunked } from '../lib/saveImages'
-import { fetchPreviewCandidates } from '../lib/fetchCandidates'
+import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from '../lib/fetchCandidates'
 import { notify, postSync, onSync } from '../lib/crossWindowSync'
+
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+  return m ? m.pop() : ''
+}
+
+const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') }
 
 function timeAgo(ts){
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
@@ -108,6 +115,18 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
   const [bulkRunning, setBulkRunning] = useState(false)
   const [bulkProgress, setBulkProgress] = useState(null) // {done, total}
   const [bulkSummary, setBulkSummary] = useState(null)
+  // 'review' = existing foreground loop (returns candidates here for you to
+  // pick from — stops the moment this panel/tab closes). 'background' =
+  // fire-and-forget: sends the same item ids to fetch_previews_for_items_
+  // view, which keeps working server-side after you close this panel;
+  // whatever it finds gets auto-saved directly (no candidates to review),
+  // and you just check back on the item list later — added because the
+  // standalone popped-out window's own bulk button has no access to
+  // "what's missing on THIS page" (it queries the whole DB instead — see
+  // missingItems above), so closing that window to get page-scoping back
+  // used to mean losing the ability to just fire it and walk away too.
+  const [bulkMode, setBulkMode] = useState('review')
+  const [backgroundStarting, setBackgroundStarting] = useState(false)
 
   // Kill switch for runBulkFetch — see EditQueueManager.jsx's identical
   // cancelledRef/abortRef pair for the full reasoning (applies here the
@@ -142,6 +161,13 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
     let queued = 0, savedDirect = 0, failed = 0
     for(let i=0; i<pendingItems.length; i++){
       if(cancelledRef.current) return  // panel closed mid-run — stop immediately, no further state touches
+      // Space out requests — see BULK_FETCH_DELAY_MS's own comment: firing
+      // these back-to-back with no gap has been observed to trip
+      // Twitter's rate limit and fail every item in the batch.
+      if(i > 0){
+        await sleep(BULK_FETCH_DELAY_MS)
+        if(cancelledRef.current) return  // panel closed during the wait
+      }
       setBulkProgress({ done: i, total: pendingItems.length })
       const it = pendingItems[i]
       try{
@@ -171,6 +197,25 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
     // the 'item-preview-updated' listener) — reload it fresh so items just
     // saved directly drop off instead of being offered again next click.
     if(standalone) loadMissing()
+  }
+
+  async function runBackgroundFetch(){
+    if(backgroundStarting || pendingItems.length === 0) return
+    setBackgroundStarting(true)
+    setBulkSummary(null)
+    try{
+      const r = await fetch('/api/items/fetch_previews_for_items/', {
+        method: 'POST', headers: HEADERS, credentials: 'same-origin',
+        body: JSON.stringify({ item_ids: pendingItems.map(it => it.id) }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if(!r.ok) throw new Error(j.detail || `開始に失敗しました (${r.status})`)
+      setBulkSummary(`バックグラウンドで${j.count}件の取得を開始しました。完了しても通知は出ないので、しばらくしてから一覧を再読み込みしてください。パネルやタブを閉じても処理は続きます。`)
+    }catch(e){
+      setBulkSummary('開始に失敗しました: ' + e.message)
+    }finally{
+      setBackgroundStarting(false)
+    }
   }
 
   async function save(entry, images){
@@ -203,20 +248,40 @@ export default function FetchQueueManager({ queue: queueProp, onRemove: onRemove
         <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
       </div>
 
-      <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-        <button className="btn" onClick={runBulkFetch} disabled={bulkRunning || pendingItems.length===0 || (standalone && missingLoading)}>
-          {bulkRunning
-            ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
-            : standalone
-              ? `未取得アイテムを一括取得 (${pendingItems.length}件${missingCount > pendingItems.length ? `/全${missingCount}件` : ''})`
-              : `このページを一括取得 (${pendingItems.length}件)`}
-        </button>
-        {standalone && missingHasMore && (
-          <button className="btn" onClick={loadMoreMissing} disabled={missingLoadingMore || bulkRunning}>
-            {missingLoadingMore ? '読み込み中…' : 'もっと読み込む'}
+      <div className="cgm-panel-search" style={{display:'flex', flexDirection:'column', gap:8}}>
+        <div style={{display:'flex', alignItems:'center', gap:14, flexWrap:'wrap'}}>
+          <label style={{display:'flex', alignItems:'center', gap:5, fontSize:12, cursor:'pointer'}}>
+            <input type="radio" checked={bulkMode === 'review'} onChange={() => setBulkMode('review')} disabled={bulkRunning || backgroundStarting} />
+            候補を見て選ぶ(このパネルを開いたまま)
+          </label>
+          <label style={{display:'flex', alignItems:'center', gap:5, fontSize:12, cursor:'pointer'}}>
+            <input type="radio" checked={bulkMode === 'background'} onChange={() => setBulkMode('background')} disabled={bulkRunning || backgroundStarting} />
+            バックグラウンドで取得(あとで確認・閉じてOK)
+          </label>
+        </div>
+        <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+          <button
+            className="btn"
+            onClick={bulkMode === 'background' ? runBackgroundFetch : runBulkFetch}
+            disabled={bulkRunning || backgroundStarting || pendingItems.length===0 || (standalone && missingLoading)}
+          >
+            {bulkMode === 'background'
+              ? (backgroundStarting ? '開始中…' : standalone
+                  ? `DB全体の未取得アイテムをバックグラウンドで取得 (${pendingItems.length}件${missingCount > pendingItems.length ? `/全${missingCount}件` : ''})`
+                  : `このページをバックグラウンドで取得 (${pendingItems.length}件)`)
+              : bulkRunning
+                ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
+                : standalone
+                  ? `DB全体の未取得アイテムを一括取得 (${pendingItems.length}件${missingCount > pendingItems.length ? `/全${missingCount}件` : ''})`
+                  : `このページを一括取得 (${pendingItems.length}件)`}
           </button>
-        )}
-        {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
+          {standalone && missingHasMore && (
+            <button className="btn" onClick={loadMoreMissing} disabled={missingLoadingMore || bulkRunning}>
+              {missingLoadingMore ? '読み込み中…' : 'もっと読み込む'}
+            </button>
+          )}
+          {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
+        </div>
         {!bulkRunning && !bulkSummary && standalone && !missingLoading && pendingItems.length===0 && (
           <span style={{fontSize:12, color:'#6b7280'}}>未取得のアイテムはありません 🎉</span>
         )}

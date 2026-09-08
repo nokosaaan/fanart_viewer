@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { fetchPreviewCandidates } from '../lib/fetchCandidates'
+import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from '../lib/fetchCandidates'
 import { notify } from '../lib/crossWindowSync'
 
 function getCookie(name) {
@@ -67,6 +67,10 @@ export default function BookmarkFetchManager({ onClose, onEnqueueFetch }) {
       // queue mode / FetchQueueManager's page bulk-fetch button.
       let queued = 0, savedDirect = 0, failed = 0
       for (let i = 0; i < newItems.length; i++) {
+        // Space out requests — see BULK_FETCH_DELAY_MS's own comment:
+        // firing these back-to-back with no gap has been observed to trip
+        // Twitter's rate limit and fail every item in the batch.
+        if (i > 0) await sleep(BULK_FETCH_DELAY_MS)
         setProgress({ done: i, total: newItems.length })
         const it = newItems[i]
         try {

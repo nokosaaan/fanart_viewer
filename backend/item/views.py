@@ -31,6 +31,7 @@ import os
 from .headless_fetch import fetch_rendered_media
 from django.views.decorators.csrf import csrf_exempt
 import threading
+import time
 from types import SimpleNamespace
 try:
     from .playwright_helper import fetch_images_with_playwright
@@ -184,6 +185,50 @@ def _run_bookmark_fetch_job(item_id, target_url, data=None):
         view.fetch_and_save_preview(request, pk=item_id)
     except Exception:
         logging.exception('Background bookmark fetch failed for item %s url=%s', item_id, target_url)
+
+
+_BULK_FETCH_DELAY_SECONDS = 2.0  # mirrors frontend's BULK_FETCH_DELAY_MS (fetchCandidates.js)
+
+
+def _run_bulk_fetch_job(item_ids):
+    """Server-side counterpart to FetchQueueManager.jsx's page bulk-fetch
+    button, for a caller who'd rather fire this off and check back later
+    than keep a foreground loop (and the tab/panel it lives in) open the
+    whole time — closing the tab mid-loop stops that one dead, since it's
+    plain browser JS with no persistence. Same SimpleNamespace-request
+    trick as _run_bookmark_fetch_job just above (reuses fetch_and_save_
+    preview directly, outside any real HTTP request/response cycle), and
+    the exact same per-item delay the frontend loops already use — see
+    _BULK_FETCH_DELAY_SECONDS — since this hits the identical rate-
+    limited per-tweet TweetDetail path.
+
+    Deliberately NOT preview_only: there's no human present once this is
+    fired and forgotten to pick a candidate out of several, so this saves
+    whatever fetch_and_save_preview finds directly — same as bookmark_
+    fetch's own existing background job just above. No progress is
+    persisted anywhere (matching fetch_account_retweets_view's "auto" mode
+    — "完了しても通知は出ないので、しばらくしてから一覧を再読み込みしてくだ
+    さい"); the caller just re-checks the item list after a while and sees
+    which of these now have a preview.
+    """
+    created, failed = 0, 0
+    for i, item_id in enumerate(item_ids):
+        if i > 0:
+            time.sleep(_BULK_FETCH_DELAY_SECONDS)
+        try:
+            request = SimpleNamespace(data={}, query_params={})
+            view = ItemViewSet()
+            view.kwargs = {'pk': str(item_id)}
+            resp = view.fetch_and_save_preview(request, pk=item_id)
+            if getattr(resp, 'status_code', 500) < 300:
+                created += 1
+            else:
+                failed += 1
+        except Exception:
+            logging.exception('Background bulk fetch failed for item %s', item_id)
+            failed += 1
+
+    logging.info('Bulk fetch job finished: created=%d failed=%d (of %d requested)', created, failed, len(item_ids))
 
 
 def _run_account_retweets_job(screen_name, max_items):
@@ -2285,6 +2330,38 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'already_archived': already_archived,
             'max_pages': max_pages,
         })
+
+    @action(detail=False, methods=['post'], url_path='fetch_previews_for_items')
+    def fetch_previews_for_items_view(self, request):
+        """Background bulk preview fetch for a caller-supplied list of item
+        ids (see _run_bulk_fetch_job) — the "バックグラウンドで取得(あとで
+        確認)" mode of FetchQueueManager.jsx's page bulk-fetch button, for
+        someone who'd rather fire this off and close the panel/tab than
+        keep a foreground per-item review loop running the whole time.
+        Unlike that foreground loop (which returns several candidates per
+        item for a human to pick from), this auto-saves whatever's found —
+        there's nobody left to review anything once the response comes
+        back and the job keeps running unattended. No progress is exposed
+        anywhere; the caller just re-checks the item list after a while
+        (same "no completion notification" trade-off as fetch_account_
+        retweets_view/fetch_account_bookmarks_view's own "auto" mode).
+        """
+        data = request.data if isinstance(request.data, dict) else {}
+        item_ids = data.get('item_ids')
+        if not isinstance(item_ids, list) or not item_ids:
+            return Response({'detail': 'item_ids must be a non-empty list'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            item_ids = [int(x) for x in item_ids]
+        except (TypeError, ValueError):
+            return Response({'detail': 'item_ids must be a list of integers'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            threading.Thread(target=_run_bulk_fetch_job, args=(item_ids,), daemon=True).start()
+        except Exception:
+            logging.exception('Failed to start background bulk fetch job')
+            return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'processing', 'count': len(item_ids)}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):
