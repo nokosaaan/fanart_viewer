@@ -17,7 +17,6 @@ import BookmarkFetchManager from './components/BookmarkFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
-import { postSync, onSync } from './lib/crossWindowSync'
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
@@ -57,6 +56,7 @@ function AppMain({ role, onLogout }){
   // would otherwise require re-fetching. Reviewed/processed from the header
   // "取得キュー" button (FetchQueueManager). In-memory only — cleared on reload.
   const [fetchQueue, setFetchQueue] = useState([])
+  const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
   const [manualAddOpen, setManualAddOpen] = useState(false)
   // The item ManualAddItem just created — opened straight into the normal
   // edit form (titles/characters/tags/situation are empty at creation
@@ -86,17 +86,10 @@ function AppMain({ role, onLogout }){
     setFetchQueue(prev => prev.filter(e => e.id !== entryId))
   }
   // fetchQueue only ever lives here (App.jsx) — it's ephemeral/in-memory,
-  // there's no server copy to independently re-fetch. A popped-out
-  // standalone FetchQueueManager window (see HeaderMenu below) has no props
-  // access to this state at all, so it mirrors it over BroadcastChannel:
-  // broadcast on every change, and honor "give me the current state" /
-  // "remove this entry" requests from that window.
-  useEffect(()=>{ postSync('fetchQueue:sync', fetchQueue) }, [fetchQueue])
-  useEffect(()=>{
-    const unsubRequest = onSync('fetchQueue:request', () => postSync('fetchQueue:sync', fetchQueue))
-    const unsubRemove = onSync('fetchQueue:remove', (entryId) => removeFromFetchQueue(entryId))
-    return () => { unsubRequest(); unsubRemove() }
-  }, [fetchQueue])
+  // there's no server copy to independently re-fetch. FetchQueueManager is
+  // always rendered as an overlay in this same window now (no more
+  // popped-out standalone window — see fetchQueueOpen above), so it reads
+  // this state directly via props; no cross-window mirroring needed.
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
@@ -460,7 +453,7 @@ function AppMain({ role, onLogout }){
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
               { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true) },
               { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
-              { label: '取得キュー', onClick: () => openStandaloneWindow('fetchQueue'), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
+              { label: '取得キュー', onClick: () => setFetchQueueOpen(true), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
               { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
               { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
@@ -535,6 +528,15 @@ function AppMain({ role, onLogout }){
           <PreviewPane open={previewOpen} onClose={closePreview} readOnly={readOnly} filteredItems={filtered} initialItemId={previewInitialItemId} />
         </React.Suspense>
       )}
+      {fetchQueueOpen && (
+        <FetchQueueManager
+          queue={fetchQueue}
+          onRemove={removeFromFetchQueue}
+          onClose={()=>setFetchQueueOpen(false)}
+          currentPageItems={paginatedItems}
+          onEnqueueFetch={enqueueFetchResult}
+        />
+      )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
       {charAliasGroupOpen && <CharacterAliasGroupManager onClose={()=>setCharAliasGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
@@ -601,9 +603,6 @@ export default function App() {
   const standalonePanel = new URLSearchParams(window.location.search).get('panel')
   if (standalonePanel === 'editQueue') {
     return <EditQueueManager standalone onClose={() => window.close()} />
-  }
-  if (standalonePanel === 'fetchQueue') {
-    return <FetchQueueManager standalone queue={[]} onRemove={() => {}} onClose={() => window.close()} />
   }
   if (standalonePanel === 'regionQueue') {
     return <RegionLabelQueueManager standalone onClose={() => window.close()} />
