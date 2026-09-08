@@ -17,6 +17,8 @@ import BookmarkFetchManager from './components/BookmarkFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
+import { notify } from './lib/crossWindowSync'
+import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
@@ -90,6 +92,77 @@ function AppMain({ role, onLogout }){
   // always rendered as an overlay in this same window now (no more
   // popped-out standalone window — see fetchQueueOpen above), so it reads
   // this state directly via props; no cross-window mirroring needed.
+
+  // Bulk-fetch run state lives HERE (App.jsx), not inside FetchQueueManager
+  // itself, specifically so closing that overlay (fetchQueueOpen -> false,
+  // unmounting the panel) does NOT stop a bulk fetch already in progress —
+  // App.jsx stays mounted for the whole session, so the loop just keeps
+  // going in the background and you can reopen the panel later to see
+  // where it landed (or watch it live via the header menu badge below).
+  const [bulkFetchRunning, setBulkFetchRunning] = useState(false)
+  const [bulkFetchProgress, setBulkFetchProgress] = useState(null) // {done, total}
+  const [bulkFetchSummary, setBulkFetchSummary] = useState(null)
+  const bulkFetchCancelledRef = useRef(false)
+  const bulkFetchAbortRef = useRef(null)
+
+  // Runs the exact same per-item fetch ScrollList's own "+" button does
+  // (fetchPreviewCandidates, then onEnqueueFetch/notify on success) for
+  // every item in `pendingItems`, one at a time — FetchQueueManager's
+  // bulk-fetch button just automates clicking "+" down the page's list
+  // instead of introducing any separate save/notify path of its own.
+  // `pendingItems` is a snapshot taken at click time (see FetchQueueManager),
+  // so subsequent pagination/filter changes while this runs don't retarget
+  // an already-started run.
+  async function runBulkFetch(pendingItems){
+    if(bulkFetchRunning || !pendingItems || pendingItems.length === 0) return
+    bulkFetchCancelledRef.current = false
+    bulkFetchAbortRef.current = new AbortController()
+    setBulkFetchRunning(true)
+    setBulkFetchSummary(null)
+    let queued = 0, savedDirect = 0, failed = 0
+    for(let i=0; i<pendingItems.length; i++){
+      if(bulkFetchCancelledRef.current) break
+      // Space out requests — see BULK_FETCH_DELAY_MS's own comment: firing
+      // these back-to-back with no gap has been observed to trip
+      // Twitter's rate limit and fail every item in the batch.
+      if(i > 0){
+        await sleep(BULK_FETCH_DELAY_MS)
+        if(bulkFetchCancelledRef.current) break
+      }
+      setBulkFetchProgress({ done: i, total: pendingItems.length })
+      const it = pendingItems[i]
+      try{
+        const res = await fetchPreviewCandidates(it.id, it.link, { signal: bulkFetchAbortRef.current.signal })
+        if(bulkFetchCancelledRef.current) break  // cancelled while this request was in flight — discard its result
+        const body = res.body || {}
+        if(res.ok && body.status === 'saved'){
+          savedDirect++
+          notify('item-preview-updated', { id: it.id })
+        } else if(res.ok && body.preview_only && Array.isArray(body.images) && body.images.length > 0){
+          enqueueFetchResult({ itemId: it.id, images: body.images })
+          queued++
+        } else {
+          failed++
+        }
+      }catch(e){
+        if(bulkFetchCancelledRef.current || (e && e.name === 'AbortError')) break
+        console.error('Bulk fetch failed for item', it.id, e)
+        failed++
+      }
+    }
+    setBulkFetchProgress({ done: pendingItems.length, total: pendingItems.length })
+    setBulkFetchRunning(false)
+    setBulkFetchSummary(
+      bulkFetchCancelledRef.current
+        ? `キャンセルしました: キューに${queued}件追加 / 直接保存${savedDirect}件 / 失敗${failed}件`
+        : `完了: キューに${queued}件追加 / 直接保存${savedDirect}件 / 失敗${failed}件`
+    )
+  }
+
+  function cancelBulkFetch(){
+    bulkFetchCancelledRef.current = true
+    if(bulkFetchAbortRef.current) bulkFetchAbortRef.current.abort()
+  }
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
@@ -453,7 +526,13 @@ function AppMain({ role, onLogout }){
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
               { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true) },
               { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
-              { label: '取得キュー', onClick: () => setFetchQueueOpen(true), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
+              {
+                label: bulkFetchRunning
+                  ? `取得キュー (取得中 ${bulkFetchProgress ? bulkFetchProgress.done : 0}/${bulkFetchProgress ? bulkFetchProgress.total : '?'})`
+                  : '取得キュー',
+                onClick: () => setFetchQueueOpen(true),
+                badge: fetchQueue.length > 0 ? fetchQueue.length : null,
+              },
               { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
               { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
@@ -535,6 +614,11 @@ function AppMain({ role, onLogout }){
           onClose={()=>setFetchQueueOpen(false)}
           currentPageItems={paginatedItems}
           onEnqueueFetch={enqueueFetchResult}
+          bulkRunning={bulkFetchRunning}
+          bulkProgress={bulkFetchProgress}
+          bulkSummary={bulkFetchSummary}
+          onRunBulkFetch={runBulkFetch}
+          onCancelBulkFetch={cancelBulkFetch}
         />
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}

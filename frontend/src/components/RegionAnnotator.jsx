@@ -42,6 +42,14 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [activeBoxId, setActiveBoxId] = useState(null)  // box whose character-picker popover is open
+  // Shift/Ctrl/Cmd-click adds boxes here instead of opening the single-box
+  // popover — lets one character name be applied to several regions at
+  // once (e.g. the same repeated background character appearing in
+  // multiple boxes), instead of opening each box's popover and picking the
+  // same name over and over. Mutually exclusive with activeBoxId — only
+  // one of the two picker UIs is ever shown at a time (see
+  // toggleBoxSelection).
+  const [selectedBoxIds, setSelectedBoxIds] = useState(new Set())
   const [charQuery, setCharQuery] = useState('')
   // Suggestion pool for the character-picker popover: this item's own
   // characters PLUS every character registered in any CharacterGroup (the
@@ -66,6 +74,18 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
   const containerRef = useRef(null)
   const drawStartRef = useRef(null)  // {x, y} in natural coords, while dragging
   const [drawRect, setDrawRect] = useState(null)  // live preview rect while dragging, natural coords
+
+  // Close the single-box popover on any click outside it, instead of only
+  // via its own "閉じる" button. Both the box itself and the popover's own
+  // wrapper div already call ev.stopPropagation() on click (see below), so
+  // this only ever fires for a click that's genuinely outside both — no
+  // extra "is this click on the owning box" check needed here.
+  useEffect(() => {
+    if (!activeBoxId) return
+    function handleOutsideMouseDown() { setActiveBoxId(null) }
+    document.addEventListener('mousedown', handleOutsideMouseDown)
+    return () => document.removeEventListener('mousedown', handleOutsideMouseDown)
+  }, [activeBoxId])
 
   useEffect(() => {
     fetch(`/api/items/${item.id}/previews/`)
@@ -185,9 +205,51 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
     if (onDirtyChange) onDirtyChange(true)
   }
 
+  // Plain click: single-select this box (clearing any multi-selection) and
+  // open its own popover, same as before. Shift/Ctrl/Cmd-click: toggle
+  // this box in/out of the multi-selection instead, closing the single-box
+  // popover — the two pickers are mutually exclusive.
+  function toggleBoxSelection(boxId, ev) {
+    if (ev.shiftKey || ev.ctrlKey || ev.metaKey) {
+      setActiveBoxId(null)
+      setSelectedBoxIds(prev => {
+        const next = new Set(prev)
+        if (next.has(boxId)) next.delete(boxId)
+        else next.add(boxId)
+        return next
+      })
+    } else {
+      setSelectedBoxIds(new Set())
+      setActiveBoxId(boxId)
+    }
+    setCharQuery('')
+  }
+
+  // Adds `name` to every currently multi-selected box — always ADDS (never
+  // toggles/removes), unlike toggleCharacter's single-box behavior: the
+  // whole point here is "label all of these the same", so a box that
+  // already has this name is just left alone rather than having it
+  // stripped back off.
+  function addCharacterToSelectedBoxes(name) {
+    const trimmed = name.trim()
+    if (!trimmed || selectedBoxIds.size === 0) return
+    setBoxes(prev => prev.map(b => {
+      if (!selectedBoxIds.has(b.id) || b.characters.includes(trimmed)) return b
+      return { ...b, characters: [...b.characters, trimmed] }
+    }))
+    setCharQuery('')
+    if (onDirtyChange) onDirtyChange(true)
+  }
+
   function removeBox(boxId) {
     setBoxes(prev => prev.filter(b => b.id !== boxId))
     if (activeBoxId === boxId) setActiveBoxId(null)
+    setSelectedBoxIds(prev => {
+      if (!prev.has(boxId)) return prev
+      const next = new Set(prev)
+      next.delete(boxId)
+      return next
+    })
     if (onDirtyChange) onDirtyChange(true)
   }
 
@@ -230,7 +292,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
         <div style={{ marginBottom: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {images.map(img => (
             <button key={img.index} className="btn" style={{ fontSize: 12 }}
-              onClick={() => setCurrentImageIndex(img.index)}
+              onClick={() => { setCurrentImageIndex(img.index); setSelectedBoxIds(new Set()) }}
               disabled={currentImageIndex === img.index}
             >
               {img.index + 1}枚目{currentImageIndex === img.index ? ' (表示中)' : ''}
@@ -246,8 +308,45 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
         </button>
         <span style={{ fontSize: 12, color: '#94a3b8' }}>
           画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください(1つの矩形に複数のキャラを割り当てることもできます)。
+          Shift(またはCtrl/Cmd)+クリックで複数の矩形を選択すると、同じキャラ名をまとめて割り当てられます。
         </span>
       </div>
+
+      {selectedBoxIds.size > 0 && (
+        <div style={{ marginBottom: 10, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>
+              {selectedBoxIds.size}件の矩形を選択中 — 選んだキャラ名を全てに割り当てます
+            </span>
+            <button onClick={() => setSelectedBoxIds(new Set())}
+              style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
+            >選択解除</button>
+          </div>
+          <input
+            autoFocus
+            placeholder="キャラ名で検索/新規入力"
+            value={charQuery}
+            onChange={e => setCharQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) addCharacterToSelectedBoxes(charQuery) }}
+            style={{
+              width: '100%', boxSizing: 'border-box', background: '#0f172a', color: '#f1f5f9',
+              border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
+            }}
+          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
+            {charSuggestions.slice(0, 20).map(c => (
+              <button key={c} onClick={() => addCharacterToSelectedBoxes(c)}
+                style={{ fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', background: '#334155', color: '#f1f5f9', cursor: 'pointer' }}
+              >{c}</button>
+            ))}
+            {charQuery.trim() && !charSuggestions.some(c => c.toLowerCase() === charQuery.trim().toLowerCase()) && (
+              <button onClick={() => addCharacterToSelectedBoxes(charQuery)}
+                style={{ fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', background: '#1e3a8a', color: '#93c5fd', cursor: 'pointer' }}
+              >＋「{charQuery.trim()}」を新規追加</button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         ref={containerRef}
@@ -269,13 +368,16 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
           const s = scale()
           const [x1, y1, x2, y2] = b.box
           const isLabeled = b.characters.length > 0
+          const isSelected = selectedBoxIds.has(b.id)
           return (
             <div key={b.id}
-              onClick={ev => { ev.stopPropagation(); setActiveBoxId(b.id); setCharQuery('') }}
+              onClick={ev => { ev.stopPropagation(); toggleBoxSelection(b.id, ev) }}
               style={{
                 position: 'absolute', left: x1 * s, top: y1 * s, width: (x2 - x1) * s, height: (y2 - y1) * s,
                 border: `2px solid ${isLabeled ? '#22c55e' : '#f59e0b'}`,
-                background: isLabeled ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)',
+                outline: isSelected ? '3px solid #3b82f6' : 'none',
+                outlineOffset: 2,
+                background: isSelected ? 'rgba(59,130,246,0.18)' : (isLabeled ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)'),
                 cursor: 'pointer', boxSizing: 'border-box',
               }}
             >

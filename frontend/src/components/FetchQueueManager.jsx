@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState } from 'react'
 import { saveImagesChunked } from '../lib/saveImages'
-import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from '../lib/fetchCandidates'
 import { notify } from '../lib/crossWindowSync'
 
 function timeAgo(ts){
@@ -26,24 +25,17 @@ function timeAgo(ts){
 // currentPageItems — but that meant the bulk button's target set silently
 // stopped matching what was visible on screen, which was confusing and
 // pointless enough to just remove entirely rather than work around.)
-export default function FetchQueueManager({ queue, onRemove, onClose, currentPageItems, onEnqueueFetch }){
+//
+// The actual bulk-fetch loop (bulkRunning/bulkProgress/bulkSummary,
+// onRunBulkFetch/onCancelBulkFetch) is owned by App.jsx, not this
+// component — so closing this panel (onClose) does NOT stop a bulk fetch
+// already in progress; App.jsx stays mounted for the whole session and
+// keeps the loop going, visible via its own header-menu badge even while
+// this panel is closed. See App.jsx's runBulkFetch for the full reasoning.
+export default function FetchQueueManager({ queue, onRemove, onClose, currentPageItems, onEnqueueFetch, bulkRunning, bulkProgress, bulkSummary, onRunBulkFetch, onCancelBulkFetch }){
   const [openId, setOpenId] = useState(queue.length > 0 ? queue[0].id : null)
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [saving, setSaving] = useState(false)
-  const [bulkRunning, setBulkRunning] = useState(false)
-  const [bulkProgress, setBulkProgress] = useState(null) // {done, total}
-  const [bulkSummary, setBulkSummary] = useState(null)
-
-  // Kill switch for runBulkFetch — see EditQueueManager.jsx's identical
-  // cancelledRef/abortRef pair for the full reasoning: closing this panel
-  // must stop a mid-flight bulk fetch from continuing to hit
-  // fetch_and_save_preview in the background.
-  const cancelledRef = useRef(false)
-  const abortRef = useRef(null)
-  useEffect(() => {
-    abortRef.current = new AbortController()
-    return () => { cancelledRef.current = true; abortRef.current.abort() }
-  }, [])
 
   const openEntry = queue.find(q => q.id === openId) || null
 
@@ -53,51 +45,6 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
   function openEntryFor(entry){
     setOpenId(entry.id)
     setSelectedUrls(new Set())
-  }
-
-  // Runs the exact same per-item fetch ScrollList's own "+" button does
-  // (fetchPreviewCandidates, then onEnqueueFetch/notify on success) for
-  // every not-yet-fetched item on this page, one at a time — this panel
-  // just automates clicking "+" down the list instead of introducing any
-  // separate save/notify path of its own.
-  async function runBulkFetch(){
-    if(bulkRunning || pendingItems.length === 0) return
-    setBulkRunning(true)
-    setBulkSummary(null)
-    let queued = 0, savedDirect = 0, failed = 0
-    for(let i=0; i<pendingItems.length; i++){
-      if(cancelledRef.current) return  // panel closed mid-run — stop immediately, no further state touches
-      // Space out requests — see BULK_FETCH_DELAY_MS's own comment: firing
-      // these back-to-back with no gap has been observed to trip
-      // Twitter's rate limit and fail every item in the batch.
-      if(i > 0){
-        await sleep(BULK_FETCH_DELAY_MS)
-        if(cancelledRef.current) return  // panel closed during the wait
-      }
-      setBulkProgress({ done: i, total: pendingItems.length })
-      const it = pendingItems[i]
-      try{
-        const res = await fetchPreviewCandidates(it.id, it.link, { signal: abortRef.current.signal })
-        if(cancelledRef.current) return  // closed while this request was in flight — discard its result
-        const body = res.body || {}
-        if(res.ok && body.status === 'saved'){
-          savedDirect++
-          notify('item-preview-updated', { id: it.id })
-        } else if(res.ok && body.preview_only && Array.isArray(body.images) && body.images.length > 0){
-          onEnqueueFetch({ itemId: it.id, images: body.images })
-          queued++
-        } else {
-          failed++
-        }
-      }catch(e){
-        if(cancelledRef.current || (e && e.name === 'AbortError')) return
-        console.error('Bulk fetch failed for item', it.id, e)
-        failed++
-      }
-    }
-    setBulkProgress({ done: pendingItems.length, total: pendingItems.length })
-    setBulkRunning(false)
-    setBulkSummary(`完了: キューに${queued}件追加 / 直接保存${savedDirect}件 / 失敗${failed}件`)
   }
 
   async function save(entry, images){
@@ -132,12 +79,18 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
         </div>
 
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-          <button className="btn" onClick={runBulkFetch} disabled={bulkRunning || pendingItems.length===0}>
+          <button className="btn" onClick={()=>onRunBulkFetch(pendingItems)} disabled={bulkRunning || pendingItems.length===0}>
             {bulkRunning
               ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
               : `このページを一括取得 (${pendingItems.length}件)`}
           </button>
+          {bulkRunning && (
+            <button className="btn" onClick={onCancelBulkFetch}>キャンセル</button>
+          )}
           {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
+          {bulkRunning && (
+            <span style={{fontSize:12, color:'#6b7280'}}>パネルを閉じても処理は続きます</span>
+          )}
           {!bulkRunning && !bulkSummary && pendingItems.length===0 && (currentPageItems || []).length>0 && (
             <span style={{fontSize:12, color:'#6b7280'}}>このページは全て取得済みです</span>
           )}
