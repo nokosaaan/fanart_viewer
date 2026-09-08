@@ -1,5 +1,5 @@
 from rest_framework.routers import DefaultRouter
-from .views import ItemViewSet, CharacterGroupViewSet, CharacterDanbooruLinkViewSet
+from .views import ItemViewSet, CharacterGroupViewSet, CharacterDanbooruLinkViewSet, CharacterAliasGroupViewSet
 from .views import items_from_db
 from .backup_views import backup_create_view, backup_list_view, backup_restore_view
 from .twitter_creds_views import twitter_creds_status_view, twitter_creds_set_view
@@ -10,6 +10,7 @@ router = DefaultRouter()
 router.register(r'items', ItemViewSet, basename='item')
 router.register(r'character-groups', CharacterGroupViewSet, basename='character-group')
 router.register(r'character-links', CharacterDanbooruLinkViewSet, basename='character-link')
+router.register(r'character-alias-groups', CharacterAliasGroupViewSet, basename='character-alias-group')
 
 urlpatterns = [
     path('', include(router.urls)),

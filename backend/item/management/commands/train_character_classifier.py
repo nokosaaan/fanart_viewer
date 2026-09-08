@@ -120,7 +120,7 @@ from collections import defaultdict
 import numpy as np
 from django.core.management.base import BaseCommand
 
-from item.models import Item
+from item.models import Item, CharacterAliasGroup
 from item import tagger
 
 
@@ -615,12 +615,25 @@ class Command(BaseCommand):
         _bootstrap_label's output, which this is designed to sit alongside:
         see handle()'s `manual_rows + pseudo_rows` combination).
 
-        A region can carry more than one character name (person-detection
-        sometimes merges two overlapping people — e.g. a hug pose — into a
-        single box) — only regions with EXACTLY one name are used here; a
-        crop labeled with 2+ names has an inherently ambiguous identity for
-        single-label classification, so it's counted and skipped rather
-        than taught as any one of them (or, worse, as all of them).
+        A region can carry more than one character name for two very
+        different reasons: person-detection sometimes merges two
+        overlapping people (e.g. a hug pose) into a single box (genuinely
+        ambiguous — a crop labeled with 2+ names in that case has no
+        single-label identity to teach), OR the same person legitimately
+        has 2+ valid names (e.g. a magical girl's real name + transformed
+        name) and both were put on the one box that's actually just her.
+        CharacterAliasGroup (see its own docstring, and
+        CharacterAliasGroupViewSet.candidates / CharacterAliasGroupManager.
+        jsx for how a human confirms which case is which) distinguishes
+        these: a region whose exact name-set matches a `linked=True` group
+        is the second case, so it's trained on using that group's
+        alphabetically-first name as the canonical label — an arbitrary
+        but consistent choice, since views._expand_character_alias re-
+        expands whichever alias the classifier predicts back into the full
+        group at inference time anyway. Everything else (2+ names with no
+        matching linked group) is still the first case: counted and
+        skipped rather than taught as any one name (or, worse, as all of
+        them).
 
         Regions span potentially several of an item's images (see
         Item.character_regions' own docstring) — grouped by image_index per
@@ -630,10 +643,16 @@ class Command(BaseCommand):
         """
         from item.views import _select_image_bytes
 
+        linked_groups = {
+            tuple(sorted(set(g.characters))): sorted(set(g.characters))
+            for g in CharacterAliasGroup.objects.filter(linked=True)
+        }
+
         items = Item.objects.exclude(character_regions=[]).only('id', 'character_regions')
         rows = []
         skipped_mismatch = 0
         skipped_multi_label = 0
+        linked_alias_rows = 0
         for item in items.iterator():
             regions = item.character_regions or []
             if not regions:
@@ -653,9 +672,16 @@ class Command(BaseCommand):
                     names = region.get('characters') or []
                     if not box or not names:
                         continue
-                    if len(names) != 1:
-                        skipped_multi_label += 1
-                        continue
+                    label = None
+                    if len(names) == 1:
+                        label = names[0]
+                    else:
+                        group = linked_groups.get(tuple(sorted(set(names))))
+                        if group is not None:
+                            label = group[0]  # canonical name — see this method's own docstring
+                        else:
+                            skipped_multi_label += 1
+                            continue
                     try:
                         crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
                         feature, feat_names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
@@ -665,8 +691,12 @@ class Command(BaseCommand):
                     if feat_names != expected_general_tag_names:
                         skipped_mismatch += 1
                         continue
-                    rows.append((names[0], feature))
+                    if len(names) > 1:
+                        linked_alias_rows += 1
+                    rows.append((label, feature))
 
+        if linked_alias_rows:
+            self.stdout.write(f'{linked_alias_rows} region(s) trained via a confirmed CharacterAliasGroup (2+ names, same identity).')
         if skipped_mismatch:
             self.stdout.write(self.style.WARNING(
                 f'{skipped_mismatch} manually-labeled region(s) skipped (feature ordering mismatch).'

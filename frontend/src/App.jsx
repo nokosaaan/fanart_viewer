@@ -4,6 +4,7 @@ import ScrollList from './components/ScrollList'
 import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
+import CharacterAliasGroupManager from './components/CharacterAliasGroupManager'
 import CharacterDanbooruLinkManager from './components/CharacterDanbooruLinkManager'
 import BackupManager from './components/BackupManager'
 import FetchQueueManager from './components/FetchQueueManager'
@@ -46,6 +47,7 @@ function AppMain({ role, onLogout }){
     setPreviewInitialItemId(null)
   }
   const [charGroupOpen, setCharGroupOpen] = useState(false)
+  const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   // Mailbox-style queue: fetching an item's image candidates (ScrollList)
@@ -454,6 +456,7 @@ function AppMain({ role, onLogout }){
             ...(readOnly ? [] : [
               { divider: true },
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
+              { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true) },
               { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
               { label: '取得キュー', onClick: () => openStandaloneWindow('fetchQueue'), badge: fetchQueue.length > 0 ? fetchQueue.length : null },
               { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
@@ -530,6 +533,7 @@ function AppMain({ role, onLogout }){
         </React.Suspense>
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
+      {charAliasGroupOpen && <CharacterAliasGroupManager onClose={()=>setCharAliasGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
       {manualAddOpen && <ManualAddItem onClose={()=>setManualAddOpen(false)} onCreated={handleItemCreated} />}

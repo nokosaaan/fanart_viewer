@@ -251,3 +251,41 @@ class CharacterGroup(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class CharacterAliasGroup(models.Model):
+    """A set of character names a human confirmed all refer to the SAME
+    identity — e.g. a magical girl's real name and her transformed name.
+    NOT the same thing as CharacterGroup (that's a franchise/genre
+    classification bucket of otherwise-distinct characters; see its own
+    docstring for the exact "not a per-character alias list" distinction).
+
+    `characters` is always stored sorted (see CharacterAliasGroupSerializer)
+    so exact-set matching (both here and in
+    train_character_classifier._get_manual_labeled_rows /
+    views._expand_character_alias) can compare simple sorted-list equality.
+
+    Rows are discovered, not typed in from scratch: a person labeling
+    Item.character_regions sometimes puts 2+ names on one box because both
+    names are valid for that one person, not because two different people
+    got merged into a single detected box (see character_regions_view's own
+    docstring on that ambiguity). ItemViewSet -> CharacterAliasGroupViewSet.
+    candidates mines every such multi-name box across all items into
+    candidate sets, and a human decides per candidate via
+    CharacterAliasGroupManager.jsx whether to confirm it (`linked=True` —
+    now usable for training + inference alias expansion) or reject it
+    (`linked=False` — a tombstone so the same candidate set doesn't keep
+    resurfacing as a candidate; still excluded from `candidates` output but
+    never used by training/inference).
+    """
+    characters = models.JSONField(default=list)
+    linked = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['characters'], name='unique_character_alias_group_characters'),
+        ]
+
+    def __str__(self):
+        return ' = '.join(self.characters)

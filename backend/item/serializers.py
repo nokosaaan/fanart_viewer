@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Item, CharacterGroup
+from .models import Item, CharacterGroup, CharacterAliasGroup
 
 
 class ItemSerializer(serializers.ModelSerializer):
@@ -54,3 +54,19 @@ class CharacterGroupSerializer(serializers.ModelSerializer):
             seen.add(node.pk)
             node = node.parent
         return value
+
+
+class CharacterAliasGroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CharacterAliasGroup
+        fields = ('id', 'characters', 'linked', 'created_at')
+
+    def validate_characters(self, value):
+        # Always stored sorted+deduped so exact-set matching elsewhere
+        # (candidates' `reviewed` set, train_character_classifier's linked-
+        # group lookup, views._expand_character_alias) is simple list
+        # equality rather than needing to re-normalize on every read.
+        names = sorted(set(value or []))
+        if len(names) < 2:
+            raise serializers.ValidationError('characters must have at least 2 distinct names.')
+        return names

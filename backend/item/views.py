@@ -15,11 +15,11 @@ from collections import Counter, defaultdict
 import re
 from urllib.parse import urljoin, urlparse
 
-from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink
+from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
 from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
-from .serializers import ItemSerializer, CharacterGroupSerializer
+from .serializers import ItemSerializer, CharacterGroupSerializer, CharacterAliasGroupSerializer
 from security.ssrf_guard import validate_url, SSRFError
 import logging
 import traceback
@@ -767,6 +767,23 @@ def _select_image_bytes(item, image_index=None):
     return None, None
 
 
+def _expand_character_alias(char_name):
+    """If `char_name` is a member of a confirmed CharacterAliasGroup (a
+    human decided these names are the SAME identity — e.g. a magical
+    girl's real name + transformed name — see that model's own docstring),
+    return ALL of that group's names so a single tagger.predict_character
+    call surfaces the complete set instead of just whichever name happened
+    to be the training label (train_character_classifier._get_manual_
+    labeled_rows picks one canonical name per linked group to train on).
+    Otherwise returns [char_name] unchanged — the common case, and the
+    only outcome for anyone who hasn't set up any alias groups at all.
+    """
+    group = CharacterAliasGroup.objects.filter(linked=True, characters__contains=[char_name]).first()
+    if group:
+        return list(group.characters)
+    return [char_name]
+
+
 def _suggest_for_item(item, external=False, tagger_backend='onnx',
                        general_threshold=0.35, character_threshold=0.85,
                        tag_limit_for_matching=None, use_classifier=False,
@@ -961,7 +978,10 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                             tagger_result['general_probs'], tagger_backend,
                         )
                         if char_name:
-                            characters = [{'name': char_name, 'score': confidence, 'matched': True, 'source': 'classifier'}]
+                            characters = [
+                                {'name': n, 'score': confidence, 'matched': True, 'source': 'classifier'}
+                                for n in _expand_character_alias(char_name)
+                            ]
                             source = 'tagger' if source == 'none' else 'db+tagger'
                 if want_tags:
                     tags = tagger_result['tags']
@@ -1162,7 +1182,8 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
                     tagger_result['general_probs'], tagger_backend,
                 )
                 if char_name:
-                    char_c.append({'value': char_name, 'source': 'classifier', 'confidence': confidence})
+                    for n in _expand_character_alias(char_name):
+                        char_c.append({'value': n, 'source': 'classifier', 'confidence': confidence})
 
         if want_titles or want_characters or want_situation:
             tags_for_matching = tagger_result['tags_full']
@@ -2828,6 +2849,60 @@ class CharacterGroupViewSet(viewsets.ModelViewSet):
                 return Response({'detail': 'target group not found'}, status=status.HTTP_404_NOT_FOUND)
 
         return Response({'status': 'ok'})
+
+
+class CharacterAliasGroupViewSet(viewsets.ModelViewSet):
+    """Same "small reference dataset, no pagination" pattern as
+    CharacterGroupViewSet just above (see that class's own comment) — a
+    row here is a human-confirmed (or human-rejected) CharacterAliasGroup;
+    see that model's own docstring for what it means and how it differs
+    from CharacterGroup. Normal create/update/destroy handle both deciding
+    a candidate (POST {characters, linked}) and undoing a past decision
+    (DELETE); the `candidates` action below is the only custom piece.
+    """
+    pagination_class = None
+    queryset = CharacterAliasGroup.objects.all().order_by('-created_at')
+    serializer_class = CharacterAliasGroupSerializer
+
+    @action(detail=False, methods=['get'])
+    def candidates(self, request):
+        """Distinct character-name sets (2+ names) that a human put on the
+        SAME Item.character_regions box somewhere in the DB, excluding any
+        set already reviewed (linked or rejected) via this same ViewSet —
+        the pending "are these the same person?" queue for
+        CharacterAliasGroupManager.jsx. Mined from actual labeling data
+        rather than guessed from name similarity, since the only real
+        signal for "these names are the same identity" this app has is a
+        human having already put both on one box.
+
+        Small-scale full scan (same reasoning as region_mismatch_queue's
+        own docstring: the JSON-list "is this exactly that other list"
+        comparison isn't expressible as a single portable DB query, and the
+        candidate set — items with any character_regions at all — is
+        already small at this app's scale). No before_id paging: unlike
+        the item queues, distinct name-SETS are the rows here, and there
+        are far fewer of those than items.
+        """
+        reviewed = {tuple(sorted(set(g.characters))) for g in CharacterAliasGroup.objects.all()}
+        counts = defaultdict(int)
+        examples = defaultdict(list)
+        for item in Item.objects.exclude(character_regions=[]).only('id', 'character_regions').iterator():
+            for region in (item.character_regions or []):
+                names = region.get('characters') or []
+                key = tuple(sorted(set(names)))
+                if len(key) < 2:
+                    continue
+                counts[key] += 1
+                if len(examples[key]) < 5:
+                    examples[key].append(item.id)
+
+        results = [
+            {'characters': list(key), 'count': n, 'example_item_ids': examples[key]}
+            for key, n in counts.items()
+            if key not in reviewed
+        ]
+        results.sort(key=lambda r: -r['count'])
+        return Response({'results': results})
 
 
 class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
