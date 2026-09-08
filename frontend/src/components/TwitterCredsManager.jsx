@@ -25,6 +25,7 @@ export default function TwitterCredsManager({ onClose }) {
   const [loading, setLoading] = useState(true)
   const [authToken, setAuthToken] = useState('')
   const [ct0, setCt0] = useState('')
+  const [twid, setTwid] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -62,13 +63,20 @@ export default function TwitterCredsManager({ onClose }) {
     try {
       const r = await fetch('/api/twitter_creds/set/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ auth_token: authToken.trim(), ct0: ct0.trim() }),
+        // twidが空欄なら送らない — 空文字を送ると「消去」ではなく「変更なし」
+        // として扱われる(twitter_creds.set_credentialsの仕様)ので実害は無いが、
+        // 意図を明確にするため未入力時はキー自体を省く。
+        body: JSON.stringify({
+          auth_token: authToken.trim(), ct0: ct0.trim(),
+          ...(twid.trim() ? { twid: twid.trim() } : {}),
+        }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `保存に失敗しました (${r.status})`)
       setStatus(j)
       setAuthToken('')
       setCt0('')
+      setTwid('')
       setNotice('保存しました。次回のfetchから即座にこの認証情報が使われます(再起動不要)。')
     } catch (e) {
       setError(e.message)
@@ -90,9 +98,10 @@ export default function TwitterCredsManager({ onClose }) {
           {notice && <div style={{ color: '#4ade80', marginBottom: 12 }}>{notice}</div>}
 
           <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
-            センシティブ/非公開アカウントの取得やRT一括取得に使うx.comのセッションCookieです。
+            センシティブ/非公開アカウントの取得やRT・ブックマーク一括取得に使うx.comのセッションCookieです。
             ブラウザでx.comにログインした状態でDevTools → Application → Cookiesから
-            <code style={{ margin: '0 4px' }}>auth_token</code>と<code style={{ margin: '0 4px' }}>ct0</code>をコピーしてください。
+            <code style={{ margin: '0 4px' }}>auth_token</code>・<code style={{ margin: '0 4px' }}>ct0</code>・
+            <code style={{ margin: '0 4px' }}>twid</code>をコピーしてください(twidは「いいね」自動取得のアカウント特定にのみ使用、ブックマーク取得には不要です)。
             保存した値はサーバー側で暗号化して保存され、この画面を含めどこにも読み出し表示はされません(書き込み専用)。
           </div>
 
@@ -101,6 +110,8 @@ export default function TwitterCredsManager({ onClose }) {
               <>現在の設定: <strong>{status.configured ? '設定済み' : '未設定'}</strong>
                 {status.configured && <> ({SOURCE_LABELS[status.source] || status.source})</>}
                 {status.updated_at && <> — 最終更新 {formatDate(status.updated_at)}</>}
+                <br />twid: <strong>{status.has_twid ? '設定済み' : '未設定'}</strong>
+                {!status.has_twid && <span style={{ color: '#94a3b8' }}> (いいね自動取得に必要。ブックマーク取得には不要)</span>}
               </>
             ) : '—'}
           </div>
@@ -138,6 +149,19 @@ export default function TwitterCredsManager({ onClose }) {
                 borderRadius: 6, padding: '9px 12px', fontSize: 14, boxSizing: 'border-box' }}
               value={ct0} onChange={e => setCt0(e.target.value)}
               placeholder="新しい ct0"
+            />
+          </div>
+
+          <div style={{ marginBottom: 18 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
+              twid(任意 — 未入力なら既存の設定を変更しません)
+            </label>
+            <input
+              type="password" autoComplete="off"
+              style={{ width: '100%', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
+                borderRadius: 6, padding: '9px 12px', fontSize: 14, boxSizing: 'border-box' }}
+              value={twid} onChange={e => setTwid(e.target.value)}
+              placeholder="新しい twid (例: u=1234567890)"
             />
           </div>
 

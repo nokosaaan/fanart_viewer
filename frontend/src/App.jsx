@@ -13,6 +13,7 @@ import RegionLabelQueueManager from './components/RegionLabelQueueManager'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
 import RetweetFetchManager from './components/RetweetFetchManager'
+import BookmarkFetchManager from './components/BookmarkFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
@@ -68,6 +69,7 @@ function AppMain({ role, onLogout }){
     setPendingNewItem(item)
   }
   const [retweetFetchOpen, setRetweetFetchOpen] = useState(false)
+  const [bookmarkFetchOpen, setBookmarkFetchOpen] = useState(false)
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
   // cookies/localStorage — and thus auth — carry over automatically) instead
@@ -463,6 +465,7 @@ function AppMain({ role, onLogout }){
               { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
               { label: 'アカウントのRTを取得', onClick: () => setRetweetFetchOpen(true) },
+              { label: 'ブックマークを取得', onClick: () => setBookmarkFetchOpen(true) },
               { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),
@@ -548,6 +551,7 @@ function AppMain({ role, onLogout }){
         />
       )}
       {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
+      {bookmarkFetchOpen && <BookmarkFetchManager onClose={()=>setBookmarkFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
     </div>
   )
