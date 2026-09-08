@@ -12,6 +12,8 @@ from django.http import HttpResponse, JsonResponse
 from django.db.models import Q
 from django.utils import timezone
 from collections import Counter, defaultdict
+import hashlib
+import json
 import re
 from urllib.parse import urljoin, urlparse
 
@@ -765,6 +767,18 @@ def _select_image_bytes(item, image_index=None):
     if item.preview_data:
         return bytes(item.preview_data), None
     return None, None
+
+
+def _char_diff_signature(region_chars, item_chars):
+    """Content fingerprint of a (region-derived characters, item.characters)
+    pair — see Item.character_regions_ack_signature's own docstring for why
+    this is content-addressed rather than a plain boolean/timestamp: it
+    naturally stops matching (so region_mismatch_queue re-flags the item)
+    the instant either side actually changes again, with no invalidation
+    bookkeeping needed anywhere characters/character_regions get written.
+    """
+    payload = json.dumps([sorted(region_chars), sorted(item_chars)], ensure_ascii=False)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 
 def _expand_character_alias(char_name):
@@ -2343,63 +2357,50 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='region_label_queue')
     def region_label_queue(self, request):
-        """Items eligible for manual multi-character region labeling, and
-        not yet FULLY labeled — feeds RegionLabelQueueManager.jsx's "未ラベ
-        ル" mode, a bulk review UI in the same spirit as `incomplete` above
-        (see its own docstring for why `before_id` cursoring is used
-        instead of page-number pagination — the same "items stop matching
-        as they're worked through" problem applies here identically:
-        finishing an item's labeling empties it out of this queryset).
+        """Items eligible for manual multi-character region labeling that
+        haven't been touched AT ALL yet (`character_regions == []`) — feeds
+        RegionLabelQueueManager.jsx's "未ラベル" mode, a bulk review UI in
+        the same spirit as `incomplete` above (see its own docstring for
+        why `before_id` cursoring is used instead of page-number
+        pagination — the same "items stop matching as they're worked
+        through" problem applies here identically: labeling an item empties
+        it out of this queryset).
 
-        "Not yet fully labeled" used to mean only `character_regions ==
-        []` (never touched at all) — extended to ALSO include an item
-        that's been PARTIALLY labeled but still has a confirmed
-        Item.characters name no box anywhere labels, per explicit request:
-        that item.characters is confirmed (via the edit queue) ahead of
-        region labeling in this app's own workflow, so a name with no box
-        yet almost always just means labeling hasn't gotten to that person
-        yet, not a real conflict — see region_mismatch_queue's docstring
-        for the actual-conflict direction this deliberately does NOT
-        cover. RegionAnnotator.jsx pre-loads whatever boxes already exist
-        on an item (see its own comments), so re-opening a partially-done
-        item here to finish the remaining names works the same as opening
-        a fresh one.
+        Deliberately narrow — "touched at all" (even a single box saved) is
+        enough to graduate an item OUT of this queue for good, whether or
+        not every confirmed character ended up with a box. It used to also
+        include partially-labeled items still missing a box for someone,
+        which sounds right in isolation, but in practice meant an item you
+        already made a considered decision about in region_mismatch_queue
+        ("this person just isn't boxed and that's fine") would silently
+        reappear back HERE the next time you opened this tab — reported as
+        "already-resolved items keep coming back, very stressful". Once an
+        item has character_regions at all, region_mismatch_queue is the
+        ONE place any remaining gap gets tracked and resolved from now on
+        (see its own docstring) — this queue never looks at it again.
 
         Excludes situation SOLO (only one person — nothing to disambiguate)
         and R18 (per explicit user request — kept out of this queue for
-        now), and anything with no image to annotate at all. Same
-        can't-express-this-as-a-single-DB-query reasoning as
-        region_mismatch_queue for the completeness check itself.
+        now), and anything with no image to annotate at all.
         """
-        candidates = (
+        queryset = (
             Item.objects.exclude(situation__in=['SOLO', 'R18'])
+            .filter(character_regions=[])
             .exclude(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
             .order_by('-id')
             .distinct()
-            .only('id', 'character_regions', 'characters', 'situation')
         )
-        incomplete = []
-        for item in candidates.iterator():
-            if not item.character_regions:
-                incomplete.append(item)
-                continue
-            region_chars = {c for r in item.character_regions for c in (r.get('characters') or [])}
-            item_chars = set(item.characters or [])
-            if item_chars - region_chars:
-                incomplete.append(item)
-
-        total_count = len(incomplete)
+        total_count = queryset.count()
 
         before_id = request.GET.get('before_id')
         if before_id:
             try:
-                bid = int(before_id)
-                incomplete = [it for it in incomplete if it.id < bid]
+                queryset = queryset.filter(id__lt=int(before_id))
             except (TypeError, ValueError):
                 pass
 
         page_size = 50
-        batch = incomplete[:page_size + 1]
+        batch = list(queryset[:page_size + 1])
         has_more = len(batch) > page_size
         batch = batch[:page_size]
 
@@ -2413,45 +2414,53 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='region_mismatch_queue')
     def region_mismatch_queue(self, request):
-        """Items where Item.character_regions names a character that ISN'T
-        in Item.characters at all — feeds RegionLabelQueueManager.jsx's
-        "不整合あり" mode. Region labeling is treated as the more
-        trustworthy source here (a human drew a box around a specific
-        person, vs. just picking a name from a list), so a region naming
-        someone item.characters doesn't even recognize is a genuine
-        conflict worth a human's eyes on the actual preview image.
+        """Items that HAVE been touched by region labeling
+        (`character_regions` non-empty) but where the character set it
+        implies still doesn't exactly match Item.characters, in EITHER
+        direction — feeds RegionLabelQueueManager.jsx's "不整合あり" mode.
+        This is the ONE place any gap on a touched item gets tracked and
+        resolved from here on — region_label_queue's "未ラベル" mode only
+        ever looks at completely untouched items (see its own docstring for
+        why splitting "untouched" from "touched but incomplete" this way
+        was itself the fix for a real complaint: a considered decision made
+        here kept getting silently undone by re-appearing back in 未ラベル).
 
-        Deliberately NOT triggered by the reverse direction (an
-        item.characters name with no region box) — that was tried and
-        turned out to almost always just mean region labeling hasn't
-        gotten to that person yet (this app's own workflow confirms
-        item.characters via the edit queue BEFORE region labeling), not a
-        real conflict; region_label_queue's "未ラベル" mode already
-        re-surfaces exactly that case as unfinished labeling instead (see
-        its own docstring). Mixing the two here made "統一する
-        (sync_characters_to_regions)" a data-loss trap: clicking it on a
-        purely-incomplete item — no region-only name, only item-only ones
-        — would have wiped out real, already-confirmed characters just
-        because nobody had drawn their box yet.
+        A resolution here can go three ways, and NONE of them send the item
+        back to 未ラベル (it already has character_regions, so it can
+        never match that queue's filter again):
+          - sync_characters_to_regions: adopt the region's list wholesale
+            (item.characters := region_chars exactly) — trusts the boxes
+            over whatever's in the edit queue's list, full stop.
+          - acknowledge_character_mismatch: keep item.characters exactly as
+            it is and just record that a human looked at this specific
+            gap and accepted it (e.g. "this confirmed character genuinely
+            isn't boxed in this picture, and that's fine") — see
+            character_regions_ack_signature's own docstring for how this
+            avoids either a full data change or the item nagging again
+            after a real, later change.
+          - Keep annotating right here (RegionLabelQueueManager.jsx embeds
+            RegionAnnotator in this mode too) or free-hand edit
+            item.characters (update_fields) — either way, once the two
+            sides actually agree, this item just stops matching below on
+            its own, no bookkeeping needed.
 
-        Re-opening the item in RegionAnnotator and saving again (even with
-        no box changes) re-merges the region's characters back into
-        item.characters and resolves the mismatch that way too — or the
-        region itself can be corrected first if THAT'S what was wrong.
-
-        Can't express "does a JSON list have an element missing from
-        another JSON list" as a single portable DB query, so this filters
-        in Python — fine at this app's scale, since the candidate set
-        (items with any character_regions at all) is already a small
-        subset of all items. Same before_id cursoring as the other queue
-        actions, applied to the already-computed mismatch list.
+        Can't express "two JSON-derived sets are unequal" as a single
+        portable DB query, so this filters in Python — fine at this app's
+        scale, since the candidate set (items with any character_regions at
+        all) is already a small subset of all items. Same before_id
+        cursoring as the other queue actions, applied to the
+        already-computed mismatch list.
         """
         candidates = Item.objects.exclude(character_regions=[]).order_by('-id')
         mismatched = []
         for item in candidates.iterator():
             region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
-            if region_chars - set(item.characters or []):
-                mismatched.append(item)
+            item_chars = set(item.characters or [])
+            if region_chars == item_chars:
+                continue
+            if _char_diff_signature(region_chars, item_chars) == item.character_regions_ack_signature:
+                continue
+            mismatched.append(item)
 
         total_count = len(mismatched)
 
@@ -2484,30 +2493,45 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='sync_characters_to_regions')
     def sync_characters_to_regions(self, request, pk=None):
-        """Add every character named in Item.character_regions into
-        Item.characters — the "領域ラベル側に統一する" resolution offered
-        by region_mismatch_queue, for when a human has looked at the
-        preview and decided a region-only name (one region_mismatch_queue
-        flagged as missing from item.characters entirely) should actually
-        be restored rather than the region re-labeled.
+        """Set Item.characters to EXACTLY the character set implied by
+        Item.character_regions — the "領域指定キューを採用" resolution
+        offered by region_mismatch_queue, for when a human has compared
+        both full lists and decided the region boxes are the ones to
+        trust: any item-only name (confirmed but never boxed) is dropped,
+        any region-only name (boxed but not in item.characters) is added.
+        A full, deliberate overwrite — not the ADD-only merge
+        character_regions_view's own save uses — because this is only ever
+        reached after a human has actually looked at both lists side by
+        side in the mismatch review UI, not as an automatic side effect.
+        """
+        item = self.get_object()
+        region_chars = sorted({c for r in (item.character_regions or []) for c in (r.get('characters') or [])})
+        item.characters = region_chars
+        item.character_regions_ack_signature = ''  # now genuinely equal — nothing left to remember
+        item.save(update_fields=['characters', 'character_regions_ack_signature'])
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'saved', 'item': serializer.data})
 
-        Deliberately ADD-only (a plain union), same as
-        character_regions_view's own save path — NOT a full overwrite: an
-        item can simultaneously have a genuine region-only conflict (why
-        it's in this queue at all) AND an unrelated item-only name that
-        simply hasn't been boxed yet (region labeling still incomplete —
-        see region_label_queue's docstring on why that's normal and not a
-        conflict). Overwriting wholesale would silently delete that second,
-        perfectly valid name — this only ever adds, it never removes.
+    @action(detail=True, methods=['post'], url_path='acknowledge_character_mismatch')
+    def acknowledge_character_mismatch(self, request, pk=None):
+        """Record that a human looked at THIS item's current region vs.
+        item.characters gap and decided item.characters is fine as-is —
+        the "編集キューを採用" resolution offered by region_mismatch_queue,
+        for when the gap is something like "this confirmed character just
+        isn't boxed in this particular picture" rather than an actual
+        error. Changes no data at all (see sync_characters_to_regions for
+        the resolution that does); just stores a content fingerprint of the
+        current (region_chars, item.characters) pair so region_mismatch_
+        queue stops re-flagging THIS SPECIFIC gap — see character_regions_
+        ack_signature's own docstring for why a later, genuinely new change
+        on either side automatically starts flagging it again with no
+        extra bookkeeping.
         """
         item = self.get_object()
         region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
-        existing = list(item.characters or [])
-        for name in sorted(region_chars):
-            if name not in existing:
-                existing.append(name)
-        item.characters = existing
-        item.save(update_fields=['characters'])
+        item_chars = set(item.characters or [])
+        item.character_regions_ack_signature = _char_diff_signature(region_chars, item_chars)
+        item.save(update_fields=['character_regions_ack_signature'])
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'saved', 'item': serializer.data})
 

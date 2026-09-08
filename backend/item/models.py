@@ -50,6 +50,20 @@ class Item(models.Model):
     # 2+ names on one box are recorded (useful metadata) but skipped for
     # classifier training since the crop's identity is inherently ambiguous.
     character_regions = models.JSONField(default=list, blank=True)
+    # Content fingerprint (see views._char_diff_signature) of (region-
+    # derived characters, item.characters) at the moment a human last
+    # explicitly reviewed a region_mismatch_queue conflict on this item and
+    # decided item.characters is fine as-is (views.acknowledge_character_
+    # mismatch) — WITHOUT changing either side's data (that's what
+    # sync_characters_to_regions is for instead: it makes them equal for
+    # real, so nothing needs remembering). Lets region_mismatch_queue stop
+    # re-flagging an accepted "some confirmed character just has no box
+    # yet, and that's fine" state on every visit — content-addressed rather
+    # than a plain boolean/timestamp so it self-invalidates the moment
+    # EITHER side changes again (the freshly computed signature just won't
+    # match this stored one anymore), with no extra bookkeeping needed on
+    # every write path that touches characters or character_regions.
+    character_regions_ack_signature = models.CharField(max_length=64, blank=True, default='')
 
     def __str__(self):
         return f"{self.external_id} - {self.artist or 'unknown'}"
