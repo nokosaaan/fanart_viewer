@@ -295,6 +295,13 @@ docker compose -f docker-compose.prod.yml exec web python manage.py drive_backup
 
 事前に`.env`の`GOOGLE_DRIVE_CLIENT_ID`/`GOOGLE_DRIVE_CLIENT_SECRET`/`GOOGLE_DRIVE_REFRESH_TOKEN`の設定が必要（`.env.example`のコメント参照 — `scripts/google_drive_auth.py`で初回のrefresh tokenを取得する）。
 
+**古いバックアップから復元した場合**、`Item.character_regions`が新しいスキーマ(`{"image_index", "box", "characters":[...]}`)より前の古い形式(`{"box", "character"}`、単数形)のまま入っていることがある。復元後は念のため以下を実行しておくと安全:
+
+```bash
+docker compose -f docker-compose.prod.yml exec web python manage.py normalize_character_regions --dry-run
+docker compose -f docker-compose.prod.yml exec web python manage.py normalize_character_regions
+```
+
 ### 簡易的なJSONフィクスチャバックアップ（Google Drive未設定の場合の代替）
 
 ```bash

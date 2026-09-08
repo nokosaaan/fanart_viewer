@@ -32,7 +32,7 @@ function nextBoxId() { return `box-${++_boxIdCounter}` }
 // (matching tagger._detect_person_boxes/_crop_with_padding exactly, so no
 // translation is needed server-side) and only ever converted to/from the
 // image's on-screen CSS size at render time and on mouse events.
-export default function RegionAnnotator({ item, onSaved }) {
+export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
@@ -134,7 +134,7 @@ export default function RegionAnnotator({ item, onSaved }) {
       const detected = (j.boxes || []).map(box => ({ id: nextBoxId(), imageIndex: resolvedIndex, box, characters: [] }))
       setBoxes(prev => [...prev, ...detected])
       if (detected.length === 0) setNotice('人物が検出されませんでした。手動でドラッグして矩形を追加してください。')
-      else setNotice('')
+      else { setNotice(''); if (onDirtyChange) onDirtyChange(true) }
     } catch (e) {
       setError(e.message)
     } finally {
@@ -166,6 +166,7 @@ export default function RegionAnnotator({ item, onSaved }) {
     setBoxes(prev => [...prev, { id, imageIndex: currentImageIndex, box: [x1, y1, x2, y2], characters: [] }])
     setActiveBoxId(id)
     setCharQuery('')
+    if (onDirtyChange) onDirtyChange(true)
   }
 
   // Toggles `name` in/out of a box's character list — a box can hold more
@@ -181,11 +182,13 @@ export default function RegionAnnotator({ item, onSaved }) {
       return { ...b, characters: has ? b.characters.filter(c => c !== trimmed) : [...b.characters, trimmed] }
     }))
     setCharQuery('')
+    if (onDirtyChange) onDirtyChange(true)
   }
 
   function removeBox(boxId) {
     setBoxes(prev => prev.filter(b => b.id !== boxId))
     if (activeBoxId === boxId) setActiveBoxId(null)
+    if (onDirtyChange) onDirtyChange(true)
   }
 
   async function save() {
@@ -202,6 +205,7 @@ export default function RegionAnnotator({ item, onSaved }) {
       })
       const j = await resp.json().catch(() => ({}))
       if (!resp.ok) throw new Error(j.detail || `保存に失敗しました (${resp.status})`)
+      if (onDirtyChange) onDirtyChange(false)
       if (onSaved) onSaved(j.item)
     } catch (e) {
       setError(e.message)

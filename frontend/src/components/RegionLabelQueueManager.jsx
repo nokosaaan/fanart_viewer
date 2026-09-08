@@ -71,6 +71,13 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
   const [allChars, setAllChars] = useState([])
   const [charList, setCharList] = useState([])
   const [saving, setSaving] = useState(false)
+  // Whether RegionAnnotator has unsaved box/label edits for the currently
+  // selected item — "スキップ" and friends used to discard this silently
+  // (RegionAnnotator unmounts, its own `boxes` state is just gone), which
+  // is exactly how a real labeling session was lost while item.characters
+  // (confirmed separately, via the edit queue) stayed intact — reported as
+  // "labeled the boxes, but character_regions never actually saved".
+  const [regionDirty, setRegionDirty] = useState(false)
 
   useEffect(() => {
     fetch('/api/items/all_characters/').then(r => r.json()).then(d => { if (Array.isArray(d)) setAllChars(d) }).catch(() => {})
@@ -144,7 +151,39 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
   // the previous item would silently carry over.
   useEffect(() => {
     setCharList(selected ? (selected.characters || []) : [])
+    setRegionDirty(false)
   }, [selected && selected.id])
+
+  // Guard for anything that would throw away RegionAnnotator's in-progress
+  // (unsaved) box/label work: skipping to another item, switching mode
+  // tabs, or closing the window. Returns true (proceed) when there's
+  // nothing to lose, or the user confirmed discarding it.
+  function confirmDiscardIfDirty() {
+    if (!regionDirty) return true
+    return window.confirm('保存されていない領域ラベルの変更があります。破棄しますか？')
+  }
+
+  function selectItem(id) {
+    if (id === selectedId) return
+    if (!confirmDiscardIfDirty()) return
+    setSelectedId(id)
+  }
+
+  function changeMode(m) {
+    if (m === mode) return
+    if (!confirmDiscardIfDirty()) return
+    setMode(m)
+  }
+
+  function handleClose() {
+    if (!confirmDiscardIfDirty()) return
+    onClose()
+  }
+
+  function skipCurrent() {
+    if (!confirmDiscardIfDirty()) return
+    selectNext(selected.id)
+  }
 
   async function saveManualFix() {
     if (!selected || saving) return
@@ -187,19 +226,19 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
     <>
       <div className="cgm-panel-header">
         <strong>領域ラベル付けキュー — 複数キャラ画像 ({count}件)</strong>
-        <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+        <button className="cgm-panel-close" onClick={handleClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
       </div>
 
       <div style={{ display: 'flex', gap: 6, padding: '8px 12px 0' }}>
         <button
           className="btn"
           style={{ fontSize: 12, fontWeight: mode === 'unlabeled' ? 700 : 400, background: mode === 'unlabeled' ? '#eff6ff' : undefined }}
-          onClick={() => setMode('unlabeled')}
+          onClick={() => changeMode('unlabeled')}
         >未ラベル</button>
         <button
           className="btn"
           style={{ fontSize: 12, fontWeight: mode === 'mismatch' ? 700 : 400, background: mode === 'mismatch' ? '#fef2f2' : undefined }}
-          onClick={() => setMode('mismatch')}
+          onClick={() => changeMode('mismatch')}
         >不整合あり</button>
       </div>
 
@@ -224,7 +263,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
             return (
               <div
                 key={it.id}
-                onClick={() => setSelectedId(it.id)}
+                onClick={() => selectItem(it.id)}
                 style={{
                   padding: '10px 12px', cursor: 'pointer',
                   background: it.id === selectedId ? '#eff6ff' : 'transparent',
@@ -267,7 +306,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
                 <div style={{ background: '#1e293b', borderRadius: 8, padding: '16px 20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                     <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
-                    <button className="btn" style={{ padding: '4px 10px' }} onClick={() => selectNext(selected.id)}>スキップ（後で対応）</button>
+                    <button className="btn" style={{ padding: '4px 10px' }} onClick={skipCurrent}>スキップ（後で対応）</button>
                   </div>
 
                   <img
@@ -305,11 +344,12 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
             <div style={{ background: '#1e293b', borderRadius: 8, padding: '16px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
-                <button className="btn" style={{ padding: '4px 10px' }} onClick={() => selectNext(selected.id)}>スキップ（後で対応）</button>
+                <button className="btn" style={{ padding: '4px 10px' }} onClick={skipCurrent}>スキップ（後で対応）</button>
               </div>
               <RegionAnnotator
                 key={selected.id}
                 item={selected}
+                onDirtyChange={setRegionDirty}
                 onSaved={(newItem) => {
                   // character_regions_view's save is ADD-only, so it can
                   // never by itself create a region_mismatch_queue conflict
@@ -336,7 +376,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
   }
 
   return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
+    <div className="cgm-panel-backdrop" onClick={handleClose}>
       <div className="cgm-panel" style={{ width: 1000 }} onClick={e => e.stopPropagation()}>{content}</div>
     </div>
   )
