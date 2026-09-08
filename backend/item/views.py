@@ -2363,6 +2363,67 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'next_before_id': batch[-1].id if (has_more and batch) else None,
         })
 
+    @action(detail=False, methods=['get'], url_path='region_mismatch_queue')
+    def region_mismatch_queue(self, request):
+        """Items whose Item.character_regions references a character no
+        longer in Item.characters — feeds RegionLabelQueueManager.jsx's
+        "不整合あり" mode. Region labeling is treated as the more
+        trustworthy source here (a human drew a box around a specific
+        person, vs. just picking a name from a list), so when the two
+        diverge it's surfaced for a human to reconcile rather than
+        train_character_classifier.py silently trusting a region label
+        that may have gone stale (see character_regions_view's own
+        docstring: saving a region only ever ADDS a missing name to
+        item.characters, it never removes one — so the only way to reach
+        this state today is editing item.characters afterward via the
+        normal edit form/queue and removing a name a region still uses).
+
+        Re-opening the item in RegionAnnotator and saving again (even with
+        no box changes) re-merges the region's characters back into
+        item.characters and resolves the mismatch — or the region itself
+        can be corrected first if THAT'S what was wrong.
+
+        Can't express "a JSON list's elements aren't a subset of another
+        JSON list's elements" as a single portable DB query, so this
+        filters in Python — fine at this app's scale, since the candidate
+        set (items with any character_regions at all) is already a small
+        subset of all items. Same before_id cursoring as the other queue
+        actions, applied to the already-computed mismatch list.
+        """
+        candidates = Item.objects.exclude(character_regions=[]).order_by('-id')
+        mismatched = []
+        for item in candidates.iterator():
+            region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
+            if not region_chars.issubset(set(item.characters or [])):
+                mismatched.append(item)
+
+        total_count = len(mismatched)
+
+        before_id = request.GET.get('before_id')
+        if before_id:
+            try:
+                bid = int(before_id)
+                mismatched = [it for it in mismatched if it.id < bid]
+            except (TypeError, ValueError):
+                pass
+
+        page_size = 50
+        batch = mismatched[:page_size + 1]
+        has_more = len(batch) > page_size
+        batch = batch[:page_size]
+
+        serialized = self.get_serializer(batch, many=True).data
+        for entry, item in zip(serialized, batch):
+            region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
+            entry['region_mismatch_characters'] = sorted(region_chars - set(item.characters or []))
+
+        return Response({
+            'results': serialized,
+            'count': total_count,
+            'has_more': has_more,
+            'next_before_id': batch[-1].id if (has_more and batch) else None,
+        })
+
     @action(detail=False, methods=['get'], url_path='missing_preview')
     def missing_preview_queue(self, request):
         """Items with no preview image at all (and a link to fetch one
