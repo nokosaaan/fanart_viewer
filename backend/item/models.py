@@ -170,6 +170,20 @@ class TwitterPollState(models.Model):
     last_error_at = models.DateTimeField(null=True, blank=True)
     last_notified_at = models.DateTimeField(null=True, blank=True)
     consecutive_failures = models.IntegerField(default=0)
+    # Pagination cursor to resume each timeline's discovery scan from on the
+    # NEXT tick, instead of always restarting from the newest — set only
+    # when a tick's scan used up its whole max_pages budget without ever
+    # reaching an already-known tweet (see twitter_gql_fetch._fetch_social_
+    # timeline's own docstring for the full reasoning: without this, a
+    # backlog bigger than one page — e.g. after this poller was unable to
+    # run for a while — could never be fully discovered automatically,
+    # since every tick would restart at the top and immediately re-hit the
+    # now-known items from the previous tick). Cleared back to '' once a
+    # scan actually reaches a known tweet or the true end of the timeline
+    # (i.e. genuinely caught up) — at that point restarting from the top
+    # next time is correct again.
+    bookmarks_resume_cursor = models.CharField(max_length=255, blank=True, default='')
+    likes_resume_cursor = models.CharField(max_length=255, blank=True, default='')
 
     def __str__(self):
         return f"TwitterPollState(failures={self.consecutive_failures}, last_success={self.last_success_at})"

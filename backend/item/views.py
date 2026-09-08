@@ -314,7 +314,10 @@ def _run_account_bookmarks_job(max_pages):
     """
     known_ids = _known_twitter_ids()
     try:
-        candidates = fetch_account_bookmarks(known_ids, max_pages=max_pages)
+        # One-shot manual catch-up — no cursor to persist across calls
+        # (unlike poll_twitter_updates.py's own recurring discovery), so
+        # the resume_cursor is simply discarded here.
+        candidates, _resume_cursor = fetch_account_bookmarks(known_ids, max_pages=max_pages)
     except Exception:
         logging.exception('Account bookmarks fetch failed')
         return
@@ -2248,7 +2251,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         max_pages = max(1, min(max_pages, 20))
 
         try:
-            candidates = fetch_account_bookmarks(_known_twitter_ids(), max_pages=max_pages)
+            # One-shot manual scan — no cursor to persist, see
+            # fetch_account_bookmarks_view's own comment on this.
+            candidates, _resume_cursor = fetch_account_bookmarks(_known_twitter_ids(), max_pages=max_pages)
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:

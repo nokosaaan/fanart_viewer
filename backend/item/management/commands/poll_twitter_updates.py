@@ -140,11 +140,27 @@ class Command(BaseCommand):
         # to just what's new since the last tick.
         max_pages = MAX_PAGES_BACKFILL if not known_ids else MAX_PAGES_STEADY
 
-        bookmarks = fetch_account_bookmarks(known_ids, max_pages=max_pages)
-        likes = (
-            fetch_account_likes(state.screen_name, known_ids, max_pages=max_pages)
-            if state.screen_name else []
+        # Resume from wherever the previous tick left off if it never
+        # reached a known tweet (still catching up on a backlog bigger
+        # than one page) — see TwitterPollState.bookmarks_resume_cursor's
+        # own docstring and _fetch_social_timeline's for the full
+        # reasoning. Kept at the same max_pages either way: catching up
+        # happens gradually, one tick's worth of pages at a time, never by
+        # widening a single call's budget.
+        bookmarks, bookmarks_resume = fetch_account_bookmarks(
+            known_ids, max_pages=max_pages, start_cursor=state.bookmarks_resume_cursor or None,
         )
+        if state.screen_name:
+            likes, likes_resume = fetch_account_likes(
+                state.screen_name, known_ids, max_pages=max_pages,
+                start_cursor=state.likes_resume_cursor or None,
+            )
+        else:
+            likes, likes_resume = [], ''
+
+        state.bookmarks_resume_cursor = bookmarks_resume or ''
+        state.likes_resume_cursor = likes_resume or ''
+        state.save(update_fields=['bookmarks_resume_cursor', 'likes_resume_cursor'])
 
         self._enqueue_new(bookmarks, 'bookmark')
         self._enqueue_new(likes, 'like')

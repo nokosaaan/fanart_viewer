@@ -863,15 +863,30 @@ def _entries_from_instructions(instructions) -> list:
 def _fetch_social_timeline(
     query_id: str, endpoint_name: str, variables: dict, path_keys,
     field_toggles, auth_token: str, ct0: str, known_ids: set,
-    max_pages: int,
-) -> list[dict]:
+    max_pages: int, start_cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
     """Bookmarks/Likesページを新しい順に辿り、`known_ids`に含まれる
     tweet_idへ到達した時点(=前回チェック以降の差分を汲み終えた時点)で
     打ち切る。最大max_pagesページまで(未知のIDばかりが続く初回実行など
     向けの安全弁)。画像/動画の無いツイートは保存対象外として除外する。
 
-    戻り値: [{'tweet_id', 'screen_name', 'media_urls', 'description'}, ...]
-    (新しい順のまま返す。呼び出し元が古い順に反転してキュー投入すること)
+    `start_cursor`: 前回この関数を呼んだ時にmax_pages尽きるまで既知のIDに
+    辿り着けなかった場合、続きから辿るためのcursor(Noneなら最新から)。
+    タイムライン自体はcursorを跨いで永続化されないと1回のmax_pages分しか
+    見えないため、呼び出し元(poll_twitter_updates.py)がTwitterPollStateに
+    保存して次回のtickに引き継ぐ想定 — さもないと、既知のIDに一度も
+    到達しないほど大きな未処理分が溜まった場合(例: 長期間ポーラーが
+    止まっていた後)、毎tick必ず最新から辿り直すことになり、1ページ目より
+    奥にある未取得分に永久に到達できなくなる。
+
+    戻り値: ([{'tweet_id', 'screen_name', 'media_urls', 'description'}, ...],
+              resume_cursor)
+    候補は新しい順のまま返す(呼び出し元が古い順に反転してキュー投入する
+    こと)。resume_cursorは「既知のIDに到達 or タイムライン末端に到達」
+    した場合はNone(=次回は最新から見て問題ない、追いついた)。
+    max_pages分すべて使い切ってもまだ未知のIDばかりだった場合のみ、続きを
+    示すcursorが入る(=呼び出し元はこれを保存し、次回はここから再開する
+    こと)。
 
     Raises:
         TwitterAuthError: 認証エラー
@@ -881,8 +896,9 @@ def _fetch_social_timeline(
     endpoint = f"https://twitter.com/i/api/graphql/{query_id}/{endpoint_name}"
 
     candidates: list[dict] = []
-    cursor: str | None = None
+    cursor: str | None = start_cursor
     resolved_authors: dict[str, str | None] = {}
+    resume_cursor: str | None = None
 
     for _page in range(max_pages):
         page_variables = dict(variables)
@@ -973,16 +989,32 @@ def _fetch_social_timeline(
             })
 
         if stop or not next_cursor or next_cursor == cursor:
-            break
+            break  # caught up to known content, or genuinely out of pages — resume_cursor stays None
         cursor = next_cursor
         time.sleep(1.5)
+    else:
+        # Loop ran out of max_pages without ever hitting `break` above —
+        # every page was still all-new content, so there's likely more
+        # backlog beyond what this call fetched. `cursor` here is the
+        # NEXT page's cursor (already advanced in the last iteration),
+        # ready for the caller to resume from next time.
+        resume_cursor = cursor
 
-    return candidates
+    return candidates, resume_cursor
 
 
-def fetch_account_bookmarks(known_ids: set, max_pages: int = 1) -> list[dict]:
+def fetch_account_bookmarks(
+    known_ids: set, max_pages: int = 1, start_cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
     """ログイン中アカウントのブックマークを新しい順に走査し、`known_ids`
     未収載のものだけ画像URL・本文つきで返す(新しい順のまま)。
+
+    `start_cursor`/戻り値の2つ目の要素(resume_cursor)は
+    _fetch_social_timelineへそのまま委譲 — 大きな未処理分を複数tickに
+    分けて安全に追いつくための、tick間で引き継ぐページ位置(詳しくは
+    _fetch_social_timelineの docstring 参照)。一回限りの手動スキャン
+    (scan_account_bookmarks_view等)はstart_cursorを渡さず、
+    resume_cursorも単に無視してよい。
 
     Raises:
         TwitterAuthError: 認証エラー
@@ -999,13 +1031,18 @@ def fetch_account_bookmarks(known_ids: set, max_pages: int = 1) -> list[dict]:
         path_keys=("bookmark_timeline_v2", "timeline"),
         field_toggles=None,
         auth_token=auth_token, ct0=ct0,
-        known_ids=known_ids, max_pages=max_pages,
+        known_ids=known_ids, max_pages=max_pages, start_cursor=start_cursor,
     )
 
 
-def fetch_account_likes(screen_name: str, known_ids: set, max_pages: int = 1) -> list[dict]:
+def fetch_account_likes(
+    screen_name: str, known_ids: set, max_pages: int = 1, start_cursor: str | None = None,
+) -> tuple[list[dict], str | None]:
     """指定アカウント(通常はログイン中の本人自身)の「いいね」を新しい順に
     走査し、`known_ids`未収載のものだけ画像URL・本文つきで返す(新しい順)。
+
+    `start_cursor`/resume_cursorはfetch_account_bookmarksと同様 —
+    _fetch_social_timelineの docstring 参照。
 
     Raises:
         TwitterAuthError: 認証エラー
@@ -1031,7 +1068,7 @@ def fetch_account_likes(screen_name: str, known_ids: set, max_pages: int = 1) ->
         path_keys=None,
         field_toggles={"withArticlePlainText": False},
         auth_token=auth_token, ct0=ct0,
-        known_ids=known_ids, max_pages=max_pages,
+        known_ids=known_ids, max_pages=max_pages, start_cursor=start_cursor,
     )
 
 
