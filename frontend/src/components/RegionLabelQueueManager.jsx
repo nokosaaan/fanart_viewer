@@ -10,22 +10,23 @@ function getCookie(name) {
 
 const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') }
 
-// Excludes SOLO (only one person — nothing to disambiguate) and R18 (kept
-// out of this queue per explicit request) — mirrors the server-side filter
-// in ItemViewSet.region_label_queue exactly, for the currentPageItems
-// (client-side) mode.
+// Mirrors ItemViewSet.region_label_queue's server-side logic, for the
+// currentPageItems (client-side) mode — "not yet fully labeled": either
+// never touched, or missing a box for some already-confirmed
+// item.characters name (region labeling is normally finished AFTER the
+// edit queue in this app's own workflow, so a still-unboxed confirmed name
+// almost always just means labeling hasn't reached that person yet, not a
+// conflict — see region_mismatch_queue's own reasoning for the direction
+// that IS treated as a conflict). Excludes SOLO (only one person — nothing
+// to disambiguate) and R18 (kept out of this queue per explicit request).
 function isEligible(it) {
   if (it.situation === 'SOLO' || it.situation === 'R18') return false
-  if (Array.isArray(it.character_regions) && it.character_regions.length > 0) return false
-  return true
+  if (!Array.isArray(it.character_regions) || it.character_regions.length === 0) return true
+  return characterDiff(it).itemOnly.length > 0
 }
 
 // Mirrors ItemViewSet.region_mismatch_queue's server-side logic, for the
-// currentPageItems (client-side) mode — full-consistency (not just
-// subset) comparison between what the region boxes say and
-// item.characters, per explicit request: either direction of divergence
-// is worth a human's eyes with the preview up, not just "region has a name
-// characters is missing".
+// currentPageItems (client-side) mode.
 function characterDiff(it) {
   const regionChars = new Set()
   for (const r of (it.character_regions || [])) for (const c of (r.characters || [])) regionChars.add(c)
@@ -36,9 +37,14 @@ function characterDiff(it) {
   }
 }
 
+// A region naming someone item.characters doesn't even recognize is a
+// genuine conflict. The reverse (a confirmed name with no box yet) is
+// deliberately NOT treated as a mismatch here — see region_label_queue's
+// docstring and isEligible above for why that's normally just incomplete
+// labeling, not a conflict, and characterDiff's own comment for the
+// data-loss trap that mixing the two used to create for "統一する".
 function isMismatched(it) {
-  const { regionOnly, itemOnly } = characterDiff(it)
-  return regionOnly.length > 0 || itemOnly.length > 0
+  return characterDiff(it).regionOnly.length > 0
 }
 
 // Mailbox-style bulk review for manually labeling which detected person is
@@ -199,8 +205,8 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
 
       <div className="cgm-panel-search" style={{ fontSize: 12, color: '#6b7280' }}>
         {mode === 'mismatch'
-          ? '領域ラベルの内容と編集キューでのキャラ一覧が完全一致していない(どちらかにしか無い名前がある)アイテムです。プレビューを見ながら、手動で修正するか領域ラベル側に統一するか判断してください。'
-          : 'situationがSOLO・R18以外で、まだ領域ラベル未設定のアイテムが対象です。検出された矩形をクリックしてキャラ名を割り当て、保存すると次のアイテムに進みます。'}
+          ? '領域ラベルに、編集キューのキャラ一覧には無い名前が使われているアイテムです(=編集で削除された後に取り残された可能性がある本当の食い違い)。プレビューを見ながら、手動で修正するか領域ラベル側の名前を復元するか判断してください。'
+          : 'situationがSOLO・R18以外で、まだ全員分の領域ラベルが付いていないアイテムが対象です(未着手・一部だけ済み、どちらも含む)。検出された矩形をクリックしてキャラ名を割り当て、保存すると次のアイテムに進みます。'}
       </div>
 
       <div style={{ display: 'flex', minHeight: 0, flex: '1 1 auto' }}>
@@ -283,7 +289,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
 
                   <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                     <button className="btn" disabled={saving} onClick={syncToRegions}>
-                      領域ラベルに統一(item.charactersを上書き)
+                      領域ラベルの名前を編集キューに復元(追加のみ、既存の名前は消しません)
                     </button>
                   </div>
 
@@ -305,18 +311,16 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
                 key={selected.id}
                 item={selected}
                 onSaved={(newItem) => {
+                  // character_regions_view's save is ADD-only, so it can
+                  // never by itself create a region_mismatch_queue conflict
+                  // (that only happens later, if item.characters is
+                  // subsequently edited to remove a name a region still
+                  // uses) — nothing to immediately re-check here. Any
+                  // still-unboxed confirmed name just means this item
+                  // naturally stays in (or re-enters) "未ラベル" until
+                  // labeling actually covers everyone — see
+                  // region_label_queue's own docstring.
                   notify('item-updated', { id: selected.id, item: newItem })
-                  // character_regions_view only ever ADDS a missing name to
-                  // item.characters, so region-has-it-characters-doesn't
-                  // can never be true right after a save — but the reverse
-                  // (a name in item.characters no box here labels) isn't
-                  // touched by that save at all, so it's still possible
-                  // and worth flagging immediately rather than only at the
-                  // next visit to "不整合あり".
-                  const diff = characterDiff(newItem)
-                  if (diff.itemOnly.length > 0) {
-                    alert(`編集キューのキャラ一覧に、今回のラベル付けのどのボックスにも登場しない名前があります: ${diff.itemOnly.join(', ')}\n「不整合あり」キューで確認・修正してください。`)
-                  }
                   selectNext(selected.id)
                 }}
               />

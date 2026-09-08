@@ -2343,36 +2343,63 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='region_label_queue')
     def region_label_queue(self, request):
-        """Items eligible for manual multi-character region labeling — feeds
-        RegionLabelQueueManager.jsx, a bulk review UI in the same spirit as
-        `incomplete` above (see its own docstring for why `before_id`
-        cursoring is used instead of page-number pagination — the same
-        "items stop matching as they're worked through" problem applies
-        here identically: labeling an item empties it out of this queryset).
+        """Items eligible for manual multi-character region labeling, and
+        not yet FULLY labeled — feeds RegionLabelQueueManager.jsx's "未ラベ
+        ル" mode, a bulk review UI in the same spirit as `incomplete` above
+        (see its own docstring for why `before_id` cursoring is used
+        instead of page-number pagination — the same "items stop matching
+        as they're worked through" problem applies here identically:
+        finishing an item's labeling empties it out of this queryset).
+
+        "Not yet fully labeled" used to mean only `character_regions ==
+        []` (never touched at all) — extended to ALSO include an item
+        that's been PARTIALLY labeled but still has a confirmed
+        Item.characters name no box anywhere labels, per explicit request:
+        that item.characters is confirmed (via the edit queue) ahead of
+        region labeling in this app's own workflow, so a name with no box
+        yet almost always just means labeling hasn't gotten to that person
+        yet, not a real conflict — see region_mismatch_queue's docstring
+        for the actual-conflict direction this deliberately does NOT
+        cover. RegionAnnotator.jsx pre-loads whatever boxes already exist
+        on an item (see its own comments), so re-opening a partially-done
+        item here to finish the remaining names works the same as opening
+        a fresh one.
 
         Excludes situation SOLO (only one person — nothing to disambiguate)
         and R18 (per explicit user request — kept out of this queue for
-        now), and anything already labeled (`character_regions` non-empty)
-        or with no image to annotate at all.
+        now), and anything with no image to annotate at all. Same
+        can't-express-this-as-a-single-DB-query reasoning as
+        region_mismatch_queue for the completeness check itself.
         """
-        queryset = (
+        candidates = (
             Item.objects.exclude(situation__in=['SOLO', 'R18'])
-            .filter(character_regions=[])
             .exclude(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
             .order_by('-id')
             .distinct()
+            .only('id', 'character_regions', 'characters', 'situation')
         )
-        total_count = queryset.count()
+        incomplete = []
+        for item in candidates.iterator():
+            if not item.character_regions:
+                incomplete.append(item)
+                continue
+            region_chars = {c for r in item.character_regions for c in (r.get('characters') or [])}
+            item_chars = set(item.characters or [])
+            if item_chars - region_chars:
+                incomplete.append(item)
+
+        total_count = len(incomplete)
 
         before_id = request.GET.get('before_id')
         if before_id:
             try:
-                queryset = queryset.filter(id__lt=int(before_id))
+                bid = int(before_id)
+                incomplete = [it for it in incomplete if it.id < bid]
             except (TypeError, ValueError):
                 pass
 
         page_size = 50
-        batch = list(queryset[:page_size + 1])
+        batch = incomplete[:page_size + 1]
         has_more = len(batch) > page_size
         batch = batch[:page_size]
 
@@ -2386,41 +2413,44 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='region_mismatch_queue')
     def region_mismatch_queue(self, request):
-        """Items where the character set implied by Item.character_regions
-        doesn't EXACTLY match Item.characters (either direction) — feeds
-        RegionLabelQueueManager.jsx's "不整合あり" mode. Region labeling is
-        treated as the more trustworthy source here (a human drew a box
-        around a specific person, vs. just picking a name from a list),
-        but exact-match (not just "region has a name characters is missing")
-        is deliberate per explicit request: a name only in item.characters
-        with no region box backing it is just as worth a human's eyes as
-        the reverse — it might be a real person the box-detector missed, or
-        it might be stale/wrong. Either way this queue only SURFACES it;
-        _character_breakdown of which is right is left to a human looking
-        at the actual preview image (see region_only_characters /
-        item_only_characters below, and sync_characters_to_regions for the
-        "just trust the regions" resolution once they've decided that).
+        """Items where Item.character_regions names a character that ISN'T
+        in Item.characters at all — feeds RegionLabelQueueManager.jsx's
+        "不整合あり" mode. Region labeling is treated as the more
+        trustworthy source here (a human drew a box around a specific
+        person, vs. just picking a name from a list), so a region naming
+        someone item.characters doesn't even recognize is a genuine
+        conflict worth a human's eyes on the actual preview image.
+
+        Deliberately NOT triggered by the reverse direction (an
+        item.characters name with no region box) — that was tried and
+        turned out to almost always just mean region labeling hasn't
+        gotten to that person yet (this app's own workflow confirms
+        item.characters via the edit queue BEFORE region labeling), not a
+        real conflict; region_label_queue's "未ラベル" mode already
+        re-surfaces exactly that case as unfinished labeling instead (see
+        its own docstring). Mixing the two here made "統一する
+        (sync_characters_to_regions)" a data-loss trap: clicking it on a
+        purely-incomplete item — no region-only name, only item-only ones
+        — would have wiped out real, already-confirmed characters just
+        because nobody had drawn their box yet.
 
         Re-opening the item in RegionAnnotator and saving again (even with
         no box changes) re-merges the region's characters back into
-        item.characters — resolves the "region has it, characters doesn't"
-        direction, but NOT the reverse (a name only in item.characters is
-        untouched by that save) — the region itself can also be corrected
-        if THAT'S what was wrong, or sync_characters_to_regions /
-        update_fields used to fix item.characters directly.
+        item.characters and resolves the mismatch that way too — or the
+        region itself can be corrected first if THAT'S what was wrong.
 
-        Can't express "two JSON lists have the same elements, ignoring
-        order" as a single portable DB query, so this filters in Python —
-        fine at this app's scale, since the candidate set (items with any
-        character_regions at all) is already a small subset of all items.
-        Same before_id cursoring as the other queue actions, applied to the
-        already-computed mismatch list.
+        Can't express "does a JSON list have an element missing from
+        another JSON list" as a single portable DB query, so this filters
+        in Python — fine at this app's scale, since the candidate set
+        (items with any character_regions at all) is already a small
+        subset of all items. Same before_id cursoring as the other queue
+        actions, applied to the already-computed mismatch list.
         """
         candidates = Item.objects.exclude(character_regions=[]).order_by('-id')
         mismatched = []
         for item in candidates.iterator():
             region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
-            if region_chars != set(item.characters or []):
+            if region_chars - set(item.characters or []):
                 mismatched.append(item)
 
         total_count = len(mismatched)
@@ -2454,20 +2484,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='sync_characters_to_regions')
     def sync_characters_to_regions(self, request, pk=None):
-        """Overwrite Item.characters with EXACTLY the character set implied
-        by Item.character_regions — the "領域ラベル側に統一する" resolution
-        offered by region_mismatch_queue, for when a human has looked at
-        the preview and decided the region boxes are right and
-        item.characters (from the edit queue) is what's stale/wrong.
-        Unlike character_regions_view's save path (which only ever ADDS
-        missing names), this can also REMOVE a name from item.characters
-        that no region box uses — the whole point of this endpoint, since
-        the edit-queue-only-fix side of that same decision is just
-        update_fields on `characters` instead.
+        """Add every character named in Item.character_regions into
+        Item.characters — the "領域ラベル側に統一する" resolution offered
+        by region_mismatch_queue, for when a human has looked at the
+        preview and decided a region-only name (one region_mismatch_queue
+        flagged as missing from item.characters entirely) should actually
+        be restored rather than the region re-labeled.
+
+        Deliberately ADD-only (a plain union), same as
+        character_regions_view's own save path — NOT a full overwrite: an
+        item can simultaneously have a genuine region-only conflict (why
+        it's in this queue at all) AND an unrelated item-only name that
+        simply hasn't been boxed yet (region labeling still incomplete —
+        see region_label_queue's docstring on why that's normal and not a
+        conflict). Overwriting wholesale would silently delete that second,
+        perfectly valid name — this only ever adds, it never removes.
         """
         item = self.get_object()
-        region_chars = sorted({c for r in (item.character_regions or []) for c in (r.get('characters') or [])})
-        item.characters = region_chars
+        region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
+        existing = list(item.characters or [])
+        for name in sorted(region_chars):
+            if name not in existing:
+                existing.append(name)
+        item.characters = existing
         item.save(update_fields=['characters'])
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'saved', 'item': serializer.data})
