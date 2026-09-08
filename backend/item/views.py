@@ -17,7 +17,7 @@ import json
 import re
 from urllib.parse import urljoin, urlparse
 
-from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem
+from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem, TwitterPollState
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
 from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
@@ -302,6 +302,34 @@ def _known_twitter_ids():
     return known_ids
 
 
+def _get_bookmarks_resume_cursor():
+    """The same TwitterPollState.bookmarks_resume_cursor poll_twitter_
+    updates.py's own recurring discovery reads/writes (see that model
+    field's own docstring) — shared here so a manual bulk-fetch continues
+    from wherever the poller's own incremental catch-up currently stands,
+    rather than restarting from the newest bookmark and re-walking ground
+    the poller already covered.
+    """
+    state, _ = TwitterPollState.objects.get_or_create(pk=1)
+    return state.bookmarks_resume_cursor or None
+
+
+def _save_bookmarks_resume_cursor(resume_cursor):
+    """Persist the frontier a bookmark fetch (manual or the poller's own)
+    reached back to the shared TwitterPollState row, so whichever one runs
+    next — poller tick or another manual fetch — picks up from here
+    instead of either re-scanning already-covered ground or leaving a gap.
+    `resume_cursor` is None once a fetch actually reaches already-known
+    content or the true end of the timeline (i.e. genuinely caught up —
+    see _fetch_social_timeline's own docstring), at which point this
+    correctly clears the field back to '' so the next run starts fresh
+    from the newest bookmark again.
+    """
+    state, _ = TwitterPollState.objects.get_or_create(pk=1)
+    state.bookmarks_resume_cursor = resume_cursor or ''
+    state.save(update_fields=['bookmarks_resume_cursor'])
+
+
 def _run_account_bookmarks_job(max_pages):
     """Auto-mode background bookmark catch-up — mirrors
     _run_account_retweets_job exactly, just for the logged-in account's own
@@ -311,16 +339,23 @@ def _run_account_bookmarks_job(max_pages):
     on-demand "fetch everything pending right now" catch-up — most useful
     right after the poller itself has been unable to run (e.g. an auth
     failure) and a backlog has piled up.
+
+    Shares its pagination frontier with the poller (see _get_bookmarks_
+    resume_cursor/_save_bookmarks_resume_cursor) — this manual catch-up
+    picks up wherever the poller's own incremental progress currently
+    stands (skipping IDs the poller is already responsible for) and pushes
+    that frontier further back in one go, rather than duplicating whatever
+    ground the poller has already covered.
     """
     known_ids = _known_twitter_ids()
     try:
-        # One-shot manual catch-up — no cursor to persist across calls
-        # (unlike poll_twitter_updates.py's own recurring discovery), so
-        # the resume_cursor is simply discarded here.
-        candidates, _resume_cursor = fetch_account_bookmarks(known_ids, max_pages=max_pages)
+        candidates, resume_cursor = fetch_account_bookmarks(
+            known_ids, max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
+        )
     except Exception:
         logging.exception('Account bookmarks fetch failed')
         return
+    _save_bookmarks_resume_cursor(resume_cursor)
 
     created, skipped, failed = 0, 0, 0
     for cand in candidates:
@@ -2251,14 +2286,20 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         max_pages = max(1, min(max_pages, 20))
 
         try:
-            # One-shot manual scan — no cursor to persist, see
-            # fetch_account_bookmarks_view's own comment on this.
-            candidates, _resume_cursor = fetch_account_bookmarks(_known_twitter_ids(), max_pages=max_pages)
+            # Shares the poller's own pagination frontier — see
+            # _get_bookmarks_resume_cursor's own docstring: this picks up
+            # wherever poll_twitter_updates.py's incremental catch-up
+            # currently stands instead of re-scanning ground it already
+            # covered, and pushes that frontier further back in one go.
+            candidates, resume_cursor = fetch_account_bookmarks(
+                _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
+            )
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:
             logging.exception('Account bookmarks scan failed')
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
+        _save_bookmarks_resume_cursor(resume_cursor)
 
         already_archived = 0
         created_items = []
