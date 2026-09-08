@@ -41,7 +41,7 @@ from item.twitter_gql_fetch import (
     TwitterGQLError,
     fetch_account_bookmarks,
     fetch_account_likes,
-    verify_credentials,
+    resolve_own_account,
 )
 from item.views import ItemViewSet, _find_item_by_url
 
@@ -106,12 +106,27 @@ class Command(BaseCommand):
         self._drain_one()
 
     def _discover(self, state: TwitterPollState):
+        # Resolving screen_name is ONLY needed for Likes discovery below —
+        # Bookmarks needs nothing but auth_token/ct0 (session-based). So a
+        # failure here (most commonly: twid not configured yet — see
+        # resolve_own_account's own docstring for why this replaced the old
+        # verify_credentials() v1.1 call, which started 404ing) skips Likes
+        # for this tick rather than aborting the whole tick — Bookmarks
+        # discovery still runs either way, and this does NOT count as a
+        # tick failure (no auth-failure Discord notification), since it's
+        # very often just "twid isn't set up" rather than a real auth
+        # problem with credentials that DO work fine for Bookmarks.
         if not state.screen_name:
-            result = verify_credentials()
-            if not result.get('ok'):
-                raise TwitterAuthError(result.get('reason') or 'verify_credentials failed')
-            state.screen_name = result.get('screen_name') or ''
-            state.save(update_fields=['screen_name'])
+            result = resolve_own_account()
+            if result.get('ok'):
+                state.screen_name = result.get('screen_name') or ''
+                state.save(update_fields=['screen_name'])
+            else:
+                logger.warning(
+                    'poll_twitter_updates: could not resolve own account this tick '
+                    '(Likes discovery skipped, Bookmarks unaffected): %s',
+                    result.get('reason'),
+                )
 
         known_ids = set(
             Item.objects.filter(source__in=_KNOWN_TWITTER_SOURCES)

@@ -17,7 +17,7 @@ import json
 import re
 from urllib.parse import urljoin, urlparse
 
-from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup
+from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
 from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
@@ -43,7 +43,10 @@ try:
 except Exception:
     HAVE_YTDLP = False
 try:
-    from .twitter_gql_fetch import fetch_twitter_media, fetch_account_retweets, fetch_tweet_description, TwitterAuthError
+    from .twitter_gql_fetch import (
+        fetch_twitter_media, fetch_account_retweets, fetch_account_bookmarks,
+        fetch_tweet_description, TwitterAuthError,
+    )
     HAVE_TWITTER_GQL = True
 except Exception:
     HAVE_TWITTER_GQL = False
@@ -205,7 +208,7 @@ def _run_account_retweets_job(screen_name, max_items):
 
     created, skipped, failed = 0, 0, 0
     for rt in result.get('retweets', []):
-        outcome = _archive_retweet_candidate(rt)
+        outcome = _archive_social_candidate(rt, source='twitter_rt')
         if outcome == 'created':
             created += 1
         elif outcome == 'skipped':
@@ -219,27 +222,29 @@ def _run_account_retweets_job(screen_name, max_items):
     )
 
 
-def _archive_retweet_candidate(rt):
-    """Create an Item (+ download its images) for one retweet candidate
-    dict, as produced by twitter_gql_fetch.fetch_account_retweets:
+def _archive_social_candidate(cand, source):
+    """Create an Item (+ download its images) for one candidate dict, as
+    produced by either twitter_gql_fetch.fetch_account_retweets
+    ('retweets' entries) or fetch_account_bookmarks/fetch_account_likes
+    (their own return lists) — all three share the exact same shape:
     {'tweet_id', 'screen_name', 'media_urls', 'description'}.
 
-    Shared by the "auto" background scan (_run_account_retweets_job) and the
-    "manual review" import endpoint (import_retweets_view) so both paths
-    dedupe/create/download identically.
+    Shared by every "auto" background scan (_run_account_retweets_job,
+    _run_account_bookmarks_job) and their "manual review" queue-mode
+    siblings (scan_account_retweets_view, scan_account_bookmarks_view) so
+    all of them dedupe/create/download identically — only `source`
+    differs ('twitter_rt' / 'twitter_bookmark' / 'twitter_like').
 
-    `screen_name` here is deliberately NEVER the scanned account — only the
-    retweet's original author, or blank if that couldn't be read from the
-    API response (Twitter occasionally omits it — see
-    fetch_account_retweets' page-retry). A blank artist is left for the
-    user to fill in later via the edit queue rather than silently guessing
-    wrong (attributing the RT to whoever's timeline it came from would be
-    incorrect and easy to miss).
+    `screen_name` here is deliberately NEVER the polled/scanned account —
+    only the tweet's original author, or blank if that couldn't be read
+    from the API response (Twitter occasionally omits it). A blank artist
+    is left for the user to fill in later via the edit queue rather than
+    silently guessing wrong.
 
     Returns 'created', 'skipped' (already archived), or 'failed'.
     """
-    tweet_id = rt.get('tweet_id')
-    author = rt.get('screen_name') or ''
+    tweet_id = cand.get('tweet_id')
+    author = cand.get('screen_name') or ''
     url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
 
     if _find_item_by_url(url):
@@ -248,28 +253,28 @@ def _archive_retweet_candidate(rt):
     try:
         item = Item.objects.create(
             external_id=int(tweet_id),
-            source='twitter_rt',
+            source=source,
             situation='',
             titles=[],
             characters=[],
             artist=author,
             link=url,
             tags=None,
-            description=rt.get('description') or '',
+            description=cand.get('description') or '',
         )
     except Exception:
-        logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
+        logging.exception('Failed to create Item for tweet %s (source=%s)', tweet_id, source)
         return 'failed'
 
     saved_any = False
-    for idx, media_url in enumerate(rt.get('media_urls') or []):
+    for idx, media_url in enumerate(cand.get('media_urls') or []):
         try:
             body, ctype = _fetch_image_via_requests(media_url, min_size=MIN_IMAGE_FETCH_BYTES)
             if body and ctype:
                 PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
                 saved_any = True
         except Exception:
-            logging.exception('Failed to download retweet media %s for tweet %s', media_url, tweet_id)
+            logging.exception('Failed to download media %s for tweet %s', media_url, tweet_id)
 
     if saved_any:
         return 'created'
@@ -277,6 +282,56 @@ def _archive_retweet_candidate(rt):
     # empty Item rather than leave a preview-less row behind.
     item.delete()
     return 'failed'
+
+
+# Sources counted as "already known" when deciding where fetch_account_
+# bookmarks should stop paging — mirrors poll_twitter_updates.py's own
+# _KNOWN_TWITTER_SOURCES constant (kept as a separate copy rather than
+# imported from there: a management command module is the wrong direction
+# to import business logic FROM into the main views module).
+_TWITTER_SOURCES_FOR_DEDUPE = ['twitter_bookmark', 'twitter_like', 'twitter_rt']
+
+
+def _known_twitter_ids():
+    known_ids = set(
+        Item.objects.filter(source__in=_TWITTER_SOURCES_FOR_DEDUPE)
+        .values_list('external_id', flat=True)
+    )
+    known_ids |= set(SocialFetchQueueItem.objects.values_list('external_id', flat=True))
+    return known_ids
+
+
+def _run_account_bookmarks_job(max_pages):
+    """Auto-mode background bookmark catch-up — mirrors
+    _run_account_retweets_job exactly, just for the logged-in account's own
+    bookmarks (session-based; no screen_name needed) instead of a scanned
+    account's public timeline. Exists alongside poll_twitter_updates.py's
+    own automatic discovery (which does this on every tick) for a one-off,
+    on-demand "fetch everything pending right now" catch-up — most useful
+    right after the poller itself has been unable to run (e.g. an auth
+    failure) and a backlog has piled up.
+    """
+    known_ids = _known_twitter_ids()
+    try:
+        candidates = fetch_account_bookmarks(known_ids, max_pages=max_pages)
+    except Exception:
+        logging.exception('Account bookmarks fetch failed')
+        return
+
+    created, skipped, failed = 0, 0, 0
+    for cand in candidates:
+        outcome = _archive_social_candidate(cand, source='twitter_bookmark')
+        if outcome == 'created':
+            created += 1
+        elif outcome == 'skipped':
+            skipped += 1
+        else:
+            failed += 1
+
+    logging.info(
+        'Account bookmarks fetch: created=%d skipped=%d failed=%d (max_pages=%d)',
+        created, skipped, failed, max_pages,
+    )
 
 
 def _normalize_char_name(name):
@@ -2135,6 +2190,102 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'pages_fetched': result.get('pages_fetched', 0),
         })
 
+    @action(detail=False, methods=['post'], url_path='fetch_account_bookmarks')
+    def fetch_account_bookmarks_view(self, request):
+        """Auto-mode background bookmark catch-up (see
+        _run_account_bookmarks_job) — mirrors fetch_account_retweets_view,
+        just for the logged-in account's own bookmarks (session-based; no
+        screen_name needed). Requires TWITTER_AUTH_TOKEN/TWITTER_CT0. Most
+        useful as a manual "catch up now" alongside poll_twitter_updates.py's
+        own automatic per-tick discovery, e.g. right after a period where
+        the poller itself couldn't authenticate and a backlog piled up.
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            max_pages = int(data.get('max_pages') or 5)
+        except (TypeError, ValueError):
+            max_pages = 5
+        max_pages = max(1, min(max_pages, 20))
+
+        try:
+            threading.Thread(
+                target=_run_account_bookmarks_job,
+                args=(max_pages,),
+                daemon=True,
+            ).start()
+        except Exception:
+            logging.exception('Failed to start background bookmarks fetch job')
+            return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'processing', 'max_pages': max_pages}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['post'], url_path='scan_account_bookmarks')
+    def scan_account_bookmarks_view(self, request):
+        """Queue-mode bookmark scan — mirrors scan_account_retweets_view
+        exactly (see its own docstring for why: bare Items only, no preview
+        fetch here, so the caller runs each one through the normal
+        fetch-then-review flow), just for the logged-in account's own
+        bookmarks instead of a scanned account's timeline. Runs
+        synchronously — a handful of GraphQL page requests, no image
+        downloads.
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            max_pages = int(data.get('max_pages') or 5)
+        except (TypeError, ValueError):
+            max_pages = 5
+        max_pages = max(1, min(max_pages, 20))
+
+        try:
+            candidates = fetch_account_bookmarks(_known_twitter_ids(), max_pages=max_pages)
+        except TwitterAuthError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception as e:
+            logging.exception('Account bookmarks scan failed')
+            return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        already_archived = 0
+        created_items = []
+        for cand in candidates:
+            author = cand.get('screen_name') or ''
+            tweet_id = cand.get('tweet_id')
+            url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
+            if _find_item_by_url(url):
+                already_archived += 1
+                continue
+            try:
+                item = Item.objects.create(
+                    external_id=int(tweet_id),
+                    source='twitter_bookmark',
+                    situation='',
+                    titles=[],
+                    characters=[],
+                    artist=author,
+                    link=url,
+                    tags=None,
+                    description=cand.get('description') or '',
+                )
+            except Exception:
+                logging.exception('Failed to create Item for bookmarked tweet %s', tweet_id)
+                continue
+            created_items.append({'id': item.id, 'link': item.link})
+
+        return Response({
+            'items': created_items,
+            'already_archived': already_archived,
+            'max_pages': max_pages,
+        })
+
     @action(detail=True, methods=['post'], url_path='save_previews')
     def save_previews(self, request, pk=None):
         """Accepts client-provided images (data_uri) and persists them as PreviewImage.
@@ -2871,11 +3022,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='twitter_auth_check')
     def twitter_auth_check(self, request):
-        """Twitter認証情報の有効性を確認する診断エンドポイント。"""
+        """Twitter認証情報の有効性を確認する診断エンドポイント。
+
+        resolve_own_account()経由(twid Cookie必須) — 古いverify_credentials()
+        (twitter.com の v1.1 API)は2026年9月頃からHTTP 404を返すようになり
+        使えなくなったため切り替えた(resolve_own_accountの docstring参照)。
+        """
         if not HAVE_TWITTER_GQL:
             return Response({'ok': False, 'reason': 'twitter_gql_fetch module not available'})
-        from .twitter_gql_fetch import verify_credentials
-        result = verify_credentials()
+        from .twitter_gql_fetch import resolve_own_account
+        result = resolve_own_account()
         return Response(result)
 
 

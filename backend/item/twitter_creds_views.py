@@ -38,11 +38,12 @@ def twitter_creds_set_view(request):
 
     auth_token = (data.get('auth_token') or '').strip()
     ct0 = (data.get('ct0') or '').strip()
+    twid = data.get('twid')  # None (key absent) or '' both mean "leave unchanged" — see set_credentials
     if not auth_token or not ct0:
         return JsonResponse({'detail': 'auth_token and ct0 are both required'}, status=400)
 
     try:
-        twitter_creds.set_credentials(auth_token, ct0)
+        twitter_creds.set_credentials(auth_token, ct0, twid=twid)
     except twitter_creds.TwitterCredsConfigError as e:
         return JsonResponse({'detail': str(e)}, status=500)
 

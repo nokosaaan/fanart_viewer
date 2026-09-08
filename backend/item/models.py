@@ -94,6 +94,17 @@ class TwitterCredential(models.Model):
     """
     encrypted_auth_token = models.BinaryField(null=True, blank=True)
     encrypted_ct0 = models.BinaryField(null=True, blank=True)
+    # Optional third cookie (`twid`, format "u=<numeric user id>") — X sets
+    # this for every logged-in session, and it's the only reliable
+    # "who am I" signal poll_twitter_updates.py's own discovery has left
+    # after https://twitter.com/i/api/1.1/account/verify_credentials.json
+    # (the old REST endpoint it used to resolve this) started returning
+    # HTTP 404 — see item.twitter_gql_fetch.resolve_own_account, which
+    # parses the numeric id out of this instead of calling that endpoint at
+    # all. Optional (blank means poll_twitter_updates.py's Likes discovery
+    # just can't run — Bookmarks discovery doesn't need this) since a
+    # deployment set up before this existed still has auth_token/ct0 only.
+    encrypted_twid = models.BinaryField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -149,9 +160,9 @@ class TwitterPollState(models.Model):
     (see item.notify.notify_discord, poll_twitter_updates)。
 
     `screen_name`はいいね一覧の取得に必要なログイン中アカウント自身の
-    screen_name — verify_credentials()の結果をキャッシュしたもの。
-    毎tickでverify_credentials()を呼ぶとレート制限の消費が増えるため、
-    未設定または直近で認証エラーが起きた時だけ再解決する。
+    screen_name — twitter_gql_fetch.resolve_own_account()の結果をキャッシュ
+    したもの。毎tickで呼ぶとレート制限の消費が増えるため、未設定または
+    直近で認証エラーが起きた時だけ再解決する。
     """
     screen_name = models.CharField(max_length=64, blank=True, default='')
     last_success_at = models.DateTimeField(null=True, blank=True)

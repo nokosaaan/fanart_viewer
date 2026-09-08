@@ -1035,28 +1035,45 @@ def fetch_account_likes(screen_name: str, known_ids: set, max_pages: int = 1) ->
     )
 
 
-def verify_credentials() -> dict:
-    """
-    認証情報が有効かテストする。結果を dict で返す。
-    管理画面や診断エンドポイントから呼び出す用途向け。
+def resolve_own_account() -> dict:
+    """{'ok': True, 'screen_name': ..., 'id': ...} for the logged-in
+    account. Used to call the old v1.1 REST endpoint
+    (https://twitter.com/i/api/1.1/account/verify_credentials.json,
+    formerly this module's verify_credentials()), which started returning
+    HTTP 404 as of 2026-09 — X appears to have retired it entirely (a 404
+    rather than a 401/403 means the URL itself no longer exists, not that
+    these particular credentials are bad).
 
-    twitter.com の内部 API を使う（api.twitter.com の v1.1 は OAuth 1.0a 必須）。
+    Instead, parses the numeric user id straight out of the `twid` session
+    cookie (format "u=<digits>", URL-decoded from "u%3D<digits>" — set by
+    X for every logged-in browser session, same place auth_token/ct0 are
+    copied from) and resolves its screen_name via the existing UserByRestId
+    GraphQL query (_resolve_screen_name_by_user_id — already used
+    elsewhere in this module to fill in a retweet/bookmark's author when
+    the timeline response omits it), never touching the dead endpoint.
+
+    This is poll_twitter_updates.py's own "who am I" step (needed only to
+    know whose Likes to fetch — Bookmarks discovery doesn't need this at
+    all), so an unset/unparseable twid fails soft here with a reason
+    string rather than raising, same shape as verify_credentials()'s
+    return value.
     """
+    from .twitter_creds import get_twid
+
     auth_token, ct0 = _get_creds()
-
     if not auth_token or not ct0:
         return {"ok": False, "reason": "TWITTER_AUTH_TOKEN または TWITTER_CT0 が未設定"}
 
-    try:
-        # twitter.com の内部 v1.1 エンドポイントは Bearer + Cookie で呼べる
-        resp = requests.get(
-            "https://twitter.com/i/api/1.1/account/verify_credentials.json",
-            headers=_build_headers(auth_token, ct0),
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            return {"ok": True, "screen_name": data.get("screen_name"), "id": data.get("id_str")}
-        return {"ok": False, "reason": f"HTTP {resp.status_code}", "body": resp.text[:200]}
-    except Exception as e:
-        return {"ok": False, "reason": str(e)}
+    twid = get_twid()
+    if not twid:
+        return {"ok": False, "reason": "twid Cookieが未設定です(DevTools → Application → Cookies から twid をコピーして保存してください)"}
+
+    m = re.search(r"(\d+)", twid)
+    if not m:
+        return {"ok": False, "reason": f"twid Cookieの形式が不正です: {twid[:50]!r}"}
+    user_id = m.group(1)
+
+    screen_name = _resolve_screen_name_by_user_id(user_id, auth_token, ct0)
+    if not screen_name:
+        return {"ok": False, "reason": f"user_id={user_id} からscreen_nameを解決できませんでした"}
+    return {"ok": True, "screen_name": screen_name, "id": user_id}

@@ -1,7 +1,7 @@
-"""Encrypted storage for the Twitter/X session cookies (auth_token, ct0)
-used by the scraping fetchers, as an alternative to setting
-TWITTER_AUTH_TOKEN/TWITTER_CT0 in .env (which requires recreating the `web`
-container to pick up a change).
+"""Encrypted storage for the Twitter/X session cookies (auth_token, ct0,
+and optionally twid) used by the scraping fetchers, as an alternative to
+setting TWITTER_AUTH_TOKEN/TWITTER_CT0 in .env (which requires recreating
+the `web` container to pick up a change).
 
 Values are stored in the DB (TwitterCredential, a single row) encrypted
 with Fernet (symmetric, reversible — NOT a password hash: these tokens are
@@ -12,8 +12,9 @@ out of the DB entirely, so a DB-only leak (e.g. the Google Drive backup)
 can't be turned back into usable cookies without also having that key.
 
 This module never exposes the decrypted values through any return value
-meant for an HTTP response — get_credentials() is for internal fetcher use
-only. See item.twitter_creds_views for the admin-only, write-only API.
+meant for an HTTP response — get_credentials()/get_twid() are for internal
+fetcher use only. See item.twitter_creds_views for the admin-only,
+write-only API.
 """
 import os
 
@@ -36,8 +37,15 @@ def _fernet():
     return Fernet(key.encode())
 
 
-def set_credentials(auth_token: str, ct0: str):
-    """Encrypt and persist auth_token/ct0, replacing any previously stored value."""
+def set_credentials(auth_token: str, ct0: str, twid: str | None = None):
+    """Encrypt and persist auth_token/ct0, replacing any previously stored
+    value. `twid` is optional and separately-preserving: pass None (or a
+    blank string) to leave whatever twid was stored before untouched —
+    auth_token/ct0 need refreshing far more often than twid (which rarely
+    changes), so a form that only updates the first two shouldn't silently
+    wipe out an already-configured twid. Pass a non-blank value to set/
+    replace it.
+    """
     f = _fernet()
     enc_auth = f.encrypt(auth_token.strip().encode())
     enc_ct0 = f.encrypt(ct0.strip().encode())
@@ -47,6 +55,8 @@ def set_credentials(auth_token: str, ct0: str):
         row = TwitterCredential()
     row.encrypted_auth_token = enc_auth
     row.encrypted_ct0 = enc_ct0
+    if twid is not None and twid.strip():
+        row.encrypted_twid = f.encrypt(twid.strip().encode())
     row.save()
 
 
@@ -69,6 +79,19 @@ def get_credentials() -> tuple[str, str]:
     )
 
 
+def get_twid() -> str:
+    """Return the stored twid cookie value, or '' if never set — falls back
+    to the TWITTER_TWID env var for parity with get_credentials(), though in
+    practice the DB-stored form is the only way most people would set this
+    (added after TWITTER_AUTH_TOKEN/TWITTER_CT0's env-var path existed).
+    """
+    row = TwitterCredential.objects.first()
+    if row is not None and row.encrypted_twid:
+        f = _fernet()
+        return f.decrypt(bytes(row.encrypted_twid)).decode()
+    return os.environ.get('TWITTER_TWID', '').strip()
+
+
 def has_credentials() -> bool:
     auth_token, ct0 = get_credentials()
     return bool(auth_token and ct0)
@@ -82,7 +105,13 @@ def status() -> dict:
     """
     row = TwitterCredential.objects.first()
     if row is not None and row.encrypted_auth_token and row.encrypted_ct0:
-        return {'configured': True, 'source': 'db', 'updated_at': row.updated_at.isoformat()}
+        return {
+            'configured': True, 'source': 'db', 'updated_at': row.updated_at.isoformat(),
+            'has_twid': bool(row.encrypted_twid),
+        }
     if os.environ.get('TWITTER_AUTH_TOKEN') and os.environ.get('TWITTER_CT0'):
-        return {'configured': True, 'source': 'env', 'updated_at': None}
-    return {'configured': False, 'source': 'none', 'updated_at': None}
+        return {
+            'configured': True, 'source': 'env', 'updated_at': None,
+            'has_twid': bool(os.environ.get('TWITTER_TWID')),
+        }
+    return {'configured': False, 'source': 'none', 'updated_at': None, 'has_twid': False}
