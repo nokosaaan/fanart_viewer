@@ -77,9 +77,13 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
 
   // Close the single-box popover on any click outside it, instead of only
   // via its own "閉じる" button. Both the box itself and the popover's own
-  // wrapper div already call ev.stopPropagation() on click (see below), so
-  // this only ever fires for a click that's genuinely outside both — no
-  // extra "is this click on the owning box" check needed here.
+  // wrapper div stop propagation of BOTH mousedown and click (see below) —
+  // mousedown specifically, not just click, because this listener fires on
+  // mousedown: without stopping that too, clicking a suggestion button
+  // inside the popover would close it (unmounting the button) before the
+  // browser ever dispatches the follow-up click, so the button's own
+  // onClick would silently never fire — reported as "clicking a character
+  // in the list just closes the popover instead of picking it".
   useEffect(() => {
     if (!activeBoxId) return
     function handleOutsideMouseDown() { setActiveBoxId(null) }
@@ -225,16 +229,29 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
     setCharQuery('')
   }
 
-  // Adds `name` to every currently multi-selected box — always ADDS (never
-  // toggles/removes), unlike toggleCharacter's single-box behavior: the
-  // whole point here is "label all of these the same", so a box that
-  // already has this name is just left alone rather than having it
-  // stripped back off.
-  function addCharacterToSelectedBoxes(name) {
+  // Whether `name` is already assigned to EVERY currently multi-selected
+  // box — drives the highlighted/checked look in the multi-select bar so
+  // a mis-click is visible at a glance, the same way a single box's own
+  // popover highlights its already-assigned names.
+  function isAssignedToAllSelected(name) {
+    if (selectedBoxIds.size === 0) return false
+    return boxes.every(b => !selectedBoxIds.has(b.id) || b.characters.includes(name))
+  }
+
+  // Toggles `name` across every currently multi-selected box: if it's
+  // already on ALL of them, clicking again removes it from all (undoing a
+  // mis-assignment) — if it's missing from any, clicking adds it to
+  // whichever selected boxes don't have it yet (the original "label all
+  // of these the same" behavior). Symmetric with toggleCharacter's
+  // single-box behavior, just applied to a whole selection at once.
+  function toggleCharacterForSelectedBoxes(name) {
     const trimmed = name.trim()
     if (!trimmed || selectedBoxIds.size === 0) return
+    const removeFromAll = isAssignedToAllSelected(trimmed)
     setBoxes(prev => prev.map(b => {
-      if (!selectedBoxIds.has(b.id) || b.characters.includes(trimmed)) return b
+      if (!selectedBoxIds.has(b.id)) return b
+      if (removeFromAll) return { ...b, characters: b.characters.filter(c => c !== trimmed) }
+      if (b.characters.includes(trimmed)) return b
       return { ...b, characters: [...b.characters, trimmed] }
     }))
     setCharQuery('')
@@ -316,7 +333,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
         <div style={{ marginBottom: 10, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>
-              {selectedBoxIds.size}件の矩形を選択中 — 選んだキャラ名を全てに割り当てます
+              {selectedBoxIds.size}件の矩形を選択中 — 選んだキャラ名を全てに割り当てます(緑色=割り当て済み、もう一度クリックで取り消せます)
             </span>
             <button onClick={() => setSelectedBoxIds(new Set())}
               style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
@@ -327,20 +344,26 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
             placeholder="キャラ名で検索/新規入力"
             value={charQuery}
             onChange={e => setCharQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) addCharacterToSelectedBoxes(charQuery) }}
+            onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) toggleCharacterForSelectedBoxes(charQuery) }}
             style={{
               width: '100%', boxSizing: 'border-box', background: '#0f172a', color: '#f1f5f9',
               border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
             }}
           />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
-            {charSuggestions.slice(0, 20).map(c => (
-              <button key={c} onClick={() => addCharacterToSelectedBoxes(c)}
-                style={{ fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', background: '#334155', color: '#f1f5f9', cursor: 'pointer' }}
-              >{c}</button>
-            ))}
+            {charSuggestions.slice(0, 20).map(c => {
+              const assigned = isAssignedToAllSelected(c)
+              return (
+                <button key={c} onClick={() => toggleCharacterForSelectedBoxes(c)}
+                  style={{
+                    fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                    background: assigned ? '#166534' : '#334155', color: assigned ? '#dcfce7' : '#f1f5f9',
+                  }}
+                >{assigned ? '✓ ' : ''}{c}</button>
+              )
+            })}
             {charQuery.trim() && !charSuggestions.some(c => c.toLowerCase() === charQuery.trim().toLowerCase()) && (
-              <button onClick={() => addCharacterToSelectedBoxes(charQuery)}
+              <button onClick={() => toggleCharacterForSelectedBoxes(charQuery)}
                 style={{ fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', background: '#1e3a8a', color: '#93c5fd', cursor: 'pointer' }}
               >＋「{charQuery.trim()}」を新規追加</button>
             )}
@@ -372,6 +395,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
           return (
             <div key={b.id}
               onClick={ev => { ev.stopPropagation(); toggleBoxSelection(b.id, ev) }}
+              onMouseDown={ev => ev.stopPropagation()}
               style={{
                 position: 'absolute', left: x1 * s, top: y1 * s, width: (x2 - x1) * s, height: (y2 - y1) * s,
                 border: `2px solid ${isLabeled ? '#22c55e' : '#f59e0b'}`,
@@ -397,7 +421,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
               >×</button>
 
               {activeBoxId === b.id && (
-                <div onClick={ev => ev.stopPropagation()} style={{
+                <div onClick={ev => ev.stopPropagation()} onMouseDown={ev => ev.stopPropagation()} style={{
                   position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 10,
                   background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 8,
                   width: 220, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
