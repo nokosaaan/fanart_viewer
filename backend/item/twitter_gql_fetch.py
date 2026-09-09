@@ -1105,7 +1105,13 @@ def resolve_own_account() -> dict:
     if not twid:
         return {"ok": False, "reason": "twid Cookieが未設定です(DevTools → Application → Cookies から twid をコピーして保存してください)"}
 
-    m = re.search(r"(\d+)", twid)
+    # Anchored to "u=" or its URL-encoded form "u%3D" — a bare r"(\d+)"
+    # matched the stray "3" inside "%3D" itself before ever reaching the
+    # real id whenever twid was copied in its still-encoded form (verified
+    # live: a real cookie value "u%3D1234567890123456789" resolved to
+    # user_id=3, not the real id, causing every UserByRestId lookup to
+    # fail against a nonexistent account).
+    m = re.search(r"u(?:=|%3D)(\d+)", twid, re.IGNORECASE)
     if not m:
         return {"ok": False, "reason": f"twid Cookieの形式が不正です: {twid[:50]!r}"}
     user_id = m.group(1)

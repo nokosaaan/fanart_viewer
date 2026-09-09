@@ -21,10 +21,20 @@ fetch_account_retweets for the pattern this mirrors):
      soon as a tweet already known (already an Item, or already queued) is
      seen — so this only ever costs a couple of lightweight GraphQL calls
      per tick, not a full history re-scan.
-  2. drain: pop up to PollerSettings.items_per_tick oldest still-pending
-     queue rows and run each through the exact same fetch_and_save_preview
-     flow a manual bookmark_fetch call uses. Rows already fetched manually
-     in the meantime are skipped without counting against this budget.
+  2. drain: pop up to PollerSettings.items_per_tick still-pending queue
+     rows, NEWEST tweet first (ordered by external_id — Twitter's own
+     snowflake id, monotonically increasing with creation time — not by
+     when this app happened to discover it), and run each through the
+     exact same fetch_and_save_preview flow a manual bookmark_fetch call
+     uses. Rows already fetched manually in the meantime (or found already
+     saved with a preview) are skipped — same "already_processed" check
+     bookmark_fetch itself does — without counting against this budget,
+     same as the manual browser-extension flow. Previously drained
+     oldest-of-the-current-discovery-batch first, which meant a brand new
+     bookmark could sit behind an entire backlog before ever being tried;
+     with the frequency itself now user-configurable (see PollerSettings),
+     there's no longer a reason to prefer clearing the backlog over
+     surfacing what was JUST bookmarked/liked.
 - Twitter fetches for a twitter.com/x.com URL go through gallery-dl/
   twitter_gql/yt-dlp (plain HTTP, no headless browser) well before any
   Playwright fallback, which is only ever triggered by an explicit
@@ -180,13 +190,23 @@ class Command(BaseCommand):
         state.likes_resume_cursor = likes_resume or ''
         state.save(update_fields=['bookmarks_resume_cursor', 'likes_resume_cursor'])
 
-        self._enqueue_new(bookmarks, 'bookmark')
-        self._enqueue_new(likes, 'like')
+        queued_bookmarks = self._enqueue_new(bookmarks, 'bookmark')
+        queued_likes = self._enqueue_new(likes, 'like')
+        logger.info(
+            'poll_twitter_updates: discovery found %d bookmark(s) (%d newly queued), '
+            '%d like(s) (%d newly queued)',
+            len(bookmarks), queued_bookmarks, len(likes), queued_likes,
+        )
 
     def _enqueue_new(self, candidates, kind):
-        # candidates arrive newest-first; reverse so the oldest-in-this-
-        # batch is inserted (and therefore dequeued) first.
-        for cand in reversed(candidates):
+        # candidates arrive newest-first (see fetch_account_bookmarks/
+        # _fetch_social_timeline) — inserted in that same order. _drain
+        # doesn't actually rely on insertion order to decide what's next
+        # (it orders by external_id, i.e. tweet recency, not row id) but
+        # keeping insertion order matching fetch order avoids surprises
+        # for anything that inspects this table directly (e.g. the admin).
+        queued = 0
+        for cand in candidates:
             tweet_id = int(cand['tweet_id'])
             screen_name = cand.get('screen_name') or ''
             url = (
@@ -198,13 +218,16 @@ class Command(BaseCommand):
             if existing is not None and self._has_preview(existing):
                 continue  # already fetched — nothing to do
 
-            SocialFetchQueueItem.objects.get_or_create(
+            _row, created = SocialFetchQueueItem.objects.get_or_create(
                 external_id=tweet_id,
                 defaults={
                     'kind': kind, 'screen_name': screen_name, 'url': url,
                     'description': cand.get('description') or '',
                 },
             )
+            if created:
+                queued += 1
+        return queued
 
     @staticmethod
     def _has_preview(item: Item) -> bool:
@@ -252,16 +275,25 @@ class Command(BaseCommand):
 
     def _drain(self, max_items: int):
         fetched = 0
+        skipped = 0
+        failed = 0
         while fetched < max_items:
-            row = SocialFetchQueueItem.objects.filter(status='pending').order_by('id').first()
+            # Newest tweet first (external_id is Twitter's own snowflake
+            # id — monotonically increasing with creation time, so this
+            # is a direct, durable "most recent first" ordering) — was
+            # previously oldest-of-the-current-batch-first, which meant a
+            # brand new bookmark could sit behind an entire backlog before
+            # ever being processed. See the module docstring.
+            row = SocialFetchQueueItem.objects.filter(status='pending').order_by('-external_id').first()
             if row is None:
-                return
+                break
 
             existing = _find_item_by_url(row.url)
             if existing is not None and self._has_preview(existing):
                 row.status = 'skipped'
                 row.processed_at = timezone.now()
                 row.save(update_fields=['status', 'processed_at'])
+                skipped += 1
                 continue  # doesn't count against this tick's fetch budget
 
             item = existing or Item.objects.create(
@@ -282,6 +314,15 @@ class Command(BaseCommand):
             row.processed_at = timezone.now()
             row.save(update_fields=['status', 'processed_at'])
             fetched += 1
+            if not ok:
+                failed += 1
+
+        remaining = SocialFetchQueueItem.objects.filter(status='pending').count()
+        logger.info(
+            'poll_twitter_updates: drain fetched %d (of which %d failed), skipped %d '
+            'already-processed, %d still pending',
+            fetched, failed, skipped, remaining,
+        )
 
     @staticmethod
     def _fetch_item(item: Item, url: str) -> bool:
