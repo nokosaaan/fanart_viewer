@@ -523,6 +523,11 @@ function AppMain({ role, onLogout }){
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
           <HeaderMenu items={[
             { label: 'Preview Timeline', onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen },
+            // exe版はブラウザではなくpywebviewの専用ウィンドウなので、F5/Ctrl+Rの
+            // ネイティブなショートカットに頼らず明示的な再読み込み手段を用意 —
+            // サーバー側で状態が変わった(認証情報を保存した、他のウィンドウで
+            // データを更新した等)後に最新の状態を確実に反映させるため。
+            { label: '再読み込み', onClick: () => window.location.reload() },
             ...(readOnly ? [] : [
               { divider: true },
               { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
