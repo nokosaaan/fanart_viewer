@@ -106,6 +106,24 @@ exeはコンパイル済みのスナップショットなので、`git pull`だ�
   そのClient ID/Secretを「認証する」フォームに貼り付けてください — システムの既定ブラウザで
   Googleの認証画面が開き、得られたトークンが自動的に保存されます（.envの編集は不要です）。
 
+### 6. キャラクター分類器の学習
+
+パッケージ済みのビルドには学習済みの分類器は一切同梱されていません（真っさらな状態）。
+自分のDBに溜まった確認済みキャラクターの画像を使って、好きなタイミングで学習させます：
+
+```powershell
+cd exe
+.\train.ps1
+```
+
+進捗は`%USERPROFILE%\.fanart_viewer\training.log`に出力され、`train.ps1`がリアルタイムで
+tailして表示します。追加の引数（`--min-images`など、`train_character_classifier`が
+受け付けるもの）はそのまま渡せます：
+
+```powershell
+.\train.ps1 --min-images 20 --include-multi-character
+```
+
 ## Twitter/X bookmark trigger
 
 The backend exposes `POST /api/items/bookmark_fetch/` for browser-side automation. Use the browser extension in [browser-extension/](browser-extension/) to detect the click and POST the current tweet URL to the local backend. The server resolves the matching Item, fetches the image candidates, and saves them to the DB.
