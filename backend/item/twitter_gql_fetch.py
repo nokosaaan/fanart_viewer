@@ -863,12 +863,23 @@ def _entries_from_instructions(instructions) -> list:
 def _fetch_social_timeline(
     query_id: str, endpoint_name: str, variables: dict, path_keys,
     field_toggles, auth_token: str, ct0: str, known_ids: set,
-    max_pages: int, start_cursor: str | None = None,
+    max_pages: int, start_cursor: str | None = None, stop_at_known: bool = True,
 ) -> tuple[list[dict], str | None]:
     """Bookmarks/Likesページを新しい順に辿り、`known_ids`に含まれる
     tweet_idへ到達した時点(=前回チェック以降の差分を汲み終えた時点)で
-    打ち切る。最大max_pagesページまで(未知のIDばかりが続く初回実行など
-    向けの安全弁)。画像/動画の無いツイートは保存対象外として除外する。
+    打ち切る(`stop_at_known=True`、デフォルト)。最大max_pagesページまで
+    (未知のIDばかりが続く初回実行など向けの安全弁)。画像/動画の無い
+    ツイートは保存対象外として除外する。
+
+    `stop_at_known=False`("完全スキャン"モード): 既知のtweet_idに当たっても
+    打ち切らず、そのIDだけスキップして残りのページを最後まで走査する。
+    通常の打ち切りロジックは「既知のIDより古いものは全部既知」という前提
+    (Twitterのタイムラインを一度も取りこぼしなく辿り続けている限りは
+    正しい)に依存しているが、一時的な不具合等で一部だけ取り込みそびれた
+    "抜け"がある場合、新しい方から見て最初に当たった既知IDでいつも通り
+    打ち切ってしまうと、その抜けより古い/新しいに関わらず、その抜け自体に
+    二度と到達できない(=stop_at_known=Trueの通常運用では原理的に発見
+    不可能)。都度手動で実行する完全スキャン用の抜け穴として用意。
 
     `start_cursor`: 前回この関数を呼んだ時にmax_pages尽きるまで既知のIDに
     辿り着けなかった場合、続きから辿るためのcursor(Noneなら最新から)。
@@ -886,7 +897,9 @@ def _fetch_social_timeline(
     した場合はNone(=次回は最新から見て問題ない、追いついた)。
     max_pages分すべて使い切ってもまだ未知のIDばかりだった場合のみ、続きを
     示すcursorが入る(=呼び出し元はこれを保存し、次回はここから再開する
-    こと)。
+    こと)。`stop_at_known=False`の場合は打ち切り自体が起きないので、常に
+    max_pages分使い切った扱いになりresume_cursorが入る — 呼び出し側が
+    保存して次回の完全スキャンをこの続きから行う想定。
 
     Raises:
         TwitterAuthError: 認証エラー
@@ -966,8 +979,10 @@ def _fetch_social_timeline(
                 continue
             tweet_id_int = int(tweet_id)
             if tweet_id_int in known_ids:
-                stop = True
-                break
+                if stop_at_known:
+                    stop = True
+                    break
+                continue  # full-scan mode: skip it, keep looking for gaps behind it
 
             media_urls = _extract_media_urls(tweet)
             if not media_urls:
@@ -1004,7 +1019,7 @@ def _fetch_social_timeline(
 
 
 def fetch_account_bookmarks(
-    known_ids: set, max_pages: int = 1, start_cursor: str | None = None,
+    known_ids: set, max_pages: int = 1, start_cursor: str | None = None, stop_at_known: bool = True,
 ) -> tuple[list[dict], str | None]:
     """ログイン中アカウントのブックマークを新しい順に走査し、`known_ids`
     未収載のものだけ画像URL・本文つきで返す(新しい順のまま)。
@@ -1015,6 +1030,10 @@ def fetch_account_bookmarks(
     _fetch_social_timelineの docstring 参照)。一回限りの手動スキャン
     (scan_account_bookmarks_view等)はstart_cursorを渡さず、
     resume_cursorも単に無視してよい。
+
+    `stop_at_known=False`で"完全スキャン"モード(既知IDに当たっても打ち切
+    らず、抜けているものを探し続ける) — _fetch_social_timelineの docstring
+    参照。
 
     Raises:
         TwitterAuthError: 認証エラー
@@ -1031,18 +1050,19 @@ def fetch_account_bookmarks(
         path_keys=("bookmark_timeline_v2", "timeline"),
         field_toggles=None,
         auth_token=auth_token, ct0=ct0,
-        known_ids=known_ids, max_pages=max_pages, start_cursor=start_cursor,
+        known_ids=known_ids, max_pages=max_pages, start_cursor=start_cursor, stop_at_known=stop_at_known,
     )
 
 
 def fetch_account_likes(
     screen_name: str, known_ids: set, max_pages: int = 1, start_cursor: str | None = None,
+    stop_at_known: bool = True,
 ) -> tuple[list[dict], str | None]:
     """指定アカウント(通常はログイン中の本人自身)の「いいね」を新しい順に
     走査し、`known_ids`未収載のものだけ画像URL・本文つきで返す(新しい順)。
 
-    `start_cursor`/resume_cursorはfetch_account_bookmarksと同様 —
-    _fetch_social_timelineの docstring 参照。
+    `start_cursor`/resume_cursor/`stop_at_known`はfetch_account_bookmarksと
+    同様 — _fetch_social_timelineの docstring 参照。
 
     Raises:
         TwitterAuthError: 認証エラー
@@ -1068,7 +1088,7 @@ def fetch_account_likes(
         path_keys=None,
         field_toggles={"withArticlePlainText": False},
         auth_token=auth_token, ct0=ct0,
-        known_ids=known_ids, max_pages=max_pages, start_cursor=start_cursor,
+        known_ids=known_ids, max_pages=max_pages, start_cursor=start_cursor, stop_at_known=stop_at_known,
     )
 
 

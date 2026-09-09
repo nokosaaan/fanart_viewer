@@ -22,6 +22,7 @@ const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('
 export default function LikeFetchManager({ onClose, onEnqueueFetch }) {
   const [mode, setMode] = useState('queue')
   const [maxPages, setMaxPages] = useState(5)
+  const [fullScan, setFullScan] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -34,7 +35,7 @@ export default function LikeFetchManager({ onClose, onEnqueueFetch }) {
     try {
       const r = await fetch('/api/items/fetch_account_likes/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ max_pages: maxPages }),
+        body: JSON.stringify({ max_pages: maxPages, full_scan: fullScan }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `開始に失敗しました (${r.status})`)
@@ -54,7 +55,7 @@ export default function LikeFetchManager({ onClose, onEnqueueFetch }) {
     try {
       const r = await fetch('/api/items/scan_account_likes/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ max_pages: maxPages }),
+        body: JSON.stringify({ max_pages: maxPages, full_scan: fullScan }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `検索に失敗しました (${r.status})`)
@@ -128,6 +129,16 @@ export default function LikeFetchManager({ onClose, onEnqueueFetch }) {
               ? 'ログイン中アカウントのいいねを新しい順にさかのぼり、まだ登録していないものごとにアイテムを作成し、通常のリンクfetchと同じ流れで画像候補を取得キューに追加します。画像の選定は取得キューからいつも通り行えます。'
               : 'ログイン中アカウントのいいねを新しい順にさかのぼり、新規のものを自動でアイテム登録します。既に登録済みのツイートはスキップされます。'}
             {' '}アカウント名の指定は不要です(保存済みのTwitter/X認証情報でログイン中のアカウント自身のいいねを見ます)。いいねは自動ポーリングの対象外なので、新しいものを確認したい時にこのボタンから都度取得してください。前回どこまで見たかは覚えているので、続きから取得します — 実行後「見つかりませんでした」と出た場合は、既にここまでの分は取得済み(新しいいいねが無い)ことを意味します。
+          </div>
+
+          <div style={{ marginBottom: 16, padding: '10px 12px', background: '#0f172a', borderRadius: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+              <input type="checkbox" checked={fullScan} onChange={e => setFullScan(e.target.checked)} />
+              <strong>完全スキャン(抜け漏れも探す)</strong>
+            </label>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+              通常は「登録済みのツイートに1件でも当たった時点」で新しい方から遡るのを打ち切ります(効率重視)。一時的な不具合等で一部だけ取り込みそびれた「抜け」がある場合、通常モードではその抜けより新しい/古いに関わらず永久に見つかりません。このチェックを入れると、登録済みのツイートに当たっても打ち切らずスキップして先(より古い方)まで探し続けます — 抜けの回復用。時間がかかるので、上記のページ数上限は少し多め(10〜20)がおすすめです。
+            </div>
           </div>
 
           <div style={{ marginBottom: 18 }}>

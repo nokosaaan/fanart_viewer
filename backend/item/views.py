@@ -9,7 +9,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from collections import Counter, defaultdict
 import hashlib
@@ -306,25 +306,42 @@ def _archive_social_candidate(cand, source):
 
 
 # Sources counted as "already known" when deciding where fetch_account_
-# bookmarks should stop paging — mirrors poll_twitter_updates.py's own
-# _KNOWN_TWITTER_SOURCES constant (kept as a separate copy rather than
-# imported from there: a management command module is the wrong direction
-# to import business logic FROM into the main views module).
+# bookmarks/fetch_account_likes should stop paging (see _known_twitter_
+# ids, used by both this module's manual scans and poll_twitter_updates.
+# py's own automatic discovery — imported the other way there, since a
+# management command is the right place to depend on the main views
+# module, not vice versa).
 _TWITTER_SOURCES_FOR_DEDUPE = ['twitter_bookmark', 'twitter_like', 'twitter_rt']
 
 
 def _known_twitter_ids():
+    """Every tweet id this app should treat as "already covered" when
+    deciding where fetch_account_bookmarks/fetch_account_likes should stop
+    paging (see _fetch_social_timeline's own docstring on why an
+    over-broad definition here is dangerous: it silently walls off every
+    OLDER, still-genuinely-unprocessed bookmark/like the very first time
+    pagination reaches one "known" id, forever, with no way to recover
+    short of a --stop-at-known=False full scan).
+
+    Deliberately excludes:
+    - Items with a matching source but NO saved preview yet (bare/
+      incomplete — e.g. still sitting in 取得キュー awaiting a manual image
+      pick, or a scan_account_bookmarks_view row nobody ever finished).
+      An Item existing at all does NOT mean this tweet is actually done;
+      only a saved preview does (mirrors _find_item_by_url + _has_preview,
+      the exact check _enqueue_new/_drain use for the same decision).
+    - SocialFetchQueueItem rows with status='failed' — a failed fetch
+      never produced a real Item either (see poll_twitter_updates.
+      _discover's own comment, which hit this exact bug first).
+    Both are real "not actually known" states that were previously
+    (wrongly) treated as permanent stop signals.
+    """
     known_ids = set(
         Item.objects.filter(source__in=_TWITTER_SOURCES_FOR_DEDUPE)
+        .annotate(_has_preview_images=Exists(PreviewImage.objects.filter(item_id=OuterRef('pk'))))
+        .filter(Q(_has_preview_images=True) | Q(preview_data__isnull=False))
         .values_list('external_id', flat=True)
     )
-    # 'failed' rows excluded — a failed fetch never produced a real Item,
-    # so treating it as "known" would permanently wall off every older
-    # bookmark/like behind it in the timeline the moment any one fetch
-    # ever failed once (see poll_twitter_updates._discover's own comment,
-    # which hit this exact bug — this function shares the same failure
-    # mode since it feeds the same "stop at first known id" pagination
-    # logic in _fetch_social_timeline).
     known_ids |= set(
         SocialFetchQueueItem.objects.exclude(status='failed').values_list('external_id', flat=True)
     )
@@ -359,7 +376,7 @@ def _save_bookmarks_resume_cursor(resume_cursor):
     state.save(update_fields=['bookmarks_resume_cursor'])
 
 
-def _run_account_bookmarks_job(max_pages):
+def _run_account_bookmarks_job(max_pages, full_scan=False):
     """Auto-mode background bookmark catch-up — mirrors
     _run_account_retweets_job exactly, just for the logged-in account's own
     bookmarks (session-based; no screen_name needed) instead of a scanned
@@ -375,11 +392,19 @@ def _run_account_bookmarks_job(max_pages):
     stands (skipping IDs the poller is already responsible for) and pushes
     that frontier further back in one go, rather than duplicating whatever
     ground the poller has already covered.
+
+    `full_scan`: passes stop_at_known=False through to fetch_account_
+    bookmarks — for recovering a gap (some bookmarks never got imported at
+    all, e.g. during a period the fetch itself was broken) that the normal
+    stop-at-first-known-id pagination can structurally never reach on its
+    own, since it always stops at the FIRST known tweet id, even if a
+    genuinely unprocessed one sits right behind it.
     """
     known_ids = _known_twitter_ids()
     try:
         candidates, resume_cursor = fetch_account_bookmarks(
             known_ids, max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
+            stop_at_known=not full_scan,
         )
     except Exception:
         logging.exception('Account bookmarks fetch failed')
@@ -442,11 +467,12 @@ def _resolve_own_screen_name():
     return state.screen_name, None
 
 
-def _run_account_likes_job(max_pages):
+def _run_account_likes_job(max_pages, full_scan=False):
     """Auto-mode background likes catch-up — mirrors
-    _run_account_bookmarks_job exactly, plus the one extra step bookmarks
-    never needed: resolving the logged-in account's own screen_name first
-    (see _resolve_own_screen_name). Exists only as this on-demand action —
+    _run_account_bookmarks_job exactly (including `full_scan`, see its own
+    docstring), plus the one extra step bookmarks never needed: resolving
+    the logged-in account's own screen_name first (see
+    _resolve_own_screen_name). Exists only as this on-demand action —
     poll_twitter_updates.py's automatic tick no longer polls Likes at all
     (see its own module docstring for why).
     """
@@ -459,6 +485,7 @@ def _run_account_likes_job(max_pages):
     try:
         candidates, resume_cursor = fetch_account_likes(
             screen_name, known_ids, max_pages=max_pages, start_cursor=_get_likes_resume_cursor(),
+            stop_at_known=not full_scan,
         )
     except Exception:
         logging.exception('Account likes fetch failed')
@@ -2358,11 +2385,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             max_pages = 5
         max_pages = max(1, min(max_pages, 20))
+        full_scan = bool(data.get('full_scan'))
 
         try:
             threading.Thread(
                 target=_run_account_bookmarks_job,
-                args=(max_pages,),
+                args=(max_pages, full_scan),
                 daemon=True,
             ).start()
         except Exception:
@@ -2380,6 +2408,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         bookmarks instead of a scanned account's timeline. Runs
         synchronously — a handful of GraphQL page requests, no image
         downloads.
+
+        `full_scan` (request body, default False): passes stop_at_known=
+        False through to fetch_account_bookmarks — see _run_account_
+        bookmarks_job's own docstring for why this is the only way to
+        recover a gap (some bookmarks never imported at all, e.g. during a
+        period the fetch itself was broken) that normal incremental
+        discovery can structurally never reach on its own.
         """
         if not HAVE_TWITTER_GQL:
             return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
@@ -2392,6 +2427,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             max_pages = 5
         max_pages = max(1, min(max_pages, 20))
+        full_scan = bool(data.get('full_scan'))
 
         try:
             # Shares the poller's own pagination frontier — see
@@ -2401,6 +2437,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             # covered, and pushes that frontier further back in one go.
             candidates, resume_cursor = fetch_account_bookmarks(
                 _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
+                stop_at_known=not full_scan,
             )
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
@@ -2460,11 +2497,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             max_pages = 5
         max_pages = max(1, min(max_pages, 20))
+        full_scan = bool(data.get('full_scan'))
 
         try:
             threading.Thread(
                 target=_run_account_likes_job,
-                args=(max_pages,),
+                args=(max_pages, full_scan),
                 daemon=True,
             ).start()
         except Exception:
@@ -2477,8 +2515,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     def scan_account_likes_view(self, request):
         """Queue-mode likes scan — mirrors scan_account_bookmarks_view
         exactly (bare Items only, no preview fetch here — the caller runs
-        each one through the normal fetch-then-review flow), plus
-        resolving the logged-in account's own screen_name first (see
+        each one through the normal fetch-then-review flow, and `full_scan`
+        works the same way — see its own docstring), plus resolving the
+        logged-in account's own screen_name first (see
         _resolve_own_screen_name). Runs synchronously — a handful of
         GraphQL page requests, no image downloads.
         """
@@ -2497,10 +2536,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             max_pages = 5
         max_pages = max(1, min(max_pages, 20))
+        full_scan = bool(data.get('full_scan'))
 
         try:
             candidates, resume_cursor = fetch_account_likes(
                 screen_name, _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_likes_resume_cursor(),
+                stop_at_known=not full_scan,
             )
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)

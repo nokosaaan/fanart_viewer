@@ -65,7 +65,7 @@ from item.models import Item, PollerSettings, SocialFetchQueueItem, TwitterPollS
 from item.notify import notify_discord
 from item.twitter_creds import has_credentials
 from item.twitter_gql_fetch import TwitterAuthError, TwitterGQLError, fetch_account_bookmarks
-from item.views import _call_fetch_and_save_preview, _find_item_by_url
+from item.views import _call_fetch_and_save_preview, _find_item_by_url, _known_twitter_ids
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +73,6 @@ TICK_SECONDS_DEFAULT = 360  # 6 min -> 10 ticks/hour -> 10 fetches/hour
 MAX_PAGES_STEADY = 1
 MAX_PAGES_BACKFILL = 3  # only used the very first time there's no history at all yet
 NOTIFY_REPEAT_AFTER = timedelta(hours=24)
-
-# source strings on Item.source for tweets archived via this poller (and,
-# for 'twitter_bookmark', via the browser-extension bookmark_fetch path too)
-_KNOWN_TWITTER_SOURCES = ['twitter_bookmark', 'twitter_like', 'twitter_rt']
 
 
 class Command(BaseCommand):
@@ -137,24 +133,15 @@ class Command(BaseCommand):
         self._drain(poller_settings.items_per_tick)
 
     def _discover(self, state: TwitterPollState):
-        known_ids = set(
-            Item.objects.filter(source__in=_KNOWN_TWITTER_SOURCES)
-            .values_list('external_id', flat=True)
-        )
-        # 'failed' rows deliberately excluded — a failed fetch never
-        # produced a real Item, so treating it as "known" would let
-        # discovery's own stop-at-first-known-id logic (see
-        # _fetch_social_timeline) permanently wall off every genuinely
-        # older bookmark behind it, forever, the moment any single fetch
-        # ever failed once (verified live: this is exactly what silently
-        # capped real discovery to only the newest couple of bookmarks
-        # after a period where every fetch attempt was failing — see
-        # _drain's own retry of 'failed' rows below for the other half of
-        # this fix). Still counts as known once it succeeds ('done') or is
-        # correctly recognized as already-archived ('skipped').
-        known_ids |= set(
-            SocialFetchQueueItem.objects.exclude(status='failed').values_list('external_id', flat=True)
-        )
+        # Shared with the manual scan_account_bookmarks_view/
+        # scan_account_likes_view (see _known_twitter_ids's own docstring
+        # for the full reasoning — a bare/preview-less Item or a 'failed'
+        # queue row must NEVER count as "known", or discovery's own
+        # stop-at-first-known-id logic permanently walls off every
+        # genuinely older bookmark behind it the moment either happens
+        # once). One shared implementation so this and the manual scans
+        # can't silently drift apart on what "known" means.
+        known_ids = _known_twitter_ids()
 
         # The backfill cap only matters the very first run (no history to
         # compare against yet, so a page full of new items wouldn't
