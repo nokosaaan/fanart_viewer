@@ -71,6 +71,8 @@ VIEWER_PASSWORD=閲覧者パスワード（不要なら空）
 
 ⚠️ **いいねは自動ポーリングの対象外**です（ログイン中アカウント自身のscreen_name解決が`twid`Cookieに依存しており、毎tick走らせるには不安定すぎるため）。いいねを取り込みたい場合はヘッダーメニューの「いいねを取得」から都度手動で（ブックマークの「ブックマークを取得」と同じUI）。
 
+**取得失敗した行は自動で再試行されます**（`SocialFetchQueueItem.status='failed'`）。以前は失敗した行が「既知」として扱われてしまい、それより古いブックマークが二度と発見されなくなるバグがあったが修正済み。手動でのDBクリーンアップ等は不要 — 次回のtickから自動で再試行される。
+
 Google Driveバックアップを使う場合、追加で`.env`の`GOOGLE_DRIVE_CLIENT_ID`/`GOOGLE_DRIVE_CLIENT_SECRET`/`GOOGLE_DRIVE_REFRESH_TOKEN`を設定（バックアップ節を参照）。
 
 #### フロントエンドをビルド

@@ -141,7 +141,20 @@ class Command(BaseCommand):
             Item.objects.filter(source__in=_KNOWN_TWITTER_SOURCES)
             .values_list('external_id', flat=True)
         )
-        known_ids |= set(SocialFetchQueueItem.objects.values_list('external_id', flat=True))
+        # 'failed' rows deliberately excluded — a failed fetch never
+        # produced a real Item, so treating it as "known" would let
+        # discovery's own stop-at-first-known-id logic (see
+        # _fetch_social_timeline) permanently wall off every genuinely
+        # older bookmark behind it, forever, the moment any single fetch
+        # ever failed once (verified live: this is exactly what silently
+        # capped real discovery to only the newest couple of bookmarks
+        # after a period where every fetch attempt was failing — see
+        # _drain's own retry of 'failed' rows below for the other half of
+        # this fix). Still counts as known once it succeeds ('done') or is
+        # correctly recognized as already-archived ('skipped').
+        known_ids |= set(
+            SocialFetchQueueItem.objects.exclude(status='failed').values_list('external_id', flat=True)
+        )
 
         # The backfill cap only matters the very first run (no history to
         # compare against yet, so a page full of new items wouldn't
@@ -255,7 +268,16 @@ class Command(BaseCommand):
             # previously oldest-of-the-current-batch-first, which meant a
             # brand new bookmark could sit behind an entire backlog before
             # ever being processed. See the module docstring.
-            row = SocialFetchQueueItem.objects.filter(status='pending').order_by('-external_id').first()
+            #
+            # 'pending' rows always take priority; 'failed' ones are
+            # retried (never left permanently stuck — see _discover's own
+            # comment on why a failed row must not count as "known"
+            # either) only once there's no pending work left this tick, so
+            # a backlog of retries can never crowd out brand new content.
+            row = (
+                SocialFetchQueueItem.objects.filter(status='pending').order_by('-external_id').first()
+                or SocialFetchQueueItem.objects.filter(status='failed').order_by('-external_id').first()
+            )
             if row is None:
                 break
 
@@ -288,11 +310,12 @@ class Command(BaseCommand):
             if not ok:
                 failed += 1
 
-        remaining = SocialFetchQueueItem.objects.filter(status='pending').count()
+        remaining_pending = SocialFetchQueueItem.objects.filter(status='pending').count()
+        remaining_failed = SocialFetchQueueItem.objects.filter(status='failed').count()
         logger.info(
             'poll_twitter_updates: drain fetched %d (of which %d failed), skipped %d '
-            'already-processed, %d still pending',
-            fetched, failed, skipped, remaining,
+            'already-processed, %d still pending, %d still failed (retried next tick)',
+            fetched, failed, skipped, remaining_pending, remaining_failed,
         )
 
     @staticmethod

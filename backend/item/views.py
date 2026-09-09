@@ -318,7 +318,16 @@ def _known_twitter_ids():
         Item.objects.filter(source__in=_TWITTER_SOURCES_FOR_DEDUPE)
         .values_list('external_id', flat=True)
     )
-    known_ids |= set(SocialFetchQueueItem.objects.values_list('external_id', flat=True))
+    # 'failed' rows excluded — a failed fetch never produced a real Item,
+    # so treating it as "known" would permanently wall off every older
+    # bookmark/like behind it in the timeline the moment any one fetch
+    # ever failed once (see poll_twitter_updates._discover's own comment,
+    # which hit this exact bug — this function shares the same failure
+    # mode since it feeds the same "stop at first known id" pagination
+    # logic in _fetch_social_timeline).
+    known_ids |= set(
+        SocialFetchQueueItem.objects.exclude(status='failed').values_list('external_id', flat=True)
+    )
     return known_ids
 
 

@@ -146,14 +146,19 @@ class PollerSettings(models.Model):
 
 
 class SocialFetchQueueItem(models.Model):
-    """FIFOキュー行1件 = ポーリングで見つかった、まだ取り込んでいない
-    ブックマーク/いいね1件 (see item.management.commands.poll_twitter_updates).
+    """キュー行1件 = ポーリングで見つかった、まだ取り込んでいない
+    ブックマーク1件 (see item.management.commands.poll_twitter_updates)。
 
     `external_id`はunique — 同じツイートがブックマークと「いいね」の
     両方で見つかっても行は1つだけ持つ(kindは最初に見つかった方を保持)。
-    `created_at`(=挿入順=id順)がそのままFIFOの処理順になる: discoveryは
-    新規発見分を古い順に反転してから投入するので、キュー全体を
-    id昇順で辿ればブックマーク/いいねした順に近い形で処理できる。
+    処理順は`id`昇順(挿入順=FIFO)ではなく、`external_id`降順(Twitter自身の
+    snowflake ID — 作成日時と単調増加なので「一番新しいツイート優先」を
+    直接表す)。`status='failed'`の行は「取り込み未完了」を意味し(実際の
+    Itemはまだ存在しない)、`pending`分を処理し終えた後にのみ再試行される
+    — discovery側のknown_ids判定からも意図的に除外されている(失敗行を
+    「既知」扱いすると、それより古いブックマーク全てが永久に発見不能に
+    なるバグがあった。poll_twitter_updates._discover/views._known_twitter_
+    idsの各コメント参照)。
     """
     PLATFORM_CHOICES = [('twitter', 'twitter')]
     KIND_CHOICES = [('bookmark', 'bookmark'), ('like', 'like')]
