@@ -1,6 +1,6 @@
-"""Continuously poll the logged-in Twitter/X account's bookmarks and likes
-for new tweets and archive them, throttled to a low, steady rate so this
-never competes with interactive use of the web app.
+"""Continuously poll the logged-in Twitter/X account's bookmarks for new
+tweets and archive them, throttled to a low, steady rate so this never
+competes with interactive use of the web app.
 
 Design (see the plan this implements, and item.twitter_gql_fetch's
 fetch_account_retweets for the pattern this mirrors):
@@ -17,10 +17,20 @@ fetch_account_retweets for the pattern this mirrors):
   thread on the exe-packaged build, which re-reads the same field the
   same way for the same reason.
 - One tick every PollerSettings.interval_seconds (default 360s = 6 min):
-  1. discovery: pull the newest page of Bookmarks and of Likes, stopping as
-     soon as a tweet already known (already an Item, or already queued) is
-     seen — so this only ever costs a couple of lightweight GraphQL calls
-     per tick, not a full history re-scan.
+  1. discovery: pull the newest page of Bookmarks, stopping as soon as a
+     tweet already known (already an Item, or already queued) is seen —
+     so this only ever costs a couple of lightweight GraphQL calls per
+     tick, not a full history re-scan. Likes are deliberately NOT polled
+     automatically here — that needs resolving the logged-in account's own
+     screen_name first (see twitter_gql_fetch.resolve_own_account), which
+     depends on a correctly-formatted `twid` cookie and adds a whole extra
+     failure mode to every single tick for a feature that isn't needed
+     continuously. Likes are instead available as an on-demand "スキャンし
+     て確認" action (see ItemViewSet.scan_account_likes/fetch_account_likes,
+     item.views._run_account_likes_job, and LikeFetchManager.jsx) — the
+     exact same manual-review pattern BookmarkFetchManager.jsx already uses
+     for a bookmarks catch-up, just invoked by the user instead of on a
+     timer.
   2. drain: pop up to PollerSettings.items_per_tick still-pending queue
      rows, NEWEST tweet first (ordered by external_id — Twitter's own
      snowflake id, monotonically increasing with creation time — not by
@@ -34,7 +44,7 @@ fetch_account_retweets for the pattern this mirrors):
      bookmark could sit behind an entire backlog before ever being tried;
      with the frequency itself now user-configurable (see PollerSettings),
      there's no longer a reason to prefer clearing the backlog over
-     surfacing what was JUST bookmarked/liked.
+     surfacing what was JUST bookmarked.
 - Twitter fetches for a twitter.com/x.com URL go through gallery-dl/
   twitter_gql/yt-dlp (plain HTTP, no headless browser) well before any
   Playwright fallback, which is only ever triggered by an explicit
@@ -47,7 +57,6 @@ fetch_account_retweets for the pattern this mirrors):
 import logging
 import time
 from datetime import timedelta
-from types import SimpleNamespace
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -55,14 +64,8 @@ from django.utils import timezone
 from item.models import Item, PollerSettings, SocialFetchQueueItem, TwitterPollState
 from item.notify import notify_discord
 from item.twitter_creds import has_credentials
-from item.twitter_gql_fetch import (
-    TwitterAuthError,
-    TwitterGQLError,
-    fetch_account_bookmarks,
-    fetch_account_likes,
-    resolve_own_account,
-)
-from item.views import ItemViewSet, _find_item_by_url
+from item.twitter_gql_fetch import TwitterAuthError, TwitterGQLError, fetch_account_bookmarks
+from item.views import _call_fetch_and_save_preview, _find_item_by_url
 
 logger = logging.getLogger(__name__)
 
@@ -134,28 +137,6 @@ class Command(BaseCommand):
         self._drain(poller_settings.items_per_tick)
 
     def _discover(self, state: TwitterPollState):
-        # Resolving screen_name is ONLY needed for Likes discovery below —
-        # Bookmarks needs nothing but auth_token/ct0 (session-based). So a
-        # failure here (most commonly: twid not configured yet — see
-        # resolve_own_account's own docstring for why this replaced the old
-        # verify_credentials() v1.1 call, which started 404ing) skips Likes
-        # for this tick rather than aborting the whole tick — Bookmarks
-        # discovery still runs either way, and this does NOT count as a
-        # tick failure (no auth-failure Discord notification), since it's
-        # very often just "twid isn't set up" rather than a real auth
-        # problem with credentials that DO work fine for Bookmarks.
-        if not state.screen_name:
-            result = resolve_own_account()
-            if result.get('ok'):
-                state.screen_name = result.get('screen_name') or ''
-                state.save(update_fields=['screen_name'])
-            else:
-                logger.warning(
-                    'poll_twitter_updates: could not resolve own account this tick '
-                    '(Likes discovery skipped, Bookmarks unaffected): %s',
-                    result.get('reason'),
-                )
-
         known_ids = set(
             Item.objects.filter(source__in=_KNOWN_TWITTER_SOURCES)
             .values_list('external_id', flat=True)
@@ -178,24 +159,14 @@ class Command(BaseCommand):
         bookmarks, bookmarks_resume = fetch_account_bookmarks(
             known_ids, max_pages=max_pages, start_cursor=state.bookmarks_resume_cursor or None,
         )
-        if state.screen_name:
-            likes, likes_resume = fetch_account_likes(
-                state.screen_name, known_ids, max_pages=max_pages,
-                start_cursor=state.likes_resume_cursor or None,
-            )
-        else:
-            likes, likes_resume = [], ''
 
         state.bookmarks_resume_cursor = bookmarks_resume or ''
-        state.likes_resume_cursor = likes_resume or ''
-        state.save(update_fields=['bookmarks_resume_cursor', 'likes_resume_cursor'])
+        state.save(update_fields=['bookmarks_resume_cursor'])
 
         queued_bookmarks = self._enqueue_new(bookmarks, 'bookmark')
-        queued_likes = self._enqueue_new(likes, 'like')
         logger.info(
-            'poll_twitter_updates: discovery found %d bookmark(s) (%d newly queued), '
-            '%d like(s) (%d newly queued)',
-            len(bookmarks), queued_bookmarks, len(likes), queued_likes,
+            'poll_twitter_updates: discovery found %d bookmark(s) (%d newly queued)',
+            len(bookmarks), queued_bookmarks,
         )
 
     def _enqueue_new(self, candidates, kind):
@@ -327,10 +298,7 @@ class Command(BaseCommand):
     @staticmethod
     def _fetch_item(item: Item, url: str) -> bool:
         try:
-            request = SimpleNamespace(data={'url': url}, query_params={})
-            view = ItemViewSet()
-            view.kwargs = {'pk': str(item.pk)}
-            response = view.fetch_and_save_preview(request, pk=item.pk)
+            response = _call_fetch_and_save_preview(item.pk, {'url': url})
             return 200 <= response.status_code < 300
         except Exception:
             logger.exception('poll_twitter_updates: fetch failed for item %s (%s)', item.pk, url)

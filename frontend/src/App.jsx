@@ -14,6 +14,7 @@ import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
 import RetweetFetchManager from './components/RetweetFetchManager'
 import BookmarkFetchManager from './components/BookmarkFetchManager'
+import LikeFetchManager from './components/LikeFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
@@ -72,6 +73,7 @@ function AppMain({ role, onLogout }){
   }
   const [retweetFetchOpen, setRetweetFetchOpen] = useState(false)
   const [bookmarkFetchOpen, setBookmarkFetchOpen] = useState(false)
+  const [likeFetchOpen, setLikeFetchOpen] = useState(false)
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
   // cookies/localStorage — and thus auth — carry over automatically) instead
@@ -538,6 +540,7 @@ function AppMain({ role, onLogout }){
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
               { label: 'アカウントのRTを取得', onClick: () => setRetweetFetchOpen(true) },
               { label: 'ブックマークを取得', onClick: () => setBookmarkFetchOpen(true) },
+              { label: 'いいねを取得', onClick: () => setLikeFetchOpen(true) },
               { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),
@@ -638,6 +641,7 @@ function AppMain({ role, onLogout }){
       )}
       {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {bookmarkFetchOpen && <BookmarkFetchManager onClose={()=>setBookmarkFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
+      {likeFetchOpen && <LikeFetchManager onClose={()=>setLikeFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
     </div>
   )

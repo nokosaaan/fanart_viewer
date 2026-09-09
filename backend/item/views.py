@@ -45,7 +45,7 @@ except Exception:
 try:
     from .twitter_gql_fetch import (
         fetch_twitter_media, fetch_account_retweets, fetch_account_bookmarks,
-        fetch_tweet_description, TwitterAuthError,
+        fetch_account_likes, fetch_tweet_description, resolve_own_account, TwitterAuthError,
     )
     HAVE_TWITTER_GQL = True
 except Exception:
@@ -175,13 +175,33 @@ def _find_item_by_url(url):
     return None
 
 
+def _call_fetch_and_save_preview(item_id, data=None):
+    """Invoke ItemViewSet.fetch_and_save_preview directly, bypassing DRF's
+    normal request/response dispatch entirely — for callers with no real
+    HTTP request to hand it (a background thread, the poll_twitter_updates
+    management command). Because dispatch() never runs, none of the
+    attributes it would normally set on the view get set either; skipping
+    `view.request` in particular crashes get_object() -> self.
+    check_object_permissions(self.request, obj) with a plain AttributeError
+    the instant ANY item is looked up this way (verified live — every
+    poller-driven fetch was failing on exactly this before `request` was
+    added here). This app has no DEFAULT_PERMISSION_CLASSES configured
+    (see backend/settings.py's REST_FRAMEWORK), so the permission check
+    itself is a no-op (AllowAny) either way — this is purely about the
+    attribute existing for that check to run against at all, not about
+    what it's actually used for.
+    """
+    request = SimpleNamespace(data=data or {}, query_params={})
+    view = ItemViewSet()
+    view.request = request
+    view.kwargs = {'pk': str(item_id)}
+    return view.fetch_and_save_preview(request, pk=item_id)
+
+
 def _run_bookmark_fetch_job(item_id, target_url, data=None):
     """Run the slow bookmark fetch/save flow outside the request thread."""
     try:
-        request = SimpleNamespace(data=data or {}, query_params={})
-        view = ItemViewSet()
-        view.kwargs = {'pk': str(item_id)}
-        view.fetch_and_save_preview(request, pk=item_id)
+        _call_fetch_and_save_preview(item_id, data)
     except Exception:
         logging.exception('Background bookmark fetch failed for item %s url=%s', item_id, target_url)
 
@@ -369,6 +389,85 @@ def _run_account_bookmarks_job(max_pages):
 
     logging.info(
         'Account bookmarks fetch: created=%d skipped=%d failed=%d (max_pages=%d)',
+        created, skipped, failed, max_pages,
+    )
+
+
+def _get_likes_resume_cursor():
+    """TwitterPollState.likes_resume_cursor's own version of
+    _get_bookmarks_resume_cursor — see that function's docstring. Likes are
+    no longer polled automatically by poll_twitter_updates.py (see its own
+    module docstring for why), so this field is now written only by manual
+    likes scans (_run_account_likes_job / scan_account_likes_view) — kept
+    on TwitterPollState rather than a new model since it's the same "where
+    did the last likes walk leave off" concept, just driven by a button
+    instead of a timer now.
+    """
+    state, _ = TwitterPollState.objects.get_or_create(pk=1)
+    return state.likes_resume_cursor or None
+
+
+def _save_likes_resume_cursor(resume_cursor):
+    state, _ = TwitterPollState.objects.get_or_create(pk=1)
+    state.likes_resume_cursor = resume_cursor or ''
+    state.save(update_fields=['likes_resume_cursor'])
+
+
+def _resolve_own_screen_name():
+    """(screen_name, error_reason) for the logged-in account — reuses
+    TwitterPollState.screen_name if a previous resolution (by this or an
+    earlier likes scan) already cached it, so a repeat scan doesn't pay for
+    another UserByRestId round-trip every time. Cleared automatically by
+    poll_twitter_updates._record_failure whenever a bookmarks fetch hits a
+    real auth error (same session, so a stale cached value there means this
+    one is equally stale) — see that function's own comment.
+    """
+    state, _ = TwitterPollState.objects.get_or_create(pk=1)
+    if state.screen_name:
+        return state.screen_name, None
+    result = resolve_own_account()
+    if not result.get('ok'):
+        return None, result.get('reason')
+    state.screen_name = result.get('screen_name') or ''
+    state.save(update_fields=['screen_name'])
+    return state.screen_name, None
+
+
+def _run_account_likes_job(max_pages):
+    """Auto-mode background likes catch-up — mirrors
+    _run_account_bookmarks_job exactly, plus the one extra step bookmarks
+    never needed: resolving the logged-in account's own screen_name first
+    (see _resolve_own_screen_name). Exists only as this on-demand action —
+    poll_twitter_updates.py's automatic tick no longer polls Likes at all
+    (see its own module docstring for why).
+    """
+    screen_name, reason = _resolve_own_screen_name()
+    if not screen_name:
+        logging.warning('Account likes fetch skipped: could not resolve own account: %s', reason)
+        return
+
+    known_ids = _known_twitter_ids()
+    try:
+        candidates, resume_cursor = fetch_account_likes(
+            screen_name, known_ids, max_pages=max_pages, start_cursor=_get_likes_resume_cursor(),
+        )
+    except Exception:
+        logging.exception('Account likes fetch failed')
+        return
+    _save_likes_resume_cursor(resume_cursor)
+
+    created, skipped, failed = 0, 0, 0
+    for cand in candidates:
+        outcome = _archive_social_candidate(cand, source='twitter_like')
+        if outcome == 'created':
+            created += 1
+        elif outcome == 'skipped':
+            skipped += 1
+        else:
+            failed += 1
+
+    logging.info(
+        'Account likes fetch: created=%d skipped=%d failed=%d (max_pages=%d)',
         created, skipped, failed, max_pages,
     )
 
@@ -2324,6 +2423,106 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 )
             except Exception:
                 logging.exception('Failed to create Item for bookmarked tweet %s', tweet_id)
+                continue
+            created_items.append({'id': item.id, 'link': item.link})
+
+        return Response({
+            'items': created_items,
+            'already_archived': already_archived,
+            'max_pages': max_pages,
+        })
+
+    @action(detail=False, methods=['post'], url_path='fetch_account_likes')
+    def fetch_account_likes_view(self, request):
+        """Auto-mode background likes catch-up — mirrors
+        fetch_account_bookmarks_view exactly, plus resolving the logged-in
+        account's own screen_name first (see _resolve_own_screen_name).
+        On-demand only: poll_twitter_updates.py's automatic tick no longer
+        polls Likes at all (see its own module docstring for why).
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            max_pages = int(data.get('max_pages') or 5)
+        except (TypeError, ValueError):
+            max_pages = 5
+        max_pages = max(1, min(max_pages, 20))
+
+        try:
+            threading.Thread(
+                target=_run_account_likes_job,
+                args=(max_pages,),
+                daemon=True,
+            ).start()
+        except Exception:
+            logging.exception('Failed to start background likes fetch job')
+            return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'processing', 'max_pages': max_pages}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=False, methods=['post'], url_path='scan_account_likes')
+    def scan_account_likes_view(self, request):
+        """Queue-mode likes scan — mirrors scan_account_bookmarks_view
+        exactly (bare Items only, no preview fetch here — the caller runs
+        each one through the normal fetch-then-review flow), plus
+        resolving the logged-in account's own screen_name first (see
+        _resolve_own_screen_name). Runs synchronously — a handful of
+        GraphQL page requests, no image downloads.
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        screen_name, reason = _resolve_own_screen_name()
+        if not screen_name:
+            return Response({'detail': f'アカウント情報を解決できませんでした: {reason}'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            max_pages = int(data.get('max_pages') or 5)
+        except (TypeError, ValueError):
+            max_pages = 5
+        max_pages = max(1, min(max_pages, 20))
+
+        try:
+            candidates, resume_cursor = fetch_account_likes(
+                screen_name, _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_likes_resume_cursor(),
+            )
+        except TwitterAuthError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception as e:
+            logging.exception('Account likes scan failed')
+            return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
+        _save_likes_resume_cursor(resume_cursor)
+
+        already_archived = 0
+        created_items = []
+        for cand in candidates:
+            author = cand.get('screen_name') or ''
+            tweet_id = cand.get('tweet_id')
+            url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
+            if _find_item_by_url(url):
+                already_archived += 1
+                continue
+            try:
+                item = Item.objects.create(
+                    external_id=int(tweet_id),
+                    source='twitter_like',
+                    situation='',
+                    titles=[],
+                    characters=[],
+                    artist=author,
+                    link=url,
+                    tags=None,
+                    description=cand.get('description') or '',
+                )
+            except Exception:
+                logging.exception('Failed to create Item for liked tweet %s', tweet_id)
                 continue
             created_items.append({'id': item.id, 'link': item.link})
 

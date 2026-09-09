@@ -65,9 +65,11 @@ ADMIN_PASSWORD=管理者パスワード
 VIEWER_PASSWORD=閲覧者パスワード（不要なら空）
 ```
 
-`poller`（Twitterブックマーク/いいね自動取得）を使う場合、追加で:
+`poller`（Twitterブックマーク自動取得）を使う場合、追加で:
 - Twitter/Xの認証情報 — 管理画面の「Twitter/X 認証情報」パネルから`auth_token`/`ct0`を設定（`.env`の`TWITTER_AUTH_TOKEN`/`TWITTER_CT0`でも可）
 - `NOTIFY_DISCORD_WEBHOOK_URL`（任意） — 認証切れ検知時にDiscordへ通知
+
+⚠️ **いいねは自動ポーリングの対象外**です（ログイン中アカウント自身のscreen_name解決が`twid`Cookieに依存しており、毎tick走らせるには不安定すぎるため）。いいねを取り込みたい場合はヘッダーメニューの「いいねを取得」から都度手動で（ブックマークの「ブックマークを取得」と同じUI）。
 
 Google Driveバックアップを使う場合、追加で`.env`の`GOOGLE_DRIVE_CLIENT_ID`/`GOOGLE_DRIVE_CLIENT_SECRET`/`GOOGLE_DRIVE_REFRESH_TOKEN`を設定（バックアップ節を参照）。
 
