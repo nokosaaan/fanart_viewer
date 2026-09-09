@@ -65,7 +65,10 @@ from item.models import Item, PollerSettings, SocialFetchQueueItem, TwitterPollS
 from item.notify import notify_discord
 from item.twitter_creds import has_credentials
 from item.twitter_gql_fetch import TwitterAuthError, TwitterGQLError, fetch_account_bookmarks
-from item.views import _call_fetch_and_save_preview, _find_item_by_url, _known_twitter_ids
+from item.views import (
+    _call_fetch_and_save_preview, _find_item_by_url, _get_bookmarks_resume_cursor,
+    _known_twitter_ids, _save_bookmarks_resume_cursor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +124,7 @@ class Command(BaseCommand):
 
         state, _ = TwitterPollState.objects.get_or_create(pk=1)
         try:
-            self._discover(state)
+            self._discover()
         except (TwitterAuthError, TwitterGQLError) as e:
             self._record_failure(state, str(e))
         except Exception as e:  # any other unexpected failure counts too
@@ -132,7 +135,7 @@ class Command(BaseCommand):
 
         self._drain(poller_settings.items_per_tick)
 
-    def _discover(self, state: TwitterPollState):
+    def _discover(self):
         # Shared with the manual scan_account_bookmarks_view/
         # scan_account_likes_view (see _known_twitter_ids's own docstring
         # for the full reasoning — a bare/preview-less Item or a 'failed'
@@ -156,12 +159,20 @@ class Command(BaseCommand):
         # reasoning. Kept at the same max_pages either way: catching up
         # happens gradually, one tick's worth of pages at a time, never by
         # widening a single call's budget.
+        #
+        # Goes through the shared _get_bookmarks_resume_cursor/_save_
+        # bookmarks_resume_cursor helpers (not a direct read/write of
+        # `state.bookmarks_resume_cursor`) so the save is a compare-and-
+        # swap against what was read here — a manual (non-full-scan)
+        # bookmark catch-up shares this exact same field, and without this
+        # a tick overlapping with one could silently lose whichever
+        # progress got saved second (see _save_twitter_cursor_atomic's own
+        # docstring for the full reasoning).
+        start_cursor = _get_bookmarks_resume_cursor()
         bookmarks, bookmarks_resume = fetch_account_bookmarks(
-            known_ids, max_pages=max_pages, start_cursor=state.bookmarks_resume_cursor or None,
+            known_ids, max_pages=max_pages, start_cursor=start_cursor,
         )
-
-        state.bookmarks_resume_cursor = bookmarks_resume or ''
-        state.save(update_fields=['bookmarks_resume_cursor'])
+        _save_bookmarks_resume_cursor(bookmarks_resume, expected_previous=start_cursor)
 
         queued_bookmarks = self._enqueue_new(bookmarks, 'bookmark')
         logger.info(

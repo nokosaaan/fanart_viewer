@@ -9,6 +9,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
+from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from collections import Counter, defaultdict
@@ -348,6 +349,51 @@ def _known_twitter_ids():
     return known_ids
 
 
+def _get_twitter_cursor(field):
+    state, _ = TwitterPollState.objects.get_or_create(pk=1)
+    return getattr(state, field) or None
+
+
+def _save_twitter_cursor_atomic(field, resume_cursor, expected_previous):
+    """Compare-and-swap update of one TwitterPollState cursor field —
+    protects against a lost update when two fetches sharing the same
+    field (the poller's own tick and a long-running manual scan, or two
+    concurrent manual scans) run at the same time: each reads a starting
+    cursor, does its own (possibly minutes-to-hours-long) fetch, and would
+    otherwise blindly overwrite the field with its own result even if the
+    OTHER one already moved it somewhere else in the meantime — silently
+    discarding that other run's progress.
+
+    Only actually writes if the field still holds exactly what this
+    caller read at the start (`expected_previous`, the value _get_twitter_
+    cursor returned right before the fetch began); if another writer got
+    there first, this call's own result is discarded instead of clobbering
+    theirs — worst case some ground gets rechecked next time, never
+    silently skipped. Returns True if the write happened, False if it was
+    discarded (logged as a warning either way it matters).
+
+    Deliberately does NOT hold the row lock for the fetch itself (that can
+    take minutes to hours) — only for this one quick read-compare-write —
+    so a slow manual scan can never block the poller's own tick, or
+    another manual scan touching a different field, from proceeding.
+    """
+    with transaction.atomic():
+        TwitterPollState.objects.get_or_create(pk=1)  # ensure the singleton row exists before locking it
+        state = TwitterPollState.objects.select_for_update().get(pk=1)
+        current = getattr(state, field) or None
+        if current != (expected_previous or None):
+            logging.warning(
+                'TwitterPollState.%s changed by another run while this one was fetching '
+                '(expected %r, found %r) — discarding this run\'s cursor update (%r) rather than '
+                'overwriting the other run\'s progress.',
+                field, expected_previous, current, resume_cursor,
+            )
+            return False
+        setattr(state, field, resume_cursor or '')
+        state.save(update_fields=[field])
+        return True
+
+
 def _get_bookmarks_resume_cursor(full_scan=False):
     """The same TwitterPollState.bookmarks_resume_cursor poll_twitter_
     updates.py's own recurring discovery reads/writes (see that model
@@ -363,12 +409,11 @@ def _get_bookmarks_resume_cursor(full_scan=False):
     poller's own next tick deep into history instead of its normal recent
     position).
     """
-    state, _ = TwitterPollState.objects.get_or_create(pk=1)
-    cursor = state.bookmarks_full_scan_cursor if full_scan else state.bookmarks_resume_cursor
-    return cursor or None
+    field = 'bookmarks_full_scan_cursor' if full_scan else 'bookmarks_resume_cursor'
+    return _get_twitter_cursor(field)
 
 
-def _save_bookmarks_resume_cursor(resume_cursor, full_scan=False):
+def _save_bookmarks_resume_cursor(resume_cursor, full_scan=False, expected_previous=None):
     """Persist the frontier a bookmark fetch reached back to the shared
     TwitterPollState row, so a later run of the SAME kind (poller tick or
     another manual non-full-scan fetch, sharing bookmarks_resume_cursor —
@@ -381,11 +426,88 @@ def _save_bookmarks_resume_cursor(resume_cursor, full_scan=False):
     _fetch_social_timeline's own docstring), at which point this correctly
     clears the field back to '' so the next run of that same kind starts
     fresh again.
+
+    `expected_previous`: pass the cursor value _get_bookmarks_resume_cursor
+    returned right before the fetch started, so this update only applies
+    if nothing else changed the field in the meantime (see
+    _save_twitter_cursor_atomic's own docstring) — omit only for a caller
+    that doesn't care about the race (there currently isn't one).
     """
-    state, _ = TwitterPollState.objects.get_or_create(pk=1)
     field = 'bookmarks_full_scan_cursor' if full_scan else 'bookmarks_resume_cursor'
-    setattr(state, field, resume_cursor or '')
-    state.save(update_fields=[field])
+    return _save_twitter_cursor_atomic(field, resume_cursor, expected_previous)
+
+
+def _run_backlog_bookmarks_job(max_items=10000):
+    """One-shot, large-scale backlog recovery — reads up to `max_items` of
+    the account's current bookmarks (newest first, ~20 per GraphQL page,
+    so max_items=10000 pages up to ~500 times) with stop_at_known=False
+    (see fetch_account_bookmarks), and enqueues every genuinely-new
+    candidate into SocialFetchQueueItem — the SAME table poll_twitter_
+    updates.py's own automatic discovery uses.
+
+    Deliberately does NOT download/archive anything itself (unlike
+    _run_account_bookmarks_job's "auto" mode) — it only discovers and
+    queues. The existing poller's own _drain (kind='bookmark', ordered by
+    -external_id — see its own docstring) does the actual fetching over
+    subsequent ticks. This is why "queue into the same table" creates no
+    real competition with the poller despite this potentially adding
+    thousands of rows at once: Twitter's tweet ids are monotonically
+    increasing with creation time, so any genuinely new bookmark the
+    poller discovers on its own always has a LARGER external_id than
+    anything sitting in this backlog, and _drain's descending sort means
+    it always gets processed first, automatically, with no separate
+    queue or priority flag needed. The backlog only ever gets drained
+    during ticks where the poller has caught up on everything newer.
+
+    Meant to run in a background thread (see
+    fetch_account_backlog_bookmarks_view) — a full 10000-item run can take
+    anywhere from tens of minutes to a few hours depending on Twitter's
+    own rate-limit backoff. Progress is visible via the existing "未処理
+    キュー" count (twitter_poll_status_view) growing as this runs, then
+    shrinking again as the poller's own ticks drain it afterward.
+
+    Shares its own frontier with the "完全スキャン" checkbox on the normal
+    queue/auto bookmark fetch (bookmarks_full_scan_cursor — see that
+    field's own docstring) — both are the same underlying "gap recovery"
+    sweep, just triggered at very different scales, so they naturally
+    continue each other's progress rather than re-covering the same
+    ground twice.
+    """
+    known_ids = _known_twitter_ids()
+    max_pages = max(1, -(-max_items // 20))  # ceil division at ~20 items/page
+
+    start_cursor = _get_bookmarks_resume_cursor(full_scan=True)
+    try:
+        candidates, resume_cursor = fetch_account_bookmarks(
+            known_ids, max_pages=max_pages, start_cursor=start_cursor,
+            stop_at_known=False,
+        )
+    except Exception:
+        logging.exception('Backlog bookmarks scan failed')
+        return
+    _save_bookmarks_resume_cursor(resume_cursor, full_scan=True, expected_previous=start_cursor)
+
+    # Every candidate here already cleared _fetch_social_timeline's own
+    # known_ids check (that's what "not in known_ids" means), so no
+    # per-candidate _find_item_by_url re-check is needed — get_or_create
+    # on external_id (unique) is enough to avoid a duplicate row if the
+    # poller's own discovery independently queued the same tweet meanwhile.
+    queued = 0
+    for cand in candidates:
+        tweet_id = cand.get('tweet_id')
+        author = cand.get('screen_name') or ''
+        url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
+        _row, created = SocialFetchQueueItem.objects.get_or_create(
+            external_id=int(tweet_id),
+            defaults={'kind': 'bookmark', 'screen_name': author, 'url': url, 'description': cand.get('description') or ''},
+        )
+        if created:
+            queued += 1
+
+    logging.info(
+        'Backlog bookmarks scan: checked=%d queued=%d (max_items=%d, more_to_scan=%s)',
+        len(candidates), queued, max_items, bool(resume_cursor),
+    )
 
 
 def _run_account_bookmarks_job(max_pages, full_scan=False):
@@ -413,15 +535,16 @@ def _run_account_bookmarks_job(max_pages, full_scan=False):
     genuinely unprocessed one sits right behind it.
     """
     known_ids = _known_twitter_ids()
+    start_cursor = _get_bookmarks_resume_cursor(full_scan)
     try:
         candidates, resume_cursor = fetch_account_bookmarks(
-            known_ids, max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(full_scan),
+            known_ids, max_pages=max_pages, start_cursor=start_cursor,
             stop_at_known=not full_scan,
         )
     except Exception:
         logging.exception('Account bookmarks fetch failed')
         return
-    _save_bookmarks_resume_cursor(resume_cursor, full_scan)
+    _save_bookmarks_resume_cursor(resume_cursor, full_scan, expected_previous=start_cursor)
 
     created, skipped, failed = 0, 0, 0
     for cand in candidates:
@@ -450,16 +573,16 @@ def _get_likes_resume_cursor(full_scan=False):
     the last likes walk leave off" concept, just driven by a button instead
     of a timer now.
     """
-    state, _ = TwitterPollState.objects.get_or_create(pk=1)
-    cursor = state.likes_full_scan_cursor if full_scan else state.likes_resume_cursor
-    return cursor or None
-
-
-def _save_likes_resume_cursor(resume_cursor, full_scan=False):
-    state, _ = TwitterPollState.objects.get_or_create(pk=1)
     field = 'likes_full_scan_cursor' if full_scan else 'likes_resume_cursor'
-    setattr(state, field, resume_cursor or '')
-    state.save(update_fields=[field])
+    return _get_twitter_cursor(field)
+
+
+def _save_likes_resume_cursor(resume_cursor, full_scan=False, expected_previous=None):
+    """See _save_bookmarks_resume_cursor's own docstring — same compare-
+    and-swap protection (_save_twitter_cursor_atomic), same reasoning for
+    `expected_previous`."""
+    field = 'likes_full_scan_cursor' if full_scan else 'likes_resume_cursor'
+    return _save_twitter_cursor_atomic(field, resume_cursor, expected_previous)
 
 
 def _resolve_own_screen_name():
@@ -497,15 +620,16 @@ def _run_account_likes_job(max_pages, full_scan=False):
         return
 
     known_ids = _known_twitter_ids()
+    start_cursor = _get_likes_resume_cursor(full_scan)
     try:
         candidates, resume_cursor = fetch_account_likes(
-            screen_name, known_ids, max_pages=max_pages, start_cursor=_get_likes_resume_cursor(full_scan),
+            screen_name, known_ids, max_pages=max_pages, start_cursor=start_cursor,
             stop_at_known=not full_scan,
         )
     except Exception:
         logging.exception('Account likes fetch failed')
         return
-    _save_likes_resume_cursor(resume_cursor, full_scan)
+    _save_likes_resume_cursor(resume_cursor, full_scan, expected_previous=start_cursor)
 
     created, skipped, failed = 0, 0, 0
     for cand in candidates:
@@ -2454,8 +2578,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             # bookmarks_full_scan_cursor, so a gap-recovery sweep can never
             # push the poller's own steady-state cursor deep into history
             # (see that field's own docstring — a real, live-verified bug).
+            start_cursor = _get_bookmarks_resume_cursor(full_scan)
             candidates, resume_cursor = fetch_account_bookmarks(
-                _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(full_scan),
+                _known_twitter_ids(), max_pages=max_pages, start_cursor=start_cursor,
                 stop_at_known=not full_scan,
             )
         except TwitterAuthError as e:
@@ -2463,7 +2588,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logging.exception('Account bookmarks scan failed')
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
-        _save_bookmarks_resume_cursor(resume_cursor, full_scan)
+        _save_bookmarks_resume_cursor(resume_cursor, full_scan, expected_previous=start_cursor)
 
         already_archived = 0
         created_items = []
@@ -2496,6 +2621,39 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'already_archived': already_archived,
             'max_pages': max_pages,
         })
+
+    @action(detail=False, methods=['post'], url_path='fetch_account_backlog_bookmarks')
+    def fetch_account_backlog_bookmarks_view(self, request):
+        """One-shot, large-scale backlog recovery (see
+        _run_backlog_bookmarks_job's own docstring) — always runs in the
+        background, since a full run can take tens of minutes to a few
+        hours. Only ever discovers and queues (into the same
+        SocialFetchQueueItem table the poller itself drains) — never
+        downloads/archives directly, unlike the "auto" mode above.
+        """
+        if not HAVE_TWITTER_GQL:
+            return Response({'detail': 'twitter_gql_fetch module not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        if not _have_twitter_creds():
+            return Response({'detail': 'Twitter credentials not configured on server'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            max_items = int(data.get('max_items') or 10000)
+        except (TypeError, ValueError):
+            max_items = 10000
+        max_items = max(20, min(max_items, 20000))
+
+        try:
+            threading.Thread(
+                target=_run_backlog_bookmarks_job,
+                args=(max_items,),
+                daemon=True,
+            ).start()
+        except Exception:
+            logging.exception('Failed to start background backlog bookmarks job')
+            return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'processing', 'max_items': max_items}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=False, methods=['post'], url_path='fetch_account_likes')
     def fetch_account_likes_view(self, request):
@@ -2558,8 +2716,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         full_scan = bool(data.get('full_scan'))
 
         try:
+            start_cursor = _get_likes_resume_cursor(full_scan)
             candidates, resume_cursor = fetch_account_likes(
-                screen_name, _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_likes_resume_cursor(full_scan),
+                screen_name, _known_twitter_ids(), max_pages=max_pages, start_cursor=start_cursor,
                 stop_at_known=not full_scan,
             )
         except TwitterAuthError as e:
@@ -2567,7 +2726,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logging.exception('Account likes scan failed')
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
-        _save_likes_resume_cursor(resume_cursor, full_scan)
+        _save_likes_resume_cursor(resume_cursor, full_scan, expected_previous=start_cursor)
 
         already_archived = 0
         created_items = []
