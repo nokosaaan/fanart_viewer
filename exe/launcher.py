@@ -7,12 +7,19 @@ waitress (pure-Python, works fine frozen into a PyInstaller build, no
 separate process to manage) instead of gunicorn/the poller's own container.
 
 Everything this app persists (the DB, downloaded tagger models, the
-locally-trained character classifier, the Twitter creds encryption key)
-lives under USER_DATA_DIR, NOT wherever PyInstaller happens to extract the
-bundle to — a `--onefile` build unpacks into a temp directory that is
-deleted after the process exits, so anything written there would vanish
-on every relaunch. Only the frontend's static build (read-only, identical
-every launch) is served straight out of the bundle itself.
+locally-trained character classifier, the Twitter/Pixiv creds encryption
+keys, the server log) lives under USER_DATA_DIR, NOT wherever PyInstaller
+happens to extract the bundle to — a `--onefile` build unpacks into a
+temp directory that is deleted after the process exits, so anything
+written there would vanish on every relaunch. Only the frontend's static
+build (read-only, identical every launch) is served straight out of the
+bundle itself.
+
+The app window itself is a native pywebview window (not a browser tab) —
+closing it ends the process. The build is windowed (console=False in
+fanart_viewer.spec), so there's no console to see output in; everything
+that would have printed to it goes to server.log under USER_DATA_DIR
+instead (set up first, below, before anything else can print or log).
 """
 import logging
 import os
@@ -20,7 +27,6 @@ import secrets
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 # --- Persistent per-user data directory -------------------------------
@@ -29,6 +35,14 @@ from pathlib import Path
 # update (replacing the exe) never touches the user's actual archive.
 USER_DATA_DIR = Path.home() / '.fanart_viewer'
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# windowed (console=False) builds have no console at all on Windows —
+# sys.stdout/stderr can even be None there, so this has to happen before
+# any print()/logging call, including ones further down this file.
+_log_file = open(USER_DATA_DIR / 'server.log', 'a', encoding='utf-8', buffering=1)
+sys.stdout = _log_file
+sys.stderr = _log_file
+logging.basicConfig(stream=_log_file, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 
 os.environ.setdefault('DB_ENGINE', 'sqlite3')
 os.environ.setdefault('SQLITE_PATH', str(USER_DATA_DIR / 'db.sqlite3'))
@@ -54,6 +68,23 @@ _secret_key_path = USER_DATA_DIR / 'secret_key.txt'
 if not _secret_key_path.exists():
     _secret_key_path.write_text(secrets.token_hex(32))
 os.environ.setdefault('DJANGO_SECRET_KEY', _secret_key_path.read_text().strip())
+
+
+def _persistent_fernet_key(filename):
+    """Same pattern as the Django secret key above, for item.twitter_creds
+    / item.pixiv_creds's own encryption keys — generated once, reused
+    across launches, so credentials saved through the settings panel
+    stay decryptable after a restart."""
+    from cryptography.fernet import Fernet
+
+    path = USER_DATA_DIR / filename
+    if not path.exists():
+        path.write_text(Fernet.generate_key().decode())
+    return path.read_text().strip()
+
+
+os.environ.setdefault('TWITTER_CREDS_ENC_KEY', _persistent_fernet_key('twitter_creds_key.txt'))
+os.environ.setdefault('PIXIV_CREDS_ENC_KEY', _persistent_fernet_key('pixiv_creds_key.txt'))
 
 
 def _bundle_path(relative):
@@ -106,9 +137,8 @@ HOST = '127.0.0.1'
 PORT = 8000
 
 
-def _open_browser_when_ready():
-    time.sleep(1.5)
-    webbrowser.open(f'http://{HOST}:{PORT}/')
+def _serve_forever():
+    serve(application, host=HOST, port=PORT)
 
 
 def _poller_loop():
@@ -130,7 +160,15 @@ def _poller_loop():
 
 
 if __name__ == '__main__':
-    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
     threading.Thread(target=_poller_loop, daemon=True).start()
-    print(f'fanart_viewer starting at http://{HOST}:{PORT}/ (data: {USER_DATA_DIR})')
-    serve(application, host=HOST, port=PORT)
+    threading.Thread(target=_serve_forever, daemon=True).start()
+    logging.getLogger(__name__).info('fanart_viewer starting at http://%s:%s/ (data: %s)', HOST, PORT, USER_DATA_DIR)
+
+    import webview  # noqa: E402
+
+    time.sleep(1.0)  # give waitress a moment to bind before pointing the window at it
+    webview.create_window('fanart_viewer', f'http://{HOST}:{PORT}/', width=1280, height=860)
+    webview.start()
+    # webview.start() blocks until the window is closed; both background
+    # threads above are daemons, so returning here ends the process — no
+    # separate shutdown step needed.

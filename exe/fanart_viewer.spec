@@ -77,7 +77,11 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    # Windowed, not console — the pywebview window in launcher.py is the
+    # visible/interactive surface now, and stdout/stderr are redirected to
+    # USER_DATA_DIR/server.log (see launcher.py's header comment) since a
+    # windowed build has no console to print to at all on Windows.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

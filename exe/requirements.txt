@@ -1,0 +1,8 @@
+# Packaging-only dependencies, on top of backend/requirements.txt — not
+# needed by the docker-compose workflow, only by the standalone exe build.
+pyinstaller
+waitress
+# Native app window (replaces the old browser-tab + console approach) —
+# uses the OS's built-in webview (WebView2 on Windows, already present on
+# Windows 10 2004+/11) rather than bundling a browser of its own.
+pywebview
