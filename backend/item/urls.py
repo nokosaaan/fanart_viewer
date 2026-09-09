@@ -3,6 +3,7 @@ from .views import ItemViewSet, CharacterGroupViewSet, CharacterDanbooruLinkView
 from .views import items_from_db
 from .backup_views import backup_create_view, backup_list_view, backup_restore_view
 from .twitter_creds_views import twitter_creds_status_view, twitter_creds_set_view
+from .pixiv_creds_views import pixiv_creds_status_view, pixiv_creds_set_view
 from .twitter_poll_views import twitter_poll_status_view
 from django.urls import path, include
 
@@ -20,5 +21,7 @@ urlpatterns = [
     path('backup/restore/', backup_restore_view),
     path('twitter_creds/status/', twitter_creds_status_view),
     path('twitter_creds/set/', twitter_creds_set_view),
+    path('pixiv_creds/status/', pixiv_creds_status_view),
+    path('pixiv_creds/set/', pixiv_creds_set_view),
     path('twitter_poll/status/', twitter_poll_status_view),
 ]

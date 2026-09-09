@@ -74,9 +74,11 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
       page = context.new_page()
 
       # Inject site-specific cookies before navigation for authenticated access.
-      # PIXIV_PHPSESSID env var enables R18 content on Pixiv.
+      # A saved PHPSESSID (settings panel, or PIXIV_PHPSESSID env var —
+      # see item.pixiv_creds) enables R18 content on Pixiv.
       try:
-        pixiv_session = os.environ.get('PIXIV_PHPSESSID')
+        from .pixiv_creds import get_credentials as _get_pixiv_credentials
+        pixiv_session = _get_pixiv_credentials()['phpsessid']
         if pixiv_session and 'pixiv.net' in url:
           context.add_cookies([{
             'name': 'PHPSESSID',
@@ -87,12 +89,14 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
       except Exception:
         pass
 
-      # TWITTER_AUTH_TOKEN env var enables viewing sensitive user content on X/Twitter.
-      # The account must have "Display media that may contain sensitive content" enabled.
-      # TWITTER_CT0 is the CSRF token cookie (same tab, same session as auth_token).
+      # A saved auth_token (settings panel, or TWITTER_AUTH_TOKEN env var —
+      # see item.twitter_creds) enables viewing sensitive user content on
+      # X/Twitter. The account must have "Display media that may contain
+      # sensitive content" enabled. ct0 is the CSRF token cookie (same
+      # tab, same session as auth_token).
       try:
-        twitter_auth_token = os.environ.get('TWITTER_AUTH_TOKEN')
-        twitter_ct0 = os.environ.get('TWITTER_CT0')
+        from .twitter_creds import get_credentials as _get_twitter_credentials
+        twitter_auth_token, twitter_ct0 = _get_twitter_credentials()
         if twitter_auth_token and ('twitter.com' in url or 'x.com' in url):
           twitter_cookies = []
           for domain in ('.twitter.com', '.x.com'):

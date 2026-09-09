@@ -21,17 +21,20 @@ MIN_IMAGE_FETCH_BYTES = 50000
 
 def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
     """Return list of (idx, bytes, content_type) fetched from target_url using Playwright login to Pixiv.
-    Requires PIXIV_USER and PIXIV_PASS in env.
+    Requires Pixiv credentials to be configured (DB, via the settings panel, or
+    PIXIV_USER/PIXIV_PASS/PIXIV_PHPSESSID env vars — see item.pixiv_creds).
     """
     if not HAVE_PLAYWRIGHT:
         raise RuntimeError('playwright not available')
 
-    pixiv_user = os.environ.get('PIXIV_USER') or os.environ.get('PIXIV_USERNAME')
-    pixiv_pass = os.environ.get('PIXIV_PASS') or os.environ.get('PIXIV_PASSWORD')
-    pixiv_phpsessid = os.environ.get('PIXIV_PHPSESSID')
+    from . import pixiv_creds
+    creds = pixiv_creds.get_credentials()
+    pixiv_user = creds['user']
+    pixiv_pass = creds['password']
+    pixiv_phpsessid = creds['phpsessid']
 
     if not pixiv_phpsessid and (not pixiv_user or not pixiv_pass):
-        raise RuntimeError('PIXIV_USER/PIXIV_PASS or PIXIV_PHPSESSID not set in environment')
+        raise RuntimeError('Pixiv credentials not configured (set them in the settings panel, or PIXIV_USER/PIXIV_PASS/PIXIV_PHPSESSID env vars)')
 
     results = []
     logged_in = False

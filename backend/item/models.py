@@ -111,6 +111,21 @@ class TwitterCredential(models.Model):
         return f"TwitterCredential(updated_at={self.updated_at})"
 
 
+class PixivCredential(models.Model):
+    """Single-row store for Pixiv login (see item.pixiv_creds). Mirrors
+    TwitterCredential: Fernet-encrypted, decryption key lives only in
+    PIXIV_CREDS_ENC_KEY outside the DB. Never exposed via any API
+    response — see item.pixiv_creds_views (write-only).
+    """
+    encrypted_phpsessid = models.BinaryField(null=True, blank=True)
+    encrypted_user = models.BinaryField(null=True, blank=True)
+    encrypted_password = models.BinaryField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"PixivCredential(updated_at={self.updated_at})"
+
+
 class SocialFetchQueueItem(models.Model):
     """FIFOキュー行1件 = ポーリングで見つかった、まだ取り込んでいない
     ブックマーク/いいね1件 (see item.management.commands.poll_twitter_updates).
