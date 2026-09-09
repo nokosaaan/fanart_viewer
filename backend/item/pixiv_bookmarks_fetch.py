@@ -41,7 +41,25 @@ _UA = (
     '(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
 )
 _PAGE_SIZE = 48
-_META_RE = re.compile(r'<meta\s+name="global-data"\s+id="meta-global-data"\s+content="([^"]*)"')
+# Order-independent: don't assume name= comes before id= comes before
+# content= within the tag (an earlier, stricter fixed-order regex here
+# failed live, repeatedly -- either the attribute order isn't what was
+# assumed, or the page no longer carries this tag at all; see
+# resolve_own_user_id's own diagnostic logging for telling those apart).
+_META_TAG_RE = re.compile(r'<meta\b[^>]*>')
+_META_ID_RE = re.compile(r'id=["\']meta-global-data["\']')
+_META_CONTENT_RE = re.compile(r'content=["\']((?:[^"\']|(?<=\\)["\'])*)["\']')
+
+
+def _find_global_data_json(html_text: str) -> str | None:
+    for tag_match in _META_TAG_RE.finditer(html_text):
+        tag = tag_match.group(0)
+        if not _META_ID_RE.search(tag):
+            continue
+        content_match = _META_CONTENT_RE.search(tag)
+        if content_match:
+            return content_match.group(1)
+    return None
 
 
 class PixivAuthError(RuntimeError):
@@ -79,12 +97,24 @@ def resolve_own_user_id() -> str:
     if resp.status_code != 200:
         raise PixivAPIError(f'HTTP {resp.status_code}')
 
-    m = _META_RE.search(resp.text)
-    if not m:
+    raw_json = _find_global_data_json(resp.text)
+    if raw_json is None:
+        # Diagnostic breadcrumb for next time, without logging the page
+        # body itself (could contain the session's own cookies/tokens
+        # reflected into the page): whether the id="meta-global-data"
+        # marker exists ANYWHERE in the response at all tells apart "the
+        # attribute order/quoting differs from what the regex expects"
+        # (marker present) from "pixiv.net dropped this mechanism
+        # entirely" (marker absent) -- see this module's docstring.
+        marker_present = 'meta-global-data' in resp.text
+        logger.warning(
+            'pixiv_bookmarks_fetch: meta-global-data tag not found (marker text present in response: %s)',
+            marker_present,
+        )
         raise PixivAPIError('ページ内にユーザー情報が見つかりませんでした(ページ構造が変わった可能性)')
 
     try:
-        data = json.loads(html.unescape(m.group(1)))
+        data = json.loads(html.unescape(raw_json))
     except ValueError as e:
         raise PixivAPIError(f'ユーザー情報の解析に失敗しました: {e}') from e
 

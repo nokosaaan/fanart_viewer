@@ -12,8 +12,7 @@ import EditQueueManager from './components/EditQueueManager'
 import RegionLabelQueueManager from './components/RegionLabelQueueManager'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
-import RetweetFetchManager from './components/RetweetFetchManager'
-import BookmarkFetchManager from './components/BookmarkFetchManager'
+import TwitterFetchManager from './components/TwitterFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import PixivCredsManager from './components/PixivCredsManager'
 import HeaderMenu from './components/HeaderMenu'
@@ -71,8 +70,7 @@ function AppMain({ role, onLogout }){
     setManualAddOpen(false)
     setPendingNewItem(item)
   }
-  const [retweetFetchOpen, setRetweetFetchOpen] = useState(false)
-  const [bookmarkFetchOpen, setBookmarkFetchOpen] = useState(false)
+  const [twitterFetchOpen, setTwitterFetchOpen] = useState(false)
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   const [pixivCredsOpen, setPixivCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
@@ -543,8 +541,7 @@ function AppMain({ role, onLogout }){
               { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
               { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
-              { label: 'アカウントのRTを取得', onClick: () => setRetweetFetchOpen(true) },
-              { label: 'ブックマークを取得', onClick: () => setBookmarkFetchOpen(true) },
+              { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true) },
               { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
               { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
@@ -644,8 +641,7 @@ function AppMain({ role, onLogout }){
           }}
         />
       )}
-      {retweetFetchOpen && <RetweetFetchManager onClose={()=>setRetweetFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
-      {bookmarkFetchOpen && <BookmarkFetchManager onClose={()=>setBookmarkFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
+      {twitterFetchOpen && <TwitterFetchManager onClose={()=>setTwitterFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
       {pixivCredsOpen && <PixivCredsManager onClose={()=>setPixivCredsOpen(false)} />}
     </div>

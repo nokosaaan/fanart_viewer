@@ -18,7 +18,10 @@ const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('
 // "catch up now" when the poller itself has been unable to run for a
 // while (e.g. an auth failure — see TwitterCredsManager's pollStatus) and
 // a backlog of bookmarks has piled up unprocessed.
-export default function BookmarkFetchManager({ onClose, onEnqueueFetch }) {
+// `embedded`: renders just this panel's own content (no backdrop/header/
+// close button of its own) — used by TwitterFetchManager.jsx to show this
+// as one tab of a combined RT/ブックマーク panel instead of its own modal.
+export default function BookmarkFetchManager({ onClose, onEnqueueFetch, embedded = false }) {
   const [mode, setMode] = useState('queue')
   const [maxPages, setMaxPages] = useState(5)
   const [submitting, setSubmitting] = useState(false)
@@ -99,15 +102,8 @@ export default function BookmarkFetchManager({ onClose, onEnqueueFetch }) {
     }
   }
 
-  return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
-      <div className="cgm-panel" onClick={e => e.stopPropagation()}>
-        <div className="cgm-panel-header">
-          <strong>ブックマークをまとめて取得</strong>
-          <button className="cgm-panel-close" onClick={onClose}>✕</button>
-        </div>
-
-        <div className="cgm-panel-body">
+  const content = (
+    <>
           {error && <div style={{ color: '#f87171', marginBottom: 12 }}>{error}</div>}
           {notice && <div style={{ color: '#4ade80', marginBottom: 12 }}>{notice}</div>}
 
@@ -147,7 +143,19 @@ export default function BookmarkFetchManager({ onClose, onEnqueueFetch }) {
               ? (mode === 'queue' ? `処理中… (${progress ? progress.done : 0}/${progress ? progress.total : 0})` : '開始中…')
               : (mode === 'queue' ? '取得してキューに追加' : '取得を開始')}
           </button>
+    </>
+  )
+
+  if (embedded) return content
+
+  return (
+    <div className="cgm-panel-backdrop" onClick={onClose}>
+      <div className="cgm-panel" onClick={e => e.stopPropagation()}>
+        <div className="cgm-panel-header">
+          <strong>ブックマークをまとめて取得</strong>
+          <button className="cgm-panel-close" onClick={onClose}>✕</button>
         </div>
+        <div className="cgm-panel-body">{content}</div>
       </div>
     </div>
   )

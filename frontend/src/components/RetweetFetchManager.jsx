@@ -18,7 +18,10 @@ const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('
 //   reviewed mailbox as everywhere else in the app, not a bespoke path.
 // - auto: fire-and-forget background job that downloads+saves every new RT
 //   it finds, for anyone who just wants images without reviewing each one.
-export default function RetweetFetchManager({ onClose, onEnqueueFetch }) {
+// `embedded`: renders just this panel's own content (no backdrop/header/
+// close button of its own) — used by TwitterFetchManager.jsx to show this
+// as one tab of a combined RT/ブックマーク panel instead of its own modal.
+export default function RetweetFetchManager({ onClose, onEnqueueFetch, embedded = false }) {
   const [mode, setMode] = useState('queue')
   const [screenName, setScreenName] = useState('')
   const [maxItems, setMaxItems] = useState(30)
@@ -105,15 +108,8 @@ export default function RetweetFetchManager({ onClose, onEnqueueFetch }) {
     }
   }
 
-  return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
-      <div className="cgm-panel" onClick={e => e.stopPropagation()}>
-        <div className="cgm-panel-header">
-          <strong>アカウントのRTをまとめて取得</strong>
-          <button className="cgm-panel-close" onClick={onClose}>✕</button>
-        </div>
-
-        <div className="cgm-panel-body">
+  const content = (
+    <>
           {error && <div style={{ color: '#f87171', marginBottom: 12 }}>{error}</div>}
           {notice && <div style={{ color: '#4ade80', marginBottom: 12 }}>{notice}</div>}
 
@@ -164,7 +160,19 @@ export default function RetweetFetchManager({ onClose, onEnqueueFetch }) {
               ? (mode === 'queue' ? `処理中… (${progress ? progress.done : 0}/${progress ? progress.total : 0})` : '開始中…')
               : (mode === 'queue' ? '取得してキューに追加' : '取得を開始')}
           </button>
+    </>
+  )
+
+  if (embedded) return content
+
+  return (
+    <div className="cgm-panel-backdrop" onClick={onClose}>
+      <div className="cgm-panel" onClick={e => e.stopPropagation()}>
+        <div className="cgm-panel-header">
+          <strong>アカウントのRTをまとめて取得</strong>
+          <button className="cgm-panel-close" onClick={onClose}>✕</button>
         </div>
+        <div className="cgm-panel-body">{content}</div>
       </div>
     </div>
   )
