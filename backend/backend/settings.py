@@ -73,17 +73,36 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-# Database (Postgres by env)
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
-        'USER': os.environ.get('POSTGRES_USER', 'fanart'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
-        'HOST': os.environ.get('DATABASE_HOST', 'db'),
-        'PORT': os.environ.get('DATABASE_PORT', '5432'),
+# Database — Postgres by default (docker-compose dev/prod, unchanged), or
+# SQLite when DB_ENGINE=sqlite3 is set — the exe-packaged distribution's own
+# launcher sets this so each user's install is a single local DB file with
+# no separate DB server/container to run (see RELEASE_LOCAL.md's docker
+# workflow, which never sets DB_ENGINE and so keeps using Postgres exactly
+# as before). Default stays 'postgresql' specifically so nothing about the
+# existing docker-compose setup changes unless this is opted into.
+if os.environ.get('DB_ENGINE', 'postgresql') == 'sqlite3':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            # Same `data/` directory tagger.py's _data_dir() already uses
+            # for model files — one familiar place for everything this app
+            # persists locally, and (for the docker path) already a
+            # volume-mounted directory so it isn't lost on container
+            # recreation.
+            'NAME': os.environ.get('SQLITE_PATH', str(BASE_DIR / 'data' / 'db.sqlite3')),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
+            'USER': os.environ.get('POSTGRES_USER', 'fanart'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
+            'HOST': os.environ.get('DATABASE_HOST', 'db'),
+            'PORT': os.environ.get('DATABASE_PORT', '5432'),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = []
 

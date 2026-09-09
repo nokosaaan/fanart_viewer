@@ -762,10 +762,19 @@ def _suggest_from_similar_tags(tag_names, description, exclude_pk):
     if not plain_tags or not query_sig:
         return empty
 
-    q = Q()
-    for t in plain_tags:
-        q |= Q(tags__contains=[t])
-    candidates = Item.objects.filter(q).exclude(pk=exclude_pk).only('tags', 'description', 'titles', 'characters', 'situation')
+    # JSONField `contains` (checking whether any of plain_tags appears in
+    # Item.tags) is a Postgres/MySQL-only lookup — SQLite raises
+    # NotSupportedError for it (see backend.settings' DB_ENGINE toggle for
+    # why SQLite needs to work here at all: the exe-packaged distribution's
+    # per-user local DB). Filtering in Python instead, same as
+    # region_mismatch_queue's own "can't express this as a portable query"
+    # reasoning — fine at this app's personal-archive scale.
+    plain_tags_set = set(plain_tags)
+    candidates = [
+        it for it in Item.objects.exclude(pk=exclude_pk)
+        .only('tags', 'description', 'titles', 'characters', 'situation').iterator()
+        if plain_tags_set & set(it.tags or [])
+    ]
 
     # (score, feature_match_count, item) for every candidate that clears the
     # overlap-score bar. feature_match_count only counts tags that are
@@ -886,9 +895,14 @@ def _expand_character_alias(char_name):
     Otherwise returns [char_name] unchanged — the common case, and the
     only outcome for anyone who hasn't set up any alias groups at all.
     """
-    group = CharacterAliasGroup.objects.filter(linked=True, characters__contains=[char_name]).first()
-    if group:
-        return list(group.characters)
+    # JSONField `contains` is Postgres/MySQL-only (SQLite raises
+    # NotSupportedError — see backend.settings' DB_ENGINE toggle), so this
+    # checks membership in Python instead. CharacterAliasGroup is a tiny
+    # reference table (see its own model docstring), so scanning every row
+    # here costs nothing.
+    for group in CharacterAliasGroup.objects.filter(linked=True):
+        if char_name in group.characters:
+            return list(group.characters)
     return [char_name]
 
 
