@@ -23,41 +23,31 @@ docker compose up --build
 
 The web service runs migrations on startup.
 
-## Windows standalone build (exe)
+## Windows スタンドアロンビルド (exe)
 
-This packages the app as a single `fanart_viewer.exe` — SQLite instead of
-Postgres, no docker, no separate poller container. Each user gets their
-own local DB and settings under `%USERPROFILE%\.fanart_viewer`; nothing
-here is bundled into the exe itself. Build scripts live in [exe/](exe/)
-(`build.ps1` for Windows, `build.sh` for Linux/WSL — the latter only
-produces a Linux binary, useful for testing the packaging itself, not a
-real .exe: PyInstaller can't cross-compile).
+アプリを単一の`fanart_viewer.exe`としてパッケージする方法です — Postgresの代わりにSQLite、dockerなし、pollerも別コンテナではなくアプリ内蔵。ユーザーごとに`%USERPROFILE%\.fanart_viewer`配下に独自のDB・設定が作られ、exe自体にはそれらは同梱されません。ビルドスクリプトは[exe/](exe/)にあります（Windows用`build.ps1`、Linux/WSL用`build.sh` — 後者はLinuxバイナリしか作れず、パッケージング自体の動作確認用です。PyInstallerはクロスコンパイルできないため、実際の.exeはWindows上でしか作れません）。
 
-### 1. Prerequisites
+### 1. 事前準備
 
-- **Python 3.10 or 3.11** from [python.org](https://www.python.org/downloads/)
-  (check "Add python.exe to PATH" during install). Afterwards, confirm
-  `where.exe python` points at `...\Programs\Python\Python3XX\python.exe`,
-  **not** `...\AppData\Local\Microsoft\WindowsApps\python.exe` — that path
-  is a Microsoft Store stub, not a real Python install, and `python
-  --version`/`python -m venv` silently do nothing useful under it. If it
-  still wins, disable the `python`/`python3` entries under Windows Settings
-  → Apps → Advanced app settings → App execution aliases.
-- **Node.js LTS** from [nodejs.org](https://nodejs.org/) (the plain
-  Windows installer `.msi`, not the Docker/nvm/etc. options also listed
-  there) — needed to build the frontend. Confirm with `node --version`.
-- If PowerShell refuses to run any `.ps1` script at all
-  (`...スクリプトの実行が無効になっている...`), run it as:
-  `powershell -ExecutionPolicy Bypass -File .\build.ps1`, or once per
-  session: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+- **Python 3.10または3.11**を[python.org](https://www.python.org/downloads/)からインストール
+  （インストール時に「Add python.exe to PATH」にチェック）。インストール後、
+  `where.exe python`の結果が`...\Programs\Python\Python3XX\python.exe`を指しているか確認してください。
+  `...\AppData\Local\Microsoft\WindowsApps\python.exe`を指している場合はMicrosoft Storeのダミーであり実体のPythonではないため、
+  `python --version`や`python -m venv`が何も起こらず失敗します。この場合はWindowsの設定 →
+  アプリ → 詳細なアプリ設定 → アプリ実行エイリアスで`python`/`python3`のエイリアスをオフにしてください。
+- **Node.js LTS**を[nodejs.org](https://nodejs.org/)からインストール（一覧にあるDocker/nvm等ではなく、
+  普通のWindowsインストーラ`.msi`）。フロントエンドのビルドに必要です。`node --version`で確認できます。
+- PowerShellが`.ps1`スクリプトの実行そのものを拒否する場合
+  （「...スクリプトの実行が無効になっている...」というエラー）、
+  `powershell -ExecutionPolicy Bypass -File .\build.ps1`として実行するか、
+  そのセッション限りで`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`を先に実行してください。
 
-Open a **new** PowerShell window after installing either of the above so
-PATH changes take effect.
+上記いずれかをインストールした後は、PATHの変更を反映させるため**新しい**PowerShellウィンドウを開き直してください。
 
-### 2. One-time environment setup
+### 2. 環境構築（初回のみ）
 
 ```powershell
-git clone <this repo>
+git clone <このリポジトリ>
 cd fanart_viewer
 git checkout exe-packaging
 python -m venv .venv
@@ -65,10 +55,9 @@ python -m venv .venv
 
 pip install -r backend\requirements.txt
 pip install -r exe\requirements.txt
-# Person/head-box detection (used by the region-labeling queue's "自動検出"
-# button) needs this too — --no-deps is required, not optional: some of
-# its declared dependencies don't have Windows-compatible wheels, but
-# nothing it actually imports from item.tagger needs them.
+# 領域ラベル付けキューの「自動検出」ボタンが使う人物/頭部検出にはこれも必要
+# --no-deps は必須(省略不可) — 依存関係の一部にWindows対応wheelが無いが、
+# item.tagger が実際にimportするものはそれらに依存していない
 pip install --no-deps dghs-imgutils pyrfc6266
 
 cd frontend
@@ -77,49 +66,42 @@ npm run build
 cd ..
 ```
 
-### 3. Build
+### 3. ビルド
 
 ```powershell
 cd exe
 .\build.ps1
 ```
 
-Produces `exe\dist\fanart_viewer.exe`.
+`exe\dist\fanart_viewer.exe`が生成されます。
 
-### 4. Rebuilding after pulling new code
+### 4. 新しいコードをpullした後の再ビルド
 
-The exe is a compiled snapshot — `git pull` alone changes nothing already
-running or already built. To pick up new code: `git pull`, then re-run
-`npm run build` in `frontend\` (only if frontend files changed) and
-`.\build.ps1` in `exe\` again. Settings/data stored in the database
-(credentials, poller settings, etc.) do *not* need a rebuild — those take
-effect immediately, on next launch or even without one.
+exeはコンパイル済みのスナップショットなので、`git pull`だけでは既に起動中/ビルド済みのものは何も変わりません。
+新しいコードを反映するには：`git pull`の後、`frontend\`で`npm run build`（フロントエンドに変更があった場合のみ）、
+そして`exe\`で`.\build.ps1`を再実行してください。DBに保存される設定・データ（認証情報、poller設定など）は
+再ビルド不要です — 次回起動時、あるいは再起動すら不要で即座に反映されます。
 
-### 5. Running it
+### 5. 実行方法
 
-Double-click `fanart_viewer.exe`, or run it from PowerShell (recommended
-the first few times — see below). A window opens with a loading spinner,
-then switches to the app once the local server responds. Closing the
-window stops the app entirely (no separate process left running).
+`fanart_viewer.exe`をダブルクリックするか、PowerShellから実行してください（最初の数回はこちらを推奨 — 下記参照）。
+起動するとスピナー付きのウィンドウが表示され、ローカルサーバーが応答するとアプリ画面に切り替わります。
+ウィンドウを閉じるとアプリは完全に終了します（裏にプロセスは残りません）。
 
-There is no console window (a windowed/GUI build, not a console app) — if
-something goes wrong before the window would normally appear, check
-`%USERPROFILE%\.fanart_viewer\server.log` for the traceback.
+コンソールウィンドウは表示されません（コンソールアプリではなくウィンドウ型のビルドです）— ウィンドウが表示される前に
+何か問題が起きた場合は、`%USERPROFILE%\.fanart_viewer\server.log`でトレースバックを確認してください。
 
-First-run setup, all from the header menu inside the app:
-- **Twitter/X 認証情報** — paste `auth_token`/`ct0` (and optionally `twid`)
-  from a logged-in x.com session's cookies. Same panel also has the
-  background-poller opt-in (off by default) and its rate (件数 / 分・時間・
-  日・週ごと) — this single setting covers both the Twitter and Pixiv
-  pollers.
-- **Pixiv 認証情報** — paste `PHPSESSID` from a logged-in pixiv.net
-  session's cookies (preferred over username/password, which can fail on
-  CAPTCHA/2FA).
-- **バックアップ** — Google Drive backup/restore. Needs a Google Cloud
-  OAuth client (Console → APIs & Services → Credentials → Create OAuth
-  client ID → Desktop app), then its Client ID/Secret pasted into the
-  "認証する" form — this opens your system browser for Google's consent
-  screen and stores the resulting token automatically (no .env editing).
+初回セットアップは、アプリ内のヘッダーメニューから全て行えます：
+- **Twitter/X 認証情報** — ログイン済みのx.comセッションのCookieから`auth_token`/`ct0`
+  （任意で`twid`も）を貼り付けます。同じパネルにバックグラウンドpollerの許可設定
+  （デフォルトOFF）と頻度（件数 / 分・時間・日・週ごと）もあります —
+  この設定1つでTwitter・Pixiv両方のpollerに反映されます。
+- **Pixiv 認証情報** — ログイン済みのpixiv.netセッションのCookieから`PHPSESSID`を貼り付けます
+  （ユーザー名/パスワードよりもこちらが確実です。CAPTCHAや2段階認証で失敗することがあるため）。
+- **バックアップ** — Google Driveへのバックアップ/復元。Google CloudのOAuthクライアント
+  （Console → APIs & Services → Credentials → Create OAuth client ID → Desktop app）を作成し、
+  そのClient ID/Secretを「認証する」フォームに貼り付けてください — システムの既定ブラウザで
+  Googleの認証画面が開き、得られたトークンが自動的に保存されます（.envの編集は不要です）。
 
 ## Twitter/X bookmark trigger
 
