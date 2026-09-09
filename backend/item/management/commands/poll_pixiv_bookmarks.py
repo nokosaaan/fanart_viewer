@@ -12,12 +12,12 @@ inside the `web` request/response cycle.
 """
 import logging
 import time
-from types import SimpleNamespace
 
 from django.core.management.base import BaseCommand
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
-from item.models import Item, PixivPollState, PollerSettings, SocialFetchQueueItem
+from item.models import Item, PixivPollState, PollerSettings, PreviewImage, SocialFetchQueueItem
 from item.notify import notify_discord
 from item.pixiv_bookmarks_fetch import (
     PixivAPIError,
@@ -26,7 +26,7 @@ from item.pixiv_bookmarks_fetch import (
     resolve_own_user_id,
 )
 from item.pixiv_creds import has_credentials
-from item.views import ItemViewSet, _find_item_by_url
+from item.views import _call_fetch_and_save_preview, _find_item_by_url
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +91,22 @@ class Command(BaseCommand):
     def _discover(self, state: PixivPollState):
         user_id = resolve_own_user_id()  # raises PixivAuthError/PixivAPIError -- let _tick's caller handle it
 
+        # A bare Item with no saved preview yet, or a failed queue row, is
+        # NOT actually "done" -- treating either as a permanent stop signal
+        # would silently wall off every OLDER, still-genuinely-unprocessed
+        # bookmark the first time pagination reaches one (same bug fixed in
+        # poll_twitter_updates.py's own known_ids computation -- see its
+        # comment there for the full reasoning).
         known_ids = set(
-            Item.objects.filter(source='pixiv_bookmark').values_list('external_id', flat=True)
+            Item.objects.filter(source='pixiv_bookmark')
+            .annotate(_has_preview_images=Exists(PreviewImage.objects.filter(item_id=OuterRef('pk'))))
+            .filter(Q(_has_preview_images=True) | Q(preview_data__isnull=False))
+            .values_list('external_id', flat=True)
         )
         known_ids |= set(
-            SocialFetchQueueItem.objects.filter(platform='pixiv').values_list('external_id', flat=True)
+            SocialFetchQueueItem.objects.filter(platform='pixiv')
+            .exclude(status='failed')
+            .values_list('external_id', flat=True)
         )
 
         max_pages = MAX_PAGES_BACKFILL if not known_ids else MAX_PAGES_STEADY
@@ -201,14 +212,7 @@ class Command(BaseCommand):
     @staticmethod
     def _fetch_item(item: Item, url: str) -> bool:
         try:
-            request = SimpleNamespace(data={'url': url}, query_params={})
-            view = ItemViewSet()
-            view.kwargs = {'pk': str(item.pk)}
-            # get_object() (called inside fetch_and_save_preview) needs
-            # self.request for its permission check -- see the identical
-            # fix/comment in poll_twitter_updates.py's own _fetch_item.
-            view.request = request
-            response = view.fetch_and_save_preview(request, pk=item.pk)
+            response = _call_fetch_and_save_preview(item.pk, {'url': url})
             return 200 <= response.status_code < 300
         except Exception:
             logger.exception('poll_pixiv_bookmarks: fetch failed for item %s (%s)', item.pk, url)

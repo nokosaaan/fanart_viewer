@@ -175,13 +175,33 @@ def _find_item_by_url(url):
     return None
 
 
+def _call_fetch_and_save_preview(item_id, data=None):
+    """Invoke ItemViewSet.fetch_and_save_preview directly, bypassing DRF's
+    normal request/response dispatch entirely — for callers with no real
+    HTTP request to hand it (a background thread, the poll_twitter_updates/
+    poll_pixiv_bookmarks management commands). Because dispatch() never
+    runs, none of the attributes it would normally set on the view get set
+    either; skipping `view.request` in particular crashes get_object() ->
+    self.check_object_permissions(self.request, obj) with a plain
+    AttributeError the instant ANY item is looked up this way (verified
+    live — every poller-driven fetch was failing on exactly this before
+    `request` was added here). This app has no DEFAULT_PERMISSION_CLASSES
+    configured (see backend/settings.py's REST_FRAMEWORK), so the
+    permission check itself is a no-op (AllowAny) either way — this is
+    purely about the attribute existing for that check to run against at
+    all, not about what it's actually used for.
+    """
+    request = SimpleNamespace(data=data or {}, query_params={})
+    view = ItemViewSet()
+    view.request = request
+    view.kwargs = {'pk': str(item_id)}
+    return view.fetch_and_save_preview(request, pk=item_id)
+
+
 def _run_bookmark_fetch_job(item_id, target_url, data=None):
     """Run the slow bookmark fetch/save flow outside the request thread."""
     try:
-        request = SimpleNamespace(data=data or {}, query_params={})
-        view = ItemViewSet()
-        view.kwargs = {'pk': str(item_id)}
-        view.fetch_and_save_preview(request, pk=item_id)
+        _call_fetch_and_save_preview(item_id, data)
     except Exception:
         logging.exception('Background bookmark fetch failed for item %s url=%s', item_id, target_url)
 

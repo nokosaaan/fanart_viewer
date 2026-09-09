@@ -35,12 +35,12 @@ fetch_account_retweets for the pattern this mirrors):
 import logging
 import time
 from datetime import timedelta
-from types import SimpleNamespace
 
 from django.core.management.base import BaseCommand
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
-from item.models import Item, PollerSettings, SocialFetchQueueItem, TwitterPollState
+from item.models import Item, PollerSettings, PreviewImage, SocialFetchQueueItem, TwitterPollState
 from item.notify import notify_discord
 from item.twitter_creds import has_credentials
 from item.twitter_gql_fetch import (
@@ -50,7 +50,7 @@ from item.twitter_gql_fetch import (
     fetch_account_likes,
     resolve_own_account,
 )
-from item.views import ItemViewSet, _find_item_by_url
+from item.views import _call_fetch_and_save_preview, _find_item_by_url
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +141,24 @@ class Command(BaseCommand):
                     result.get('reason'),
                 )
 
+        # Bare Items with no saved preview yet (still sitting in 取得キュー,
+        # or a scan_account_bookmarks_view row nobody ever finished) and
+        # failed queue rows are NOT actually "done" -- treating either as a
+        # permanent stop signal here silently walls off every OLDER, still-
+        # genuinely-unprocessed bookmark/like the very first time
+        # pagination reaches one, forever, with no way to recover short of
+        # a full re-scan (a real, live-verified bug in an earlier version
+        # of this same known_ids computation).
         known_ids = set(
             Item.objects.filter(source__in=_KNOWN_TWITTER_SOURCES)
+            .annotate(_has_preview_images=Exists(PreviewImage.objects.filter(item_id=OuterRef('pk'))))
+            .filter(Q(_has_preview_images=True) | Q(preview_data__isnull=False))
             .values_list('external_id', flat=True)
         )
         known_ids |= set(
-            SocialFetchQueueItem.objects.filter(platform='twitter').values_list('external_id', flat=True)
+            SocialFetchQueueItem.objects.filter(platform='twitter')
+            .exclude(status='failed')
+            .values_list('external_id', flat=True)
         )
 
         # The backfill cap only matters the very first run (no history to
@@ -283,16 +295,7 @@ class Command(BaseCommand):
     @staticmethod
     def _fetch_item(item: Item, url: str) -> bool:
         try:
-            request = SimpleNamespace(data={'url': url}, query_params={})
-            view = ItemViewSet()
-            view.kwargs = {'pk': str(item.pk)}
-            # get_object() (called inside fetch_and_save_preview) needs
-            # self.request for its permission check -- passing `request`
-            # as the method's own positional arg alone doesn't set this;
-            # without it this raises AttributeError before ever reaching
-            # the actual fetch logic.
-            view.request = request
-            response = view.fetch_and_save_preview(request, pk=item.pk)
+            response = _call_fetch_and_save_preview(item.pk, {'url': url})
             return 200 <= response.status_code < 300
         except Exception:
             logger.exception('poll_twitter_updates: fetch failed for item %s (%s)', item.pk, url)
