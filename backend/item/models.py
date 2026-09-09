@@ -223,6 +223,21 @@ class TwitterPollState(models.Model):
     # next time is correct again.
     bookmarks_resume_cursor = models.CharField(max_length=255, blank=True, default='')
     likes_resume_cursor = models.CharField(max_length=255, blank=True, default='')
+    # Separate frontier for a manual "完全スキャン" (stop_at_known=False —
+    # see twitter_gql_fetch._fetch_social_timeline) gap-recovery sweep.
+    # Deliberately NOT the same field as bookmarks_resume_cursor/
+    # likes_resume_cursor above: those track the poller's own steady,
+    # near-the-top incremental catch-up, while a full scan deliberately
+    # dives deep into history one page at a time across repeated manual
+    # runs. Sharing one field caused a real bug (verified live): a full
+    # scan would push the shared cursor deep into the past, and the
+    # poller's own next tick — still running stop_at_known=True — would
+    # then resume from THAT deep position instead of its normal recent
+    # one, surfacing a large, unexpected batch of very old tweets (whose
+    # media URLs are far more likely to already be dead) as if they were
+    # brand new steady-state discoveries.
+    bookmarks_full_scan_cursor = models.CharField(max_length=255, blank=True, default='')
+    likes_full_scan_cursor = models.CharField(max_length=255, blank=True, default='')
 
     def __str__(self):
         return f"TwitterPollState(failures={self.consecutive_failures}, last_success={self.last_success_at})"

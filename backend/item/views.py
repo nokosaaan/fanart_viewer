@@ -348,32 +348,44 @@ def _known_twitter_ids():
     return known_ids
 
 
-def _get_bookmarks_resume_cursor():
+def _get_bookmarks_resume_cursor(full_scan=False):
     """The same TwitterPollState.bookmarks_resume_cursor poll_twitter_
     updates.py's own recurring discovery reads/writes (see that model
-    field's own docstring) — shared here so a manual bulk-fetch continues
-    from wherever the poller's own incremental catch-up currently stands,
-    rather than restarting from the newest bookmark and re-walking ground
-    the poller already covered.
+    field's own docstring) — shared here so a manual (non-full-scan)
+    bulk-fetch continues from wherever the poller's own incremental
+    catch-up currently stands, rather than restarting from the newest
+    bookmark and re-walking ground the poller already covered.
+
+    `full_scan=True` reads bookmarks_full_scan_cursor instead — a
+    completely separate frontier for gap-recovery sweeps (see that field's
+    own docstring for why sharing one field with the poller's steady-state
+    cursor was a real, live-verified bug: a full scan would push the
+    poller's own next tick deep into history instead of its normal recent
+    position).
     """
     state, _ = TwitterPollState.objects.get_or_create(pk=1)
-    return state.bookmarks_resume_cursor or None
+    cursor = state.bookmarks_full_scan_cursor if full_scan else state.bookmarks_resume_cursor
+    return cursor or None
 
 
-def _save_bookmarks_resume_cursor(resume_cursor):
-    """Persist the frontier a bookmark fetch (manual or the poller's own)
-    reached back to the shared TwitterPollState row, so whichever one runs
-    next — poller tick or another manual fetch — picks up from here
-    instead of either re-scanning already-covered ground or leaving a gap.
-    `resume_cursor` is None once a fetch actually reaches already-known
-    content or the true end of the timeline (i.e. genuinely caught up —
-    see _fetch_social_timeline's own docstring), at which point this
-    correctly clears the field back to '' so the next run starts fresh
-    from the newest bookmark again.
+def _save_bookmarks_resume_cursor(resume_cursor, full_scan=False):
+    """Persist the frontier a bookmark fetch reached back to the shared
+    TwitterPollState row, so a later run of the SAME kind (poller tick or
+    another manual non-full-scan fetch, sharing bookmarks_resume_cursor —
+    or another full scan, sharing the separate bookmarks_full_scan_cursor)
+    picks up from here instead of either re-scanning already-covered
+    ground or leaving a gap. `resume_cursor` is None once a fetch actually
+    reaches already-known content, the true end of the timeline, or (full
+    scan only) exhausts its own max_pages while stop_at_known=False never
+    even triggers a stop (i.e. genuinely caught up either way — see
+    _fetch_social_timeline's own docstring), at which point this correctly
+    clears the field back to '' so the next run of that same kind starts
+    fresh again.
     """
     state, _ = TwitterPollState.objects.get_or_create(pk=1)
-    state.bookmarks_resume_cursor = resume_cursor or ''
-    state.save(update_fields=['bookmarks_resume_cursor'])
+    field = 'bookmarks_full_scan_cursor' if full_scan else 'bookmarks_resume_cursor'
+    setattr(state, field, resume_cursor or '')
+    state.save(update_fields=[field])
 
 
 def _run_account_bookmarks_job(max_pages, full_scan=False):
@@ -403,13 +415,13 @@ def _run_account_bookmarks_job(max_pages, full_scan=False):
     known_ids = _known_twitter_ids()
     try:
         candidates, resume_cursor = fetch_account_bookmarks(
-            known_ids, max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
+            known_ids, max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(full_scan),
             stop_at_known=not full_scan,
         )
     except Exception:
         logging.exception('Account bookmarks fetch failed')
         return
-    _save_bookmarks_resume_cursor(resume_cursor)
+    _save_bookmarks_resume_cursor(resume_cursor, full_scan)
 
     created, skipped, failed = 0, 0, 0
     for cand in candidates:
@@ -427,24 +439,27 @@ def _run_account_bookmarks_job(max_pages, full_scan=False):
     )
 
 
-def _get_likes_resume_cursor():
+def _get_likes_resume_cursor(full_scan=False):
     """TwitterPollState.likes_resume_cursor's own version of
-    _get_bookmarks_resume_cursor — see that function's docstring. Likes are
-    no longer polled automatically by poll_twitter_updates.py (see its own
-    module docstring for why), so this field is now written only by manual
-    likes scans (_run_account_likes_job / scan_account_likes_view) — kept
-    on TwitterPollState rather than a new model since it's the same "where
-    did the last likes walk leave off" concept, just driven by a button
-    instead of a timer now.
+    _get_bookmarks_resume_cursor — see that function's docstring, including
+    why `full_scan=True` reads the separate likes_full_scan_cursor instead.
+    Likes are no longer polled automatically by poll_twitter_updates.py
+    (see its own module docstring for why), so likes_resume_cursor is now
+    written only by manual, non-full-scan likes catch-ups — kept on
+    TwitterPollState rather than a new model since it's the same "where did
+    the last likes walk leave off" concept, just driven by a button instead
+    of a timer now.
     """
     state, _ = TwitterPollState.objects.get_or_create(pk=1)
-    return state.likes_resume_cursor or None
+    cursor = state.likes_full_scan_cursor if full_scan else state.likes_resume_cursor
+    return cursor or None
 
 
-def _save_likes_resume_cursor(resume_cursor):
+def _save_likes_resume_cursor(resume_cursor, full_scan=False):
     state, _ = TwitterPollState.objects.get_or_create(pk=1)
-    state.likes_resume_cursor = resume_cursor or ''
-    state.save(update_fields=['likes_resume_cursor'])
+    field = 'likes_full_scan_cursor' if full_scan else 'likes_resume_cursor'
+    setattr(state, field, resume_cursor or '')
+    state.save(update_fields=[field])
 
 
 def _resolve_own_screen_name():
@@ -484,13 +499,13 @@ def _run_account_likes_job(max_pages, full_scan=False):
     known_ids = _known_twitter_ids()
     try:
         candidates, resume_cursor = fetch_account_likes(
-            screen_name, known_ids, max_pages=max_pages, start_cursor=_get_likes_resume_cursor(),
+            screen_name, known_ids, max_pages=max_pages, start_cursor=_get_likes_resume_cursor(full_scan),
             stop_at_known=not full_scan,
         )
     except Exception:
         logging.exception('Account likes fetch failed')
         return
-    _save_likes_resume_cursor(resume_cursor)
+    _save_likes_resume_cursor(resume_cursor, full_scan)
 
     created, skipped, failed = 0, 0, 0
     for cand in candidates:
@@ -2430,13 +2445,17 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         full_scan = bool(data.get('full_scan'))
 
         try:
-            # Shares the poller's own pagination frontier — see
-            # _get_bookmarks_resume_cursor's own docstring: this picks up
-            # wherever poll_twitter_updates.py's incremental catch-up
+            # Non-full-scan: shares the poller's own pagination frontier —
+            # see _get_bookmarks_resume_cursor's own docstring: this picks
+            # up wherever poll_twitter_updates.py's incremental catch-up
             # currently stands instead of re-scanning ground it already
             # covered, and pushes that frontier further back in one go.
+            # full_scan=True instead reads/writes the SEPARATE
+            # bookmarks_full_scan_cursor, so a gap-recovery sweep can never
+            # push the poller's own steady-state cursor deep into history
+            # (see that field's own docstring — a real, live-verified bug).
             candidates, resume_cursor = fetch_account_bookmarks(
-                _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
+                _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(full_scan),
                 stop_at_known=not full_scan,
             )
         except TwitterAuthError as e:
@@ -2444,7 +2463,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logging.exception('Account bookmarks scan failed')
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
-        _save_bookmarks_resume_cursor(resume_cursor)
+        _save_bookmarks_resume_cursor(resume_cursor, full_scan)
 
         already_archived = 0
         created_items = []
@@ -2540,7 +2559,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         try:
             candidates, resume_cursor = fetch_account_likes(
-                screen_name, _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_likes_resume_cursor(),
+                screen_name, _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_likes_resume_cursor(full_scan),
                 stop_at_known=not full_scan,
             )
         except TwitterAuthError as e:
@@ -2548,7 +2567,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception as e:
             logging.exception('Account likes scan failed')
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
-        _save_likes_resume_cursor(resume_cursor)
+        _save_likes_resume_cursor(resume_cursor, full_scan)
 
         already_archived = 0
         created_items = []

@@ -85,6 +85,22 @@ print(f'{count} 件のいいねキュー行を削除しました')
 
 ⚠️ **上記2つを直しても、通常のdiscoveryには構造的な限界が残ります**: 新しい方から辿って最初に「既知」のツイートに当たった時点で打ち切る仕組みのため、一時的な不具合等で一部だけ取り込みそびれた「抜け」（新しい既知ツイートと古い既知ツイートに挟まれた未取り込み分）は、通常運用では原理的に永久に発見できません。この抜けを回復したい場合は、ヘッダーメニューの「ブックマークを取得」（いいねも同様）で**「完全スキャン(抜け漏れも探す)」にチェック**を入れて実行してください — 既知のツイートに当たっても打ち切らず、スキップして古い方まで探し続けます。ページ数上限を10〜20程度に上げて実行するのがおすすめ（1回で足りなければ複数回実行 — 前回の続きから再開します）。
 
+⚠️ **完全スキャンとpollerのカーソルが同じフィールドを共有していたバグを修正**（`TwitterPollState.bookmarks_resume_cursor`/`likes_resume_cursor`）。完全スキャンを実行すると、そのカーソルが履歴の深いところまで進む（通常のdiscoveryは既知に当たった時点で打ち切るが、完全スキャンは打ち切らずmax_pages分すべて進むため）。このカーソルをpollerの自動discoveryとも共有していたため、**完全スキャン実行直後のpollerの次回tickが、そのまま履歴の深い位置から再開してしまい**、大量の「古すぎてメディアURLが死んでいる可能性が高いツイート」を新規発見扱いで取得キューに積んでしまう不具合があった（プレビューが出てこない、の実際の原因はこれだった可能性が高い）。完全スキャン専用の別カーソル（`bookmarks_full_scan_cursor`/`likes_full_scan_cursor`）に分離し、pollerの通常カーソルに一切影響しないよう修正済み。
+
+**既に上記の不具合で溜まってしまった未処理キューをクリーンアップしたい場合**:
+```bash
+docker compose -f docker-compose.prod.yml exec web python manage.py shell -c "
+from item.models import TwitterPollState, SocialFetchQueueItem
+# pollerのカーソルを先頭に戻す(履歴の深い位置から再開するのを止める)
+state, _ = TwitterPollState.objects.get_or_create(pk=1)
+state.bookmarks_resume_cursor = ''
+state.save(update_fields=['bookmarks_resume_cursor'])
+# 溜まった未処理分を削除(古いツイートで、メディア取得に失敗し続けている可能性が高いため)
+count, _ = SocialFetchQueueItem.objects.filter(kind='bookmark', status__in=['pending', 'failed']).delete()
+print(f'{count} 件のキュー行を削除し、pollerのカーソルをリセットしました')
+"
+```
+
 Google Driveバックアップを使う場合、追加で`.env`の`GOOGLE_DRIVE_CLIENT_ID`/`GOOGLE_DRIVE_CLIENT_SECRET`/`GOOGLE_DRIVE_REFRESH_TOKEN`を設定（バックアップ節を参照）。
 
 #### フロントエンドをビルド
