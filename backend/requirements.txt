@@ -13,7 +13,7 @@ google-auth
 google-api-python-client
 cryptography
 # Pinned: 1.23+ dropped cp310 wheels entirely (Python 3.10, which the
-# Playwright base image may still use) — 1.22.0 still covers cp310-cp313
+# Playwright base image may still use) -- 1.22.0 still covers cp310-cp313
 # on both x86_64 and aarch64 (Pi4), so pin rather than risk pip falling
 # back to a source build with no compatible wheel.
 onnxruntime==1.22.0
@@ -21,16 +21,16 @@ pillow
 # dghs-imgutils (item/tagger.py's _detect_person_boxes, an anime-art person
 # detector used to separate multiple characters into individual regions
 # before tagging) is installed separately via `pip install --no-deps` (see
-# Dockerfile) rather than as a plain line here — one of its OWN hard
+# Dockerfile) rather than as a plain line here -- one of its OWN hard
 # dependencies, bchlib, has no aarch64 (Pi4) wheel on PyPI and fails to
 # build from source in this image, breaking the build entirely (confirmed:
 # a plain `pip install dghs-imgutils` build fails on aarch64 for this
 # reason). bchlib is used only by an unrelated submodule of imgutils
 # (LSB steganography, imgutils/metadata/lsb) that item.tagger never
-# imports — verified live that `from imgutils.detect import detect_person`
+# imports -- verified live that `from imgutils.detect import detect_person`
 # and a real inference call both work with bchlib completely absent. The
 # lines below are dghs-imgutils's own actual dependencies (from its PyPI
-# metadata) MINUS bchlib (skipped) and pyrfc6266 (see next comment — also
+# metadata) MINUS bchlib (skipped) and pyrfc6266 (see next comment -- also
 # installed via --no-deps), so `--no-deps` on those two doesn't silently
 # leave anything else missing. If dghs-imgutils's own requirements ever
 # change, re-check these against its metadata (PyPI JSON API).
@@ -60,7 +60,7 @@ numpy<2
 # though pyrfc6266 actually runs fine against pyparsing 3.1+ (verified live).
 # Its only real dependency is pyparsing, which is pinned explicitly below.
 pyparsing>=3.1,<4
-# Dev/analysis tool only (item/management/commands/evaluate_tag_count.py) —
+# Dev/analysis tool only (item/management/commands/evaluate_tag_count.py) --
 # not on any request-serving code path. Headless (Agg backend), portable
 # wheels on both x86_64 and aarch64.
 matplotlib
@@ -68,6 +68,6 @@ matplotlib
 # title-roster character matching (item/management/commands/
 # audit_character_aliases.py) to romanize this app's own Japanese given
 # names for fuzzy comparison against Danbooru's own romanized character
-# tags. Pure Python + a small built-in kana table — no ML model, no native
+# tags. Pure Python + a small built-in kana table -- no ML model, no native
 # extension, trivial on the Pi4 deployment target.
 pykakasi
