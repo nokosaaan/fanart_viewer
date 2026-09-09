@@ -124,6 +124,21 @@ tailして表示します。追加の引数（`--min-images`など、`train_char
 .\train.ps1 --min-images 20 --include-multi-character
 ```
 
+### 7. DBのリセット（開発中の動作確認用）
+
+他人に配布する際、実は何もしなくても相手は綺麗な状態からスタートします —
+`%USERPROFILE%\.fanart_viewer`（DB・認証情報・キャッシュ）は各ユーザー自身のホーム
+ディレクトリに作られるファイルで、配布するのは`exe\dist\fanart_viewer\`フォルダ
+（プログラム本体）だけなので、あなた自身のDBが混ざって渡ることはありません。
+
+開発中、自分の環境で「初回起動と同じまっさらな状態」を試したいときだけ、
+DBを消すスクリプトを用意しています（認証情報やpoller設定はそのまま残ります）：
+
+```powershell
+cd exe
+.\reset_db.ps1
+```
+
 ## Twitter/X bookmark trigger
 
 The backend exposes `POST /api/items/bookmark_fetch/` for browser-side automation. Use the browser extension in [browser-extension/](browser-extension/) to detect the click and POST the current tweet URL to the local backend. The server resolves the matching Item, fetches the image candidates, and saves them to the DB.
