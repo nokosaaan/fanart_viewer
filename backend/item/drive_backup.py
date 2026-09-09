@@ -119,7 +119,81 @@ DUMP_TIMEOUT = 1800  # item_previewimage stores images as bytea and runs several
 BACKUP_TABLES = ['item_charactergroup', 'item_item', 'item_previewimage']
 
 
+def _is_sqlite() -> bool:
+    from django.conf import settings as dj_settings
+
+    return 'sqlite3' in dj_settings.DATABASES['default']['ENGINE']
+
+
 def create_backup() -> dict:
+    """Dispatches to the SQLite-native or Postgres (pg_dump) backup path
+    based on which engine is actually configured (see backend.settings'
+    DB_ENGINE toggle) -- these are deliberately NOT interchangeable (a
+    SQLite backup can only restore into a SQLite deployment and vice
+    versa); see _create_backup_sqlite/_restore_backup_sqlite's own
+    docstrings for why unifying them isn't worth what it'd cost the
+    already-live Postgres deployment's backup size/speed.
+    """
+    if _is_sqlite():
+        return _create_backup_sqlite()
+    return _create_backup_postgres()
+
+
+def _create_backup_sqlite() -> dict:
+    """Snapshot the SQLite DB file via sqlite3's own online backup API
+    (Connection.backup() -- safe to run while the app is live, unlike
+    copying the file directly, since it produces a consistent snapshot
+    even mid-write) and upload it gzipped.
+
+    Much simpler than the Postgres path: the whole DB already IS a single
+    file, so there's no separate dump format/tool to shell out to -- just
+    a straight file-level copy. This is exe-only for now (only the exe's
+    own launcher.py sets DB_ENGINE=sqlite3); a SQLite backup can only be
+    restored into another SQLite deployment (see restore_backup).
+    """
+    import shutil
+    import sqlite3
+    from django.conf import settings as dj_settings
+
+    service = get_drive_service()
+    folder_id = _get_or_create_backup_folder(service)
+
+    src_path = dj_settings.DATABASES['default']['NAME']
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    filename = f'fanart_backup_sqlite_{timestamp}.sqlite3.gz'
+
+    fd, snapshot_path = tempfile.mkstemp(suffix='.sqlite3')
+    os.close(fd)
+    os.unlink(snapshot_path)  # Connection.backup() below creates this file itself
+    fd2, gz_path = tempfile.mkstemp(suffix='.sqlite3.gz')
+    os.close(fd2)
+    try:
+        src_conn = sqlite3.connect(src_path)
+        dst_conn = sqlite3.connect(snapshot_path)
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+            src_conn.close()
+
+        with open(snapshot_path, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+        media = MediaFileUpload(
+            gz_path, mimetype='application/gzip', resumable=True, chunksize=_UPLOAD_CHUNK_SIZE,
+        )
+        return service.files().create(
+            body={'name': filename, 'parents': [folder_id]},
+            media_body=media,
+            fields='id,name,createdTime,size',
+        ).execute(num_retries=_NUM_RETRIES)
+    finally:
+        for p in (snapshot_path, gz_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def _create_backup_postgres() -> dict:
     """Run `pg_dump --data-only`, gzip it, and upload the result to Google Drive.
 
     Piping pg_dump directly into gzip (rather than writing the plain dump to
@@ -236,6 +310,108 @@ def get_backup_folder_url() -> str:
 
 
 def restore_backup(file_id: str, overwrite: bool = False) -> None:
+    """Download the given Drive backup and load it into the database --
+    dispatches the same way create_backup does. A SQLite backup can only
+    be restored into a SQLite deployment (and a Postgres one only into
+    Postgres); there's no cross-engine restore path (see create_backup's
+    docstring for why)."""
+    if _is_sqlite():
+        return _restore_backup_sqlite(file_id, overwrite=overwrite)
+    return _restore_backup_postgres(file_id, overwrite=overwrite)
+
+
+def _restore_backup_sqlite(file_id: str, overwrite: bool = False) -> None:
+    """Download a SQLite snapshot backup and copy this app's own tables
+    from it into the live DB via SQLite's ATTACH DATABASE (attaching the
+    downloaded file as a second, temporary database on the SAME
+    connection Django itself uses, so it shares Django's configured
+    timeout/locking behavior rather than racing it with an unrelated
+    fresh connection).
+
+    Same semantics as _restore_backup_postgres: raises ExistingDataError
+    (with row counts from both sides) if the DB already has data and
+    `overwrite` is False; with overwrite=True, existing rows are deleted
+    first, in FK-safe order, before copying the backup's rows in.
+    """
+    import shutil
+    import sqlite3
+
+    from django.conf import settings as dj_settings
+    from django.db import connection, transaction
+
+    from .models import Item, CharacterGroup, PreviewImage
+
+    has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
+
+    service = get_drive_service()
+
+    fd, download_path = tempfile.mkstemp(suffix='.download')
+    fd2, plain_path = tempfile.mkstemp(suffix='.sqlite3')
+    os.close(fd2)
+    os.unlink(plain_path)
+    try:
+        request = service.files().get_media(fileId=file_id)
+        with os.fdopen(fd, 'wb') as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk(num_retries=_NUM_RETRIES)
+
+        with open(download_path, 'rb') as fh:
+            is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename
+
+        if is_gz:
+            with gzip.open(download_path, 'rb') as f_in, open(plain_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        else:
+            shutil.copyfile(download_path, plain_path)
+
+        # Read-only peek for row counts, entirely separate from the live
+        # connection -- doesn't touch the app's DB at all yet.
+        backup_conn = sqlite3.connect(f'file:{plain_path}?mode=ro', uri=True)
+        try:
+            backup_counts = {
+                table: backup_conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+                for table in BACKUP_TABLES
+            }
+        finally:
+            backup_conn.close()
+
+        if has_existing and not overwrite:
+            raise ExistingDataError(
+                current={
+                    'item_charactergroup': CharacterGroup.objects.count(),
+                    'item_item': Item.objects.count(),
+                    'item_previewimage': PreviewImage.objects.count(),
+                },
+                backup=backup_counts,
+            )
+
+        with connection.cursor() as attach_cursor:
+            attach_cursor.execute('ATTACH DATABASE %s AS backup_src', [plain_path])
+        try:
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    if has_existing and overwrite:
+                        # item_previewimage FKs to item_item -- delete it first.
+                        cursor.execute('DELETE FROM item_previewimage')
+                        cursor.execute('DELETE FROM item_item')
+                        cursor.execute('DELETE FROM item_charactergroup')
+                    cursor.execute('INSERT INTO item_charactergroup SELECT * FROM backup_src.item_charactergroup')
+                    cursor.execute('INSERT INTO item_item SELECT * FROM backup_src.item_item')
+                    cursor.execute('INSERT INTO item_previewimage SELECT * FROM backup_src.item_previewimage')
+        except sqlite3.OperationalError as e:
+            raise DriveBackupError(f'復元失敗: {e}') from e
+        finally:
+            with connection.cursor() as detach_cursor:
+                detach_cursor.execute('DETACH DATABASE backup_src')
+    finally:
+        for p in (download_path, plain_path):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def _restore_backup_postgres(file_id: str, overwrite: bool = False) -> None:
     """Download the given Drive backup and load it into the database.
 
     If the database already has data and `overwrite` is False, raises
