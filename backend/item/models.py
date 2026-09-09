@@ -111,6 +111,40 @@ class TwitterCredential(models.Model):
         return f"TwitterCredential(updated_at={self.updated_at})"
 
 
+class PollerSettings(models.Model):
+    """Single-row on/off switch + rate controls for poll_twitter_updates's
+    background polling — see item.management.commands.poll_twitter_updates
+    and exe/launcher.py's _poller_loop. Defaults to enabled=True at the
+    field level (preserves the existing docker `poller` service's always-
+    on behavior for anyone already relying on it — it only ever checked
+    has_credentials(), never asked permission); the exe-packaged build's
+    launcher.py explicitly creates this row with enabled=False on first
+    run instead, since unattended background fetching without the user
+    having opted in is exactly what a personal, per-user install shouldn't
+    do silently.
+    """
+    UNIT_CHOICES = [
+        ('minutes', '分'), ('hours', '時間'), ('days', '日'), ('weeks', '週'),
+    ]
+    _UNIT_SECONDS = {'minutes': 60, 'hours': 3600, 'days': 86400, 'weeks': 604800}
+
+    enabled = models.BooleanField(default=True)
+    # How many queued items poll_twitter_updates's _tick drains per tick
+    # (previously hardcoded to exactly 1).
+    items_per_tick = models.IntegerField(default=1)
+    interval_value = models.IntegerField(default=6)
+    interval_unit = models.CharField(max_length=10, choices=UNIT_CHOICES, default='minutes')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def interval_seconds(self) -> int:
+        seconds = self.interval_value * self._UNIT_SECONDS.get(self.interval_unit, 60)
+        return max(60, seconds)  # floor: never busy-loop on a misconfigured tiny value
+
+    def __str__(self):
+        return f"PollerSettings(enabled={self.enabled}, every {self.interval_value} {self.interval_unit})"
+
+
 class PixivCredential(models.Model):
     """Single-row store for Pixiv login (see item.pixiv_creds). Mirrors
     TwitterCredential: Fernet-encrypted, decryption key lives only in

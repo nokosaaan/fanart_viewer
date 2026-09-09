@@ -6,16 +6,23 @@ Design (see the plan this implements, and item.twitter_gql_fetch's
 fetch_account_retweets for the pattern this mirrors):
 
 - Runs as its own long-lived process (a separate `poller` docker-compose
-  service), never inside the `web` request/response cycle.
-- One tick every `--tick-seconds` (default 360s = 6 min -> 10 ticks/hour):
+  service, or exe/launcher.py's own poller thread for the packaged
+  build), never inside the `web` request/response cycle.
+- Gated on PollerSettings (see item.models): does nothing at all unless
+  `enabled` is set — the exe build defaults this to off until the user
+  explicitly opts in via the settings panel, since unattended background
+  fetching without having asked first isn't something a personal,
+  per-user install should just start doing on its own.
+- One tick every `--tick-seconds` (default 360s = 6 min), or whatever
+  interval the caller derives from PollerSettings.interval_seconds:
   1. discovery: pull the newest page of Bookmarks and of Likes, stopping as
      soon as a tweet already known (already an Item, or already queued) is
      seen — so this only ever costs a couple of lightweight GraphQL calls
      per tick, not a full history re-scan.
-  2. drain: pop the single oldest still-pending queue row and run it
-     through the exact same fetch_and_save_preview flow a manual
-     bookmark_fetch call uses. Rows already fetched manually in the
-     meantime are skipped without counting against this tick's one fetch.
+  2. drain: pop up to PollerSettings.items_per_tick oldest still-pending
+     queue rows and run each through the exact same fetch_and_save_preview
+     flow a manual bookmark_fetch call uses. Rows already fetched manually
+     in the meantime are skipped without counting against this budget.
 - Twitter fetches for a twitter.com/x.com URL go through gallery-dl/
   twitter_gql/yt-dlp (plain HTTP, no headless browser) well before any
   Playwright fallback, which is only ever triggered by an explicit
@@ -33,7 +40,7 @@ from types import SimpleNamespace
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from item.models import Item, SocialFetchQueueItem, TwitterPollState
+from item.models import Item, PollerSettings, SocialFetchQueueItem, TwitterPollState
 from item.notify import notify_discord
 from item.twitter_creds import has_credentials
 from item.twitter_gql_fetch import (
@@ -60,8 +67,9 @@ _KNOWN_TWITTER_SOURCES = ['twitter_bookmark', 'twitter_like', 'twitter_rt']
 class Command(BaseCommand):
     help = (
         'Continuously poll Twitter/X bookmarks and likes for new items, '
-        'archiving at most one per tick (default: every 6 minutes, i.e. '
-        '10/hour). Runs forever unless --once is passed.'
+        'archiving up to PollerSettings.items_per_tick per tick (default: '
+        'every 6 minutes). No-ops entirely unless PollerSettings.enabled '
+        'is set. Runs forever unless --once is passed.'
     )
 
     def add_arguments(self, parser):
@@ -92,6 +100,11 @@ class Command(BaseCommand):
             logger.info('poll_twitter_updates: no Twitter credentials configured, skipping tick')
             return
 
+        poller_settings, _ = PollerSettings.objects.get_or_create(pk=1)
+        if not poller_settings.enabled:
+            logger.info('poll_twitter_updates: disabled in settings, skipping tick')
+            return
+
         state, _ = TwitterPollState.objects.get_or_create(pk=1)
         try:
             self._discover(state)
@@ -103,7 +116,7 @@ class Command(BaseCommand):
         else:
             self._record_success(state)
 
-        self._drain_one()
+        self._drain(poller_settings.items_per_tick)
 
     def _discover(self, state: TwitterPollState):
         # Resolving screen_name is ONLY needed for Likes discovery below —
@@ -230,10 +243,11 @@ class Command(BaseCommand):
             'consecutive_failures', 'last_notified_at',
         ])
 
-    # --- drain: process exactly one pending queue row per tick -----------
+    # --- drain: process up to `max_items` pending queue rows per tick ----
 
-    def _drain_one(self):
-        while True:
+    def _drain(self, max_items: int):
+        fetched = 0
+        while fetched < max_items:
             row = SocialFetchQueueItem.objects.filter(status='pending').order_by('id').first()
             if row is None:
                 return
@@ -243,7 +257,7 @@ class Command(BaseCommand):
                 row.status = 'skipped'
                 row.processed_at = timezone.now()
                 row.save(update_fields=['status', 'processed_at'])
-                continue  # doesn't count against this tick's one live fetch
+                continue  # doesn't count against this tick's fetch budget
 
             item = existing or Item.objects.create(
                 external_id=row.external_id,
@@ -262,7 +276,7 @@ class Command(BaseCommand):
             row.status = 'done' if ok else 'failed'
             row.processed_at = timezone.now()
             row.save(update_fields=['status', 'processed_at'])
-            return  # exactly one live fetch attempt per tick
+            fetched += 1
 
     @staticmethod
     def _fetch_item(item: Item, url: str) -> bool:

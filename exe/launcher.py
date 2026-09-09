@@ -131,18 +131,26 @@ def _poller_loop():
     There's no second process to run here, so this just calls the same
     management command's single-tick mode (`--once`, already exercised
     for manual testing) on a timer instead. poll_twitter_updates._tick()
-    itself already no-ops quickly when no Twitter credentials are set, so
-    it's safe to always run this rather than gating it on setup state.
+    itself already no-ops quickly when disabled/no credentials are set,
+    so it's safe to always call it rather than duplicating that check
+    here — but the sleep interval between ticks is this loop's own
+    responsibility, and is re-read from PollerSettings every cycle (not
+    cached at thread start) so a change made through the settings panel
+    takes effect after the current tick, no restart needed.
     """
     from django.core.management import call_command
+    from item.models import PollerSettings
 
-    tick_seconds = int(os.environ.get('POLLER_TICK_SECONDS', '360'))
     while True:
         try:
             call_command('poll_twitter_updates', once=True)
         except Exception:
             logging.getLogger(__name__).exception('poller tick failed')
-        time.sleep(tick_seconds)
+        try:
+            interval = PollerSettings.objects.get(pk=1).interval_seconds
+        except PollerSettings.DoesNotExist:
+            interval = 360
+        time.sleep(interval)
 
 
 def _start_backend(window):
@@ -178,6 +186,18 @@ def _start_backend(window):
     # is the packaged build's replacement for `docker compose exec web
     # python manage.py migrate`, which obviously isn't available here.
     call_command('migrate', interactive=False)
+
+    # Unattended background fetching without having asked first isn't
+    # something a personal, per-user install should just start doing on
+    # its own — unlike PollerSettings' own field-level default (True,
+    # which matches the existing always-on docker `poller` service's
+    # behavior for anyone already relying on it), this only ever creates
+    # the row disabled, and only if it doesn't already exist yet (so a
+    # choice made through the settings panel on an earlier launch is
+    # never overwritten back to disabled).
+    from item.models import PollerSettings
+
+    PollerSettings.objects.get_or_create(pk=1, defaults={'enabled': False})
 
     from waitress import serve
 
