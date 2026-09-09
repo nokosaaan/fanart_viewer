@@ -188,10 +188,10 @@ export default function TwitterCredsManager({ onClose }) {
                     })
                   }}
                 />
-                <strong>自動でブックマーク/いいねを取得する</strong>
+                <strong>自動でブックマーク/いいねを取得する(Twitter/Pixiv共通)</strong>
               </label>
               <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
-                オフの間は裏で一切取得を行いません。オンにすると下記の頻度・件数で継続的に取得します。
+                オフの間は裏で一切取得を行いません。オンにすると下記の頻度・件数で、設定済みのTwitter/Pixiv両方について継続的に取得します(この設定は両方で共通です)。
               </div>
             </div>
 

@@ -1,24 +1,22 @@
-"""Admin-only, read-only status endpoint for the Twitter bookmark/like
-poller (see item.management.commands.poll_twitter_updates). Surfaces
-TwitterPollState + the pending queue depth so the frontend can show a
-banner when polling has stopped working (auth expired, query IDs stale,
-etc.) instead of it failing silently for months.
+"""Admin-only, read-only status endpoint for the Pixiv bookmark poller
+(see item.management.commands.poll_pixiv_bookmarks). Mirrors
+twitter_poll_views.py exactly, scoped to platform='pixiv'.
 """
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
 from security.token_utils import require_admin
-from .models import SocialFetchQueueItem, TwitterPollState
+from .models import PixivPollState, SocialFetchQueueItem
 
 
 @require_http_methods(['GET'])
-def twitter_poll_status_view(request):
+def pixiv_poll_status_view(request):
     denied = require_admin(request)
     if denied:
         return denied
 
-    state = TwitterPollState.objects.first()
-    pending_count = SocialFetchQueueItem.objects.filter(status='pending', platform='twitter').count()
+    state = PixivPollState.objects.first()
+    pending_count = SocialFetchQueueItem.objects.filter(status='pending', platform='pixiv').count()
 
     if state is None:
         return JsonResponse({

@@ -71,14 +71,18 @@ def _db_params():
 
 
 def get_drive_service():
-    client_id = os.environ.get('GOOGLE_DRIVE_CLIENT_ID', '')
-    client_secret = os.environ.get('GOOGLE_DRIVE_CLIENT_SECRET', '')
-    refresh_token = os.environ.get('GOOGLE_DRIVE_REFRESH_TOKEN', '')
+    from .drive_creds import get_credentials as _get_drive_credentials
+
+    creds_dict = _get_drive_credentials()
+    client_id = creds_dict['client_id']
+    client_secret = creds_dict['client_secret']
+    refresh_token = creds_dict['refresh_token']
     if not (client_id and client_secret and refresh_token):
         raise DriveBackupError(
-            'Google Drive未設定です。GOOGLE_DRIVE_CLIENT_ID / '
-            'GOOGLE_DRIVE_CLIENT_SECRET / GOOGLE_DRIVE_REFRESH_TOKEN を'
-            '.envに設定してください（scripts/google_drive_auth.py参照）。'
+            'Google Drive未設定です。設定画面から認証するか、'
+            'GOOGLE_DRIVE_CLIENT_ID / GOOGLE_DRIVE_CLIENT_SECRET / '
+            'GOOGLE_DRIVE_REFRESH_TOKEN を.envに設定してください'
+            '（scripts/google_drive_auth.py参照）。'
         )
     creds = Credentials(
         None,

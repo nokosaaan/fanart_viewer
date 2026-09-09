@@ -10,6 +10,7 @@ gallery-dl
 gunicorn
 whitenoise
 google-auth
+google-auth-oauthlib
 google-api-python-client
 cryptography
 # Pinned: 1.23+ dropped cp310 wheels entirely (Python 3.10, which the

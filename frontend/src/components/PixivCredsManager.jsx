@@ -28,6 +28,7 @@ export default function PixivCredsManager({ onClose }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [pollStatus, setPollStatus] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -42,6 +43,13 @@ export default function PixivCredsManager({ onClose }) {
     } finally {
       setLoading(false)
     }
+
+    // Best-effort — the poller may not be enabled, so a failure here
+    // shouldn't block the panel itself.
+    try {
+      const r2 = await fetch('/api/pixiv_poll/status/', { credentials: 'same-origin' })
+      if (r2.ok) setPollStatus(await r2.json())
+    } catch (_) {}
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -107,6 +115,23 @@ export default function PixivCredsManager({ onClose }) {
               </>
             ) : '—'}
           </div>
+
+          {pollStatus && (
+            <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', borderRadius: 6 }}>
+              <div style={{ marginBottom: 4 }}>
+                ブックマーク自動取得: 最終成功 {formatDate(pollStatus.last_success_at)}
+                {' '}— 未処理キュー {pollStatus.pending_count}件
+              </div>
+              {pollStatus.consecutive_failures > 0 && (
+                <div style={{ color: '#f87171' }}>
+                  {pollStatus.consecutive_failures}回連続で失敗中 ({formatDate(pollStatus.last_error_at)}): {pollStatus.last_error}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+                オン/オフ・頻度・件数の設定は「Twitter/X 認証情報」パネルにあります(Twitter/Pixiv共通の設定です)。
+              </div>
+            </div>
+          )}
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>PHPSESSID(推奨)</label>

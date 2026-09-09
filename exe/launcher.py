@@ -92,6 +92,7 @@ def _persistent_fernet_key(filename):
 
 os.environ.setdefault('TWITTER_CREDS_ENC_KEY', _persistent_fernet_key('twitter_creds_key.txt'))
 os.environ.setdefault('PIXIV_CREDS_ENC_KEY', _persistent_fernet_key('pixiv_creds_key.txt'))
+os.environ.setdefault('DRIVE_CREDS_ENC_KEY', _persistent_fernet_key('drive_creds_key.txt'))
 
 
 def _bundle_path(relative):
@@ -129,23 +130,25 @@ def _poller_loop():
     """In-process replacement for docker-compose's separate `poller`
     container (poller_entrypoint.sh -> manage.py poll_twitter_updates).
     There's no second process to run here, so this just calls the same
-    management command's single-tick mode (`--once`, already exercised
-    for manual testing) on a timer instead. poll_twitter_updates._tick()
-    itself already no-ops quickly when disabled/no credentials are set,
-    so it's safe to always call it rather than duplicating that check
-    here — but the sleep interval between ticks is this loop's own
-    responsibility, and is re-read from PollerSettings every cycle (not
-    cached at thread start) so a change made through the settings panel
-    takes effect after the current tick, no restart needed.
+    management commands' single-tick mode (`--once`, already exercised
+    for manual testing) on a timer instead -- both Twitter's and Pixiv's
+    poller share one PollerSettings row/interval, so they tick together.
+    Each command's own _tick() already no-ops quickly when disabled/no
+    credentials are set, so it's safe to always call both rather than
+    duplicating that check here — but the sleep interval between ticks is
+    this loop's own responsibility, and is re-read from PollerSettings
+    every cycle (not cached at thread start) so a change made through the
+    settings panel takes effect after the current tick, no restart needed.
     """
     from django.core.management import call_command
     from item.models import PollerSettings
 
     while True:
-        try:
-            call_command('poll_twitter_updates', once=True)
-        except Exception:
-            logging.getLogger(__name__).exception('poller tick failed')
+        for command in ('poll_twitter_updates', 'poll_pixiv_bookmarks'):
+            try:
+                call_command(command, once=True)
+            except Exception:
+                logging.getLogger(__name__).exception('%s tick failed', command)
         try:
             interval = PollerSettings.objects.get(pk=1).interval_seconds
         except PollerSettings.DoesNotExist:

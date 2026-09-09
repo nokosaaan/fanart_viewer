@@ -40,9 +40,26 @@ export default function BackupManager({ onClose }) {
   // before choosing to overwrite.
   const [confirmState, setConfirmState] = useState(null)
 
+  // Google Drive OAuth client — the exe build has no .env a user could
+  // edit, so this replaces scripts/google_drive_auth.py's out-of-band
+  // flow with the same OAuth consent flow, triggered from here (see
+  // drive_creds_views.authenticate).
+  const [driveStatus, setDriveStatus] = useState(null)
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [authenticating, setAuthenticating] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [authNotice, setAuthNotice] = useState('')
+
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
+
+    try {
+      const rd = await fetch('/api/drive_creds/status/', { credentials: 'same-origin' })
+      if (rd.ok) setDriveStatus(await rd.json())
+    } catch (_) {}
+
     try {
       const r = await fetch('/api/backup/list/', { credentials: 'same-origin' })
       if (!r.ok) {
@@ -60,6 +77,29 @@ export default function BackupManager({ onClose }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  async function authenticateDrive() {
+    setAuthenticating(true)
+    setAuthError('')
+    setAuthNotice('')
+    try {
+      const r = await fetch('/api/drive_creds/authenticate/', {
+        method: 'POST', headers: HEADERS, credentials: 'same-origin',
+        body: JSON.stringify({ client_id: clientId.trim(), client_secret: clientSecret.trim() }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(j.detail || `認証に失敗しました (${r.status})`)
+      setDriveStatus(j)
+      setClientId('')
+      setClientSecret('')
+      setAuthNotice('認証に成功しました。')
+      load()
+    } catch (e) {
+      setAuthError(e.message)
+    } finally {
+      setAuthenticating(false)
+    }
+  }
 
   async function createBackup() {
     setCreating(true)
@@ -124,6 +164,42 @@ export default function BackupManager({ onClose }) {
         </div>
 
         <div className="cgm-panel-body">
+          <div style={{ marginBottom: 20, padding: '12px', border: '1px solid #334155', borderRadius: 6 }}>
+            <div style={{ fontSize: 13, marginBottom: 10 }}>
+              {driveStatus == null ? '状態を確認中…' : (
+                <>Google Drive: <strong>{driveStatus.configured ? '認証済み' : '未認証'}</strong>
+                  {driveStatus.configured && driveStatus.source === 'env' && <> (.env)</>}
+                  {driveStatus.updated_at && <> — 最終認証 {formatDate(driveStatus.updated_at)}</>}
+                </>
+              )}
+            </div>
+            {authError && <div style={{ color: '#f87171', marginBottom: 8, fontSize: 13 }}>{authError}</div>}
+            {authNotice && <div style={{ color: '#4ade80', marginBottom: 8, fontSize: 13 }}>{authNotice}</div>}
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>
+              Google CloudコンソールでOAuthクライアント(種類: デスクトップアプリ)を作成し、
+              そのクライアントIDとシークレットを入力して認証してください。
+              「認証する」を押すとブラウザが開き、Googleのログイン・許可画面が表示されます
+              (すでに登録済みの場合は空欄のまま再認証できます)。
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <input
+                type="text" autoComplete="off" placeholder="Client ID"
+                value={clientId} onChange={e => setClientId(e.target.value)}
+                style={{ flex: '1 1 240px', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
+                  borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+              />
+              <input
+                type="password" autoComplete="off" placeholder="Client Secret"
+                value={clientSecret} onChange={e => setClientSecret(e.target.value)}
+                style={{ flex: '1 1 240px', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
+                  borderRadius: 6, padding: '6px 10px', fontSize: 13 }}
+              />
+            </div>
+            <button className="btn" style={{ fontSize: 13 }} onClick={authenticateDrive} disabled={authenticating}>
+              {authenticating ? 'ブラウザで認証してください…' : (driveStatus?.configured ? '再認証する' : '認証する')}
+            </button>
+          </div>
+
           {error && <div style={{ color: '#f87171', marginBottom: 12 }}>{error}</div>}
           {notice && <div style={{ color: '#4ade80', marginBottom: 12 }}>{notice}</div>}
 

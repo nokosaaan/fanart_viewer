@@ -160,17 +160,63 @@ class PixivCredential(models.Model):
         return f"PixivCredential(updated_at={self.updated_at})"
 
 
+class DriveCredential(models.Model):
+    """Single-row store for the Google Drive OAuth client + refresh token
+    (see item.drive_creds) used by item.drive_backup. Same encrypted
+    pattern as TwitterCredential/PixivCredential — decryption key lives
+    only in DRIVE_CREDS_ENC_KEY outside the DB.
+
+    Exists specifically so the exe build (no .env file a user could edit)
+    can configure this entirely from the settings panel: client_id/
+    client_secret are entered once, then item.drive_creds_views's
+    authenticate endpoint runs the same OAuth flow
+    scripts/google_drive_auth.py already does out-of-band, storing the
+    resulting refresh_token here instead of printing it for a human to
+    paste into .env.
+    """
+    encrypted_client_id = models.BinaryField(null=True, blank=True)
+    encrypted_client_secret = models.BinaryField(null=True, blank=True)
+    encrypted_refresh_token = models.BinaryField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"DriveCredential(updated_at={self.updated_at})"
+
+
+class PixivPollState(models.Model):
+    """Singleton health-state row for the Pixiv bookmark poller, mirroring
+    TwitterPollState (see item.management.commands.poll_pixiv_bookmarks).
+    Pixiv's bookmarks endpoint is simpler than Twitter's: no separate
+    Likes concept, and it's directly offset-paginated (no opaque cursor),
+    so there's just one resume position to track, and no separate
+    Bookmarks/Likes cursor pair or screen_name resolution step needed.
+    """
+    resume_offset = models.IntegerField(default=0)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default='')
+    last_error_at = models.DateTimeField(null=True, blank=True)
+    last_notified_at = models.DateTimeField(null=True, blank=True)
+    consecutive_failures = models.IntegerField(default=0)
+
+    def __str__(self):
+        return f"PixivPollState(last_success_at={self.last_success_at})"
+
+
 class SocialFetchQueueItem(models.Model):
     """FIFOキュー行1件 = ポーリングで見つかった、まだ取り込んでいない
-    ブックマーク/いいね1件 (see item.management.commands.poll_twitter_updates).
+    ブックマーク/いいね1件 (see item.management.commands.poll_twitter_updates
+    and .poll_pixiv_bookmarks).
 
-    `external_id`はunique — 同じツイートがブックマークと「いいね」の
+    `(platform, external_id)`がunique — 同じ投稿がブックマークと「いいね」の
     両方で見つかっても行は1つだけ持つ(kindは最初に見つかった方を保持)。
+    platform単位なのは、Twitterのtweet IDとPixivのillust IDは無関係な採番な
+    ので同じ数値が両方に存在しうるため(external_idだけのグローバルuniqueだと
+    そこで衝突しうる)。
     `created_at`(=挿入順=id順)がそのままFIFOの処理順になる: discoveryは
     新規発見分を古い順に反転してから投入するので、キュー全体を
     id昇順で辿ればブックマーク/いいねした順に近い形で処理できる。
     """
-    PLATFORM_CHOICES = [('twitter', 'twitter')]
+    PLATFORM_CHOICES = [('twitter', 'twitter'), ('pixiv', 'pixiv')]
     KIND_CHOICES = [('bookmark', 'bookmark'), ('like', 'like')]
     STATUS_CHOICES = [
         ('pending', 'pending'),
@@ -181,7 +227,7 @@ class SocialFetchQueueItem(models.Model):
 
     platform = models.CharField(max_length=16, choices=PLATFORM_CHOICES, default='twitter')
     kind = models.CharField(max_length=16, choices=KIND_CHOICES)
-    external_id = models.BigIntegerField(unique=True)
+    external_id = models.BigIntegerField()
     screen_name = models.CharField(max_length=64, blank=True, default='')
     url = models.URLField()
     # Post text, already extracted from the Bookmarks/Likes GraphQL response
@@ -198,6 +244,7 @@ class SocialFetchQueueItem(models.Model):
 
     class Meta:
         ordering = ['id']
+        unique_together = [('platform', 'external_id')]
 
     def __str__(self):
         return f"SocialFetchQueueItem({self.platform}/{self.kind} {self.external_id} [{self.status}])"

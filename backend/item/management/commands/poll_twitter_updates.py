@@ -145,7 +145,9 @@ class Command(BaseCommand):
             Item.objects.filter(source__in=_KNOWN_TWITTER_SOURCES)
             .values_list('external_id', flat=True)
         )
-        known_ids |= set(SocialFetchQueueItem.objects.values_list('external_id', flat=True))
+        known_ids |= set(
+            SocialFetchQueueItem.objects.filter(platform='twitter').values_list('external_id', flat=True)
+        )
 
         # The backfill cap only matters the very first run (no history to
         # compare against yet, so a page full of new items wouldn't
@@ -194,7 +196,7 @@ class Command(BaseCommand):
                 continue  # already fetched — nothing to do
 
             SocialFetchQueueItem.objects.get_or_create(
-                external_id=tweet_id,
+                platform='twitter', external_id=tweet_id,
                 defaults={
                     'kind': kind, 'screen_name': screen_name, 'url': url,
                     'description': cand.get('description') or '',
@@ -248,7 +250,7 @@ class Command(BaseCommand):
     def _drain(self, max_items: int):
         fetched = 0
         while fetched < max_items:
-            row = SocialFetchQueueItem.objects.filter(status='pending').order_by('id').first()
+            row = SocialFetchQueueItem.objects.filter(status='pending', platform='twitter').order_by('id').first()
             if row is None:
                 return
 
@@ -284,6 +286,12 @@ class Command(BaseCommand):
             request = SimpleNamespace(data={'url': url}, query_params={})
             view = ItemViewSet()
             view.kwargs = {'pk': str(item.pk)}
+            # get_object() (called inside fetch_and_save_preview) needs
+            # self.request for its permission check -- passing `request`
+            # as the method's own positional arg alone doesn't set this;
+            # without it this raises AttributeError before ever reaching
+            # the actual fetch logic.
+            view.request = request
             response = view.fetch_and_save_preview(request, pk=item.pk)
             return 200 <= response.status_code < 300
         except Exception:
