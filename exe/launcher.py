@@ -20,6 +20,13 @@ closing it ends the process. The build is windowed (console=False in
 fanart_viewer.spec), so there's no console to see output in; everything
 that would have printed to it goes to server.log under USER_DATA_DIR
 instead (set up first, below, before anything else can print or log).
+
+Startup order: the window is shown immediately with a loading spinner,
+THEN django.setup()/migrate/etc. run on a background thread (Django
+itself, plus onnxruntime and friends pulled in transitively, take a
+few real seconds to import — showing nothing during that stretch reads
+as a hang). webview.start(func, args) is pywebview's own supported way
+to run exactly this kind of background init after the window appears.
 """
 import logging
 import os
@@ -102,43 +109,20 @@ os.environ.setdefault('FRONTEND_DIST', _bundle_path('frontend_dist'))
 # alongside `backend/` there (see build.spec's Analysis() pathex/datas).
 sys.path.insert(0, _bundle_path('.'))
 
-# NOTE: modules Django only ever loads dynamically by name (from string
-# settings: DJANGO_SETTINGS_MODULE, ROOT_URLCONF, INSTALLED_APPS,
-# MIDDLEWARE, REST_FRAMEWORK's various DEFAULT_*_CLASSES) are invisible to
-# PyInstaller's static import analysis, so without help each one is
-# silently left out of the frozen build and django.setup() fails with
-# ModuleNotFoundError despite the build itself completing without error.
-# Deliberately NOT force-imported here with a plain `import` statement —
-# item.models (transitively pulled in by item.urls/item.views) defines
-# actual model classes, which requires django.setup() to have already run
-# (AppRegistryNotReady otherwise), so any such import must happen AFTER
-# setup(), not before. Instead, every one of these is listed as a
-# --hidden-import on the PyInstaller command line (see build.sh) — that
-# only affects what gets bundled, not when this script executes anything,
-# so django.setup() below still imports each of them itself, in Django's
-# own correct order.
-
-import django  # noqa: E402  (must follow the env var setup above)
-
-django.setup()
-
-from django.core.management import call_command  # noqa: E402
-
-# Idempotent — safe to run on every launch, not just the first. This is
-# the packaged build's replacement for `docker compose exec web python
-# manage.py migrate`, which obviously isn't available here.
-call_command('migrate', interactive=False)
-
-from waitress import serve  # noqa: E402
-
-from backend.wsgi import application  # noqa: E402
-
 HOST = '127.0.0.1'
 PORT = 8000
 
-
-def _serve_forever():
-    serve(application, host=HOST, port=PORT)
+_LOADING_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }
+  .wrap { display:flex; flex-direction:column; align-items:center; }
+  .spinner { width:36px; height:36px; border:4px solid #334155; border-top-color:#3b82f6;
+             border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:16px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style></head>
+<body><div class="wrap"><div class="spinner"></div><div>起動中…</div></div></body></html>
+"""
 
 
 def _poller_loop():
@@ -150,6 +134,8 @@ def _poller_loop():
     itself already no-ops quickly when no Twitter credentials are set, so
     it's safe to always run this rather than gating it on setup state.
     """
+    from django.core.management import call_command
+
     tick_seconds = int(os.environ.get('POLLER_TICK_SECONDS', '360'))
     while True:
         try:
@@ -159,16 +145,78 @@ def _poller_loop():
         time.sleep(tick_seconds)
 
 
-if __name__ == '__main__':
-    threading.Thread(target=_poller_loop, daemon=True).start()
-    threading.Thread(target=_serve_forever, daemon=True).start()
-    logging.getLogger(__name__).info('fanart_viewer starting at http://%s:%s/ (data: %s)', HOST, PORT, USER_DATA_DIR)
+def _start_backend(window):
+    """Runs on a background thread — see webview.start() below — so the
+    loading window (already showing) doesn't have to wait for Django and
+    its heavier transitive imports (onnxruntime etc.), migrate, and the
+    servers to start. Swaps the window over to the real app once waitress
+    actually answers a request.
 
+    NOTE: modules Django only ever loads dynamically by name (from string
+    settings: DJANGO_SETTINGS_MODULE, ROOT_URLCONF, INSTALLED_APPS,
+    MIDDLEWARE, REST_FRAMEWORK's various DEFAULT_*_CLASSES) are invisible
+    to PyInstaller's static import analysis, so without help each one is
+    silently left out of the frozen build and django.setup() fails with
+    ModuleNotFoundError despite the build itself completing without
+    error. Deliberately NOT force-imported here with a plain `import`
+    statement — item.models (transitively pulled in by item.urls/
+    item.views) defines actual model classes, which requires
+    django.setup() to have already run (AppRegistryNotReady otherwise),
+    so any such import must happen AFTER setup(), not before. Instead,
+    every one of these is listed as a --hidden-import in the PyInstaller
+    spec (see fanart_viewer.spec) — that only affects what gets bundled,
+    not when this script executes anything, so django.setup() below
+    still imports each of them itself, in Django's own correct order.
+    """
+    import django
+
+    django.setup()
+
+    from django.core.management import call_command
+
+    # Idempotent — safe to run on every launch, not just the first. This
+    # is the packaged build's replacement for `docker compose exec web
+    # python manage.py migrate`, which obviously isn't available here.
+    call_command('migrate', interactive=False)
+
+    from waitress import serve
+
+    from backend.wsgi import application
+
+    threading.Thread(target=_poller_loop, daemon=True).start()
+    threading.Thread(target=lambda: serve(application, host=HOST, port=PORT), daemon=True).start()
+
+    logging.getLogger(__name__).info(
+        'fanart_viewer starting at http://%s:%s/ (data: %s)', HOST, PORT, USER_DATA_DIR
+    )
+
+    import urllib.request
+
+    # Any HTTP response (even a 404/500) proves waitress is accepting
+    # connections, which is all this needs to know -- urlopen() raises
+    # HTTPError for those, so they must be caught separately from a
+    # genuine "not listening yet" connection failure (URLError), or
+    # every retry here would burn its full timeout for no reason.
+    import urllib.error
+
+    url = f'http://{HOST}:{PORT}/'
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(url, timeout=1)
+            break
+        except urllib.error.HTTPError:
+            break
+        except Exception:
+            time.sleep(0.5)
+
+    window.load_url(url)
+
+
+if __name__ == '__main__':
     import webview  # noqa: E402
 
-    time.sleep(1.0)  # give waitress a moment to bind before pointing the window at it
-    webview.create_window('fanart_viewer', f'http://{HOST}:{PORT}/', width=1280, height=860)
-    webview.start()
+    window = webview.create_window('fanart_viewer', html=_LOADING_HTML, width=1280, height=860)
+    webview.start(_start_backend, args=(window,))
     # webview.start() blocks until the window is closed; both background
-    # threads above are daemons, so returning here ends the process — no
-    # separate shutdown step needed.
+    # threads started in _start_backend are daemons, so returning here
+    # ends the process — no separate shutdown step needed.
