@@ -16,4 +16,4 @@ rm -rf build dist
 # needs backend/ on sys.path before it runs, which only the spec controls).
 pyinstaller fanart_viewer.spec
 
-echo "Built: $(dirname "$0")/dist/fanart_viewer"
+echo "Built: $(dirname "$0")/dist/fanart_viewer/fanart_viewer (onedir -- ship the whole fanart_viewer/ folder, not just this file)"

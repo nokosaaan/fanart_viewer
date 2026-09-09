@@ -64,19 +64,35 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# Splash screen: shown by the bootloader itself (a lightweight bundled Tk
+# runtime), before launcher.py's own code even starts running — covers the
+# gap the pywebview loading window (launcher.py's _LOADING_HTML) can't:
+# process startup + heavy imports (Django, onnxruntime, ...) that happen
+# before that window is created. launcher.py updates its text via pyi_splash
+# and closes it once ready. text_pos is required to enable the text feature
+# at all (see PyInstaller's Splash docs) -- position is near the bottom of
+# splash.png (480x300).
+splash = Splash(
+    'splash.png',
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=(20, 260),
+    text_size=12,
+    text_color='#94a3b8',
+    text_default='起動中...',
+)
+
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
-    [],
+    splash,
+    exclude_binaries=True,
     name='fanart_viewer',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
     # Windowed, not console — the pywebview window in launcher.py is the
     # visible/interactive surface now, and stdout/stderr are redirected to
     # USER_DATA_DIR/server.log (see launcher.py's header comment) since a
@@ -87,4 +103,22 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+# onedir, not onefile: a single-exe build re-extracts its entire contents
+# to a fresh temp dir on EVERY launch (real, noticeable delay before
+# anything -- even the splash screen's own Tk runtime -- can show up), and
+# doesn't meaningfully protect the code from reverse engineering either
+# way (Python bytecode decompiles the same regardless of packaging shape).
+# This trades a single .exe for a distributable folder in exchange for
+# that startup delay going away entirely.
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    splash.binaries,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='fanart_viewer',
 )

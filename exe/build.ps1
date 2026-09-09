@@ -21,4 +21,4 @@ Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
 # needs backend/ on sys.path before it runs, which only the spec controls).
 pyinstaller fanart_viewer.spec
 
-Write-Host "Built: $PSScriptRoot\dist\fanart_viewer.exe"
+Write-Host "Built: $PSScriptRoot\dist\fanart_viewer\fanart_viewer.exe (onedir -- ship the whole fanart_viewer\ folder, not just the .exe)"

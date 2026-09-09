@@ -8,12 +8,12 @@ separate process to manage) instead of gunicorn/the poller's own container.
 
 Everything this app persists (the DB, downloaded tagger models, the
 locally-trained character classifier, the Twitter/Pixiv creds encryption
-keys, the server log) lives under USER_DATA_DIR, NOT wherever PyInstaller
-happens to extract the bundle to — a `--onefile` build unpacks into a
-temp directory that is deleted after the process exits, so anything
-written there would vanish on every relaunch. Only the frontend's static
-build (read-only, identical every launch) is served straight out of the
-bundle itself.
+keys, the server log) lives under USER_DATA_DIR, NOT wherever the frozen
+build's own files live (fanart_viewer.spec builds a `COLLECT()`/onedir
+distribution, not `--onefile` — a folder next to the exe, not a temp
+extraction dir — but nothing here should assume otherwise, since the
+same code works with either). Only the frontend's static build (read-
+only, identical every launch) is served straight out of the bundle itself.
 
 The app window itself is a native pywebview window (not a browser tab) —
 closing it ends the process. The build is windowed (console=False in
@@ -21,12 +21,18 @@ fanart_viewer.spec), so there's no console to see output in; everything
 that would have printed to it goes to server.log under USER_DATA_DIR
 instead (set up first, below, before anything else can print or log).
 
-Startup order: the window is shown immediately with a loading spinner,
-THEN django.setup()/migrate/etc. run on a background thread (Django
-itself, plus onnxruntime and friends pulled in transitively, take a
-few real seconds to import — showing nothing during that stretch reads
-as a hang). webview.start(func, args) is pywebview's own supported way
-to run exactly this kind of background init after the window appears.
+Startup order: fanart_viewer.spec's Splash screen (a lightweight Tk
+window the bootloader itself shows, PyInstaller's own feature) covers
+the gap before this script has even started running -- this module's
+own imports, then django.setup() and friends, still take a moment, so
+pyi_splash.update_text() below keeps it showing real progress instead of
+a static image. Once that splash closes, the pywebview window (already
+created, showing _LOADING_HTML's spinner) takes over, and
+django.setup()/migrate/etc. run on a background thread (Django itself,
+plus onnxruntime and friends pulled in transitively, take a few real
+seconds to import — showing nothing during that stretch reads as a
+hang). webview.start(func, args) is pywebview's own supported way to run
+exactly this kind of background init after the window appears.
 """
 import logging
 import os
@@ -35,6 +41,28 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+try:
+    import pyi_splash  # only importable inside a PyInstaller-frozen build
+except ImportError:
+    pyi_splash = None
+
+# --train-classifier lets exe/train.ps1 (Windows) / train.sh (Linux) run
+# item.management.commands.train_character_classifier against this same
+# frozen build, with no separate Python/venv needed — the exe ships with
+# NO pretrained character classifier at all (a blank "canary" state; see
+# that command's own docstring), so this is how a user actually grows one
+# from their own DB, on their own schedule. Skips the webview/server/
+# poller entirely; any args after the flag are forwarded verbatim as this
+# command's own CLI options (e.g. --min-images, --include-multi-character).
+TRAIN_FLAG = '--train-classifier'
+IS_TRAINING_MODE = TRAIN_FLAG in sys.argv
+
+if pyi_splash:
+    if IS_TRAINING_MODE:
+        pyi_splash.close()
+    else:
+        pyi_splash.update_text('起動準備中…')
 
 # --- Persistent per-user data directory -------------------------------
 # ~/.fanart_viewer on every OS (Path.home() resolves to %USERPROFILE% on
@@ -45,8 +73,11 @@ USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # windowed (console=False) builds have no console at all on Windows —
 # sys.stdout/stderr can even be None there, so this has to happen before
-# any print()/logging call, including ones further down this file.
-_log_file = open(USER_DATA_DIR / 'server.log', 'a', encoding='utf-8', buffering=1)
+# any print()/logging call, including ones further down this file. Training
+# mode gets its own log file so a training run's (often long, verbose)
+# output doesn't interleave with the running app's server.log.
+_log_filename = 'training.log' if IS_TRAINING_MODE else 'server.log'
+_log_file = open(USER_DATA_DIR / _log_filename, 'a', encoding='utf-8', buffering=1)
 sys.stdout = _log_file
 sys.stderr = _log_file
 logging.basicConfig(stream=_log_file, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
@@ -105,9 +136,10 @@ def _bundle_path(relative):
 
 os.environ.setdefault('FRONTEND_DIST', _bundle_path('frontend_dist'))
 
-# Make the bundled `backend/` package importable — PyInstaller's onefile
-# build extracts everything under sys._MEIPASS, and this script lives
-# alongside `backend/` there (see build.spec's Analysis() pathex/datas).
+# Make the bundled `backend/` package importable — sys._MEIPASS points at
+# wherever this build's own files actually live (the onedir folder here;
+# a temp extraction dir for a `--onefile` build), and this script lives
+# alongside `backend/` there (see fanart_viewer.spec's Analysis() datas).
 sys.path.insert(0, _bundle_path('.'))
 
 HOST = '127.0.0.1'
@@ -122,8 +154,20 @@ _LOADING_HTML = """<!doctype html>
              border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:16px; }
   @keyframes spin { to { transform:rotate(360deg); } }
 </style></head>
-<body><div class="wrap"><div class="spinner"></div><div>起動中…</div></div></body></html>
+<body><div class="wrap"><div class="spinner"></div><div id="status">起動中…</div></div></body></html>
 """
+
+
+def _set_status(window, text):
+    """Updates _LOADING_HTML's status line via JS injection -- the
+    pyi_splash-based splash screen (see fanart_viewer.spec) only covers
+    the gap before this window exists at all; from here on, this is the
+    one place progress is shown, so every step worth waiting on updates
+    it (django.setup, migrate, starting the server)."""
+    try:
+        window.evaluate_js(f"document.getElementById('status').innerText = {text!r}")
+    except Exception:
+        pass
 
 
 def _poller_loop():
@@ -179,11 +223,22 @@ def _start_backend(window):
     not when this script executes anything, so django.setup() below
     still imports each of them itself, in Django's own correct order.
     """
+    # The pywebview window (with its own _LOADING_HTML spinner) is already
+    # showing by the time this runs (webview.start() shows it before
+    # spawning this function's thread) -- close the bootloader splash now
+    # rather than at the very end, so the two loading indicators don't
+    # stack on top of each other for this whole function's duration.
+    if pyi_splash:
+        pyi_splash.close()
+    _set_status(window, 'アプリを初期化中…')
+
     import django
 
     django.setup()
 
     from django.core.management import call_command
+
+    _set_status(window, 'データベースを準備中…')
 
     # Idempotent — safe to run on every launch, not just the first. This
     # is the packaged build's replacement for `docker compose exec web
@@ -205,6 +260,8 @@ def _start_backend(window):
     from waitress import serve
 
     from backend.wsgi import application
+
+    _set_status(window, 'サーバーを起動中…')
 
     threading.Thread(target=_poller_loop, daemon=True).start()
     threading.Thread(target=lambda: serve(application, host=HOST, port=PORT), daemon=True).start()
@@ -235,11 +292,40 @@ def _start_backend(window):
     window.load_url(url)
 
 
-if __name__ == '__main__':
-    import webview  # noqa: E402
+def _run_training_mode():
+    """No webview/server/poller at all -- just runs the management
+    command to completion (or failure) and exits. See TRAIN_FLAG's
+    comment above for why this exists."""
+    import django
 
-    window = webview.create_window('fanart_viewer', html=_LOADING_HTML, width=1280, height=860)
-    webview.start(_start_backend, args=(window,))
-    # webview.start() blocks until the window is closed; both background
-    # threads started in _start_backend are daemons, so returning here
-    # ends the process — no separate shutdown step needed.
+    django.setup()
+
+    from django.core.management import call_command, execute_from_command_line
+
+    call_command('migrate', interactive=False)
+
+    extra_args = [a for a in sys.argv[1:] if a != TRAIN_FLAG]
+    logging.getLogger(__name__).info('Starting train_character_classifier %s', extra_args)
+    try:
+        execute_from_command_line(['fanart_viewer', 'train_character_classifier', *extra_args])
+    except SystemExit as e:
+        # execute_from_command_line calls sys.exit() itself on completion
+        # (success or a handled CommandError) -- let that determine our
+        # own exit code instead of masking it.
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception('train_character_classifier crashed')
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    if IS_TRAINING_MODE:
+        _run_training_mode()
+    else:
+        import webview  # noqa: E402
+
+        window = webview.create_window('fanart_viewer', html=_LOADING_HTML, width=1280, height=860)
+        webview.start(_start_backend, args=(window,))
+        # webview.start() blocks until the window is closed; both background
+        # threads started in _start_backend are daemons, so returning here
+        # ends the process — no separate shutdown step needed.
