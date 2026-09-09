@@ -235,32 +235,30 @@ canaryはDanbooruリンクと組み合わせて初めて真価を発揮するが
 ```bash
 docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \
   --backend onnx --min-images 15 --exclude 牢屋敷メンバー \
-  --include-multi-character --bootstrap-confidence 0.7 \
-  --multi-feature-cache /app/data/tagger/character_features_multi_onnx.joblib
+  --include-multi-character --bootstrap-confidence 0.7
 ```
 
-##### 特徴量キャッシュ（--feature-cache / --use-cache / --multi-feature-cache / --use-multi-cache）
+##### 特徴量キャッシュ（--feature-cache / --multi-feature-cache）— 常時有効・中断しても再開可能
 
-学習コマンドで一番時間がかかるのは分類器のfit自体ではなく、**画像ごとにタガーを1回通す特徴抽出**部分（特にcanaryは1枚約7.7秒＝全画像で数時間かかることもある）。`--exclude`や`--min-images`を変えて何度か試したい場合、毎回特徴抽出からやり直すと非常に無駄なので、キャッシュを使うこと。
-
-キャッシュは指定しなくても**実行するたびに自動保存**される（`/app/data/tagger/character_features_<backend>.joblib`、複数キャラ分は`character_features_multi_<backend>.joblib`）。2回目以降は`--use-cache`/`--use-multi-cache`で明示的に読み込むと、その回は特徴抽出をスキップして数秒で再fitできる。
+学習コマンドで一番時間がかかるのは分類器のfit自体ではなく、**画像ごとにタガーを1回通す特徴抽出**部分（特にcanaryは1枚約7.7秒＝全画像で数時間かかることもある）。この抽出結果はSQLiteキャッシュ（`/app/data/tagger/character_features_<backend>.sqlite3`、複数キャラ分は`character_features_multi_<backend>.sqlite3`）に**画像1枚ごとに即座にコミット**される — フラグ指定は不要、常にこの動作。停電・OOM・`docker compose down`などで学習プロセスが**途中で落ちても、それまで抽出済みの分は失われない**。次回同じコマンドをそのまま実行するだけで、まだ抽出していない画像だけを続きから処理する（「レジューム」と「DBに新しく追加された画像だけ拾う」は同じ仕組みなので、両方とも特別な操作は不要）。
 
 ```bash
-# 初回: 特徴抽出＋学習と同時に、抽出結果を自動でキャッシュに保存
+# 初回でも再開でも同じコマンド。前回どこまで進んでいたかは気にしなくてよい
 docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \
   --backend onnx --min-images 15 --exclude 牢屋敷メンバー
 
-# 2回目以降: --exclude/--min-images/--test-sizeだけ変えて再fit（特徴抽出はスキップ、数秒で終わる）
+# --exclude/--min-images/--test-sizeだけ変えて再fitしたい場合も同じコマンドでOK
+# （既に抽出済みの画像は自動的に再利用され、未抽出分だけ追加でタガーにかけられる）
 docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \
-  --backend onnx --use-cache /app/data/tagger/character_features_onnx.joblib \
-  --exclude 牢屋敷メンバー,別の除外キャラ --min-images 20
+  --backend onnx --min-images 20 --include-multi-character
 ```
 
 注意点:
-- キャッシュは`--backend`（ONNX/canary）ごとに別ファイルにすること（特徴の次元・意味が違うため使い回せない、backend不一致は自動で拒否される）
-- `--use-cache`はキャッシュ作成時の`--min-images`より**低い**値を指定しても、そのキャラの画像自体はキャッシュに含まれていない（キャッシュ作成時点で足切りされている）ため反映されない。キャラの対象範囲を広げたい場合は初回の作成時に低めの`--min-images`を使っておくと、後から絞り込む分には自由に使い回せる
-- DBに新しい画像・キャラを追加した後は、キャッシュは古いままなので**再抽出（`--use-cache`を付けずに実行）が必要**。`--use-cache`は「同じデータで学習パラメータだけ変えたい」時専用
-- **領域ラベル付けキューの人手ラベル分にはキャッシュが無い** — `--include-multi-character`を付けるたびに毎回タガーへかけ直される。まだ件数が少なければ無視できるが、増えてきたら別途キャッシュ対応が必要
+- キャッシュは`--backend`/`--feature-source`ごとに別ファイル（ファイル名にbackendを含む既定パスなので通常は意識不要。backend不一致でキャッシュを開こうとした場合はエラーで拒否される）
+- 同じキャッシュファイルに対して**学習コマンドを同時に2つ走らせることはできない**（`.lock`ファイルで排他制御。二重起動するとエラーで即終了する — SQLiteの同時書き込みによる破損を防ぐため）
+- `--min-images`を下げてもキャッシュ済みの画像だけでは足りない場合がある（キャッシュにはそのキャラの画像を一度も見ていない状態からは何も追加されない、あくまで「既に抽出済みの画像を使い回す」仕組みなので）。キャラの対象範囲を広げたい場合は普通に再実行すれば不足分だけ自動で追加抽出される
+- **領域ラベル付けキューの人手ラベル分（`--include-multi-character`使用時のmanual_rows）も同じ仕組みでキャッシュされる**（`character_features_region_<backend>.sqlite3`、`--region-feature-cache`で上書き可）。ラベル自体（キャラ名・CharacterAliasGroupのリンク状態）はキャッシュせず毎回DBから最新を読むので、後からエイリアスグループをリンク/解除しても、クロップの再抽出なしに反映される — キャッシュされるのはタガーへの forward pass の結果（クロップの特徴量）だけ
+- **本番のONNX分類器のように、SQLite化より前に`.joblib`形式のキャッシュを既に作っていた場合**でも、既定パス（`--feature-cache`/`--multi-feature-cache`を指定しない場合）にその`.joblib`ファイルが残っていれば、SQLiteキャッシュが空の初回だけ自動で中身を取り込む（`Imported N row(s) from the legacy cache ...`とログに出る）。取り込み後は再抽出不要で、未抽出分だけ普通に追加される。canaryのように新規にSQLiteで作る場合はこの取り込み自体が発生しないだけで、動作は同じ
 
 #### 3. 学習後は必ずwebコンテナを再起動する
 

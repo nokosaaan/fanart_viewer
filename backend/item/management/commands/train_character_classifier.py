@@ -44,18 +44,32 @@ to have white hair, the two classes can be confused with each other more
 than two single-identity classes normally would be.
 
 THE EXPENSIVE PART is feature extraction (running the tagger's forward pass
-once per image) — the classifier fit itself is fast. This command caches
-every extracted (item_id, character, feature vector) to --feature-cache
-after extraction, so a later run that only changes --exclude/--min-images/
---test-size (e.g. to drop a bad label you noticed in the first report) can
-reuse it via --use-cache instead of re-extracting from scratch. A cache is
-only valid for the --backend it was extracted with; extracting is still
-needed again after adding new single-character items to the DB, or to
-widen the character set below the cache's original --min-images floor
-(cache stores whatever this run's --min-images left in, not a fixed lower
-floor — a much lower --min-images used only for the cache-generating run
-maximizes future reuse, at the cost of extracting a few more long-tail
-images that run).
+once per image, over every single-character image, every manually-labeled
+region, and — with --include-multi-character — every multi-character
+bootstrap crop too) — the classifier fit itself is fast. All THREE
+extraction passes are backed by a SQLite cache (FeatureCache /
+RegionFeatureCache / MultiFeatureCache, see their own docstrings) that is
+ALWAYS on (no flag needed) and ALWAYS resumed from: every successfully-
+extracted image/crop is committed to disk immediately, so killing the
+process partway through (a power loss, an OOM kill, `docker compose down`,
+anything) loses at most the one image that was in flight — the next
+invocation just picks up where it left off, skipping everything already
+cached. This is also how adding new single-character items, new manually-
+labeled regions, or new multi-character items to the DB gets picked up
+cheaply later: from the cache's point of view a "resume" and "extract the
+newly-added items" look identical, so no separate mechanism is needed for
+either. RegionFeatureCache specifically caches only the crop's feature —
+never the resolved label — since a region's label can change over time
+(a human edits it, or links/unlinks a CharacterAliasGroup) independently
+of the box's pixel content; label resolution is always re-read fresh from
+the DB, so relinking an alias group takes effect immediately with no
+re-extraction needed. A cache is only valid for the --backend/
+--feature-source it was created with (checked on open, hard error on
+mismatch); it does NOT need to be regenerated just to widen the character
+set below its original --min-images floor — --min-images is applied as a
+cheap post-filter on top of whatever's cached, not baked into the cache
+itself. A sibling `.lock` file (held for the process's whole lifetime)
+stops two training runs from writing the same cache at once.
 
 This is a TRAINING script only — it saves a classifier artifact (joblib
 file) but does NOT wire it into the suggestion pipeline (item.tagger /
@@ -98,22 +112,28 @@ Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier --min-images 20 --backend canary
 
-  # First run: extract + cache, excluding known-bad labels (accidental
-  # mislabels only — NOT an intentional trait bucket like "white", see
-  # above)
+  # First run: extract + cache (the SQLite cache is always created —
+  # excluding known-bad labels here is about accidental mislabels only,
+  # NOT an intentional trait bucket like "white", see above)
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --exclude 牢屋敷メンバー --feature-cache /app/data/tagger/char_features_onnx.joblib
+      --exclude 牢屋敷メンバー
 
-  # Later: tweak and refit WITHOUT re-extracting
+  # Later: tweak --exclude/--min-images/--test-size and refit — already-
+  # extracted images are reused automatically from the cache, no flag
+  # needed (and if the previous run was killed partway, this also just
+  # resumes it instead of starting over)
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --use-cache /app/data/tagger/char_features_onnx.joblib --exclude 牢屋敷メンバー,ユキ
+      --exclude 牢屋敷メンバー,ユキ
 
   # v2: also bootstrap-learn from multi-character images
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
       --exclude 牢屋敷メンバー --include-multi-character --bootstrap-confidence 0.7
 """
+import fcntl
 import importlib.util
+import json
 import os
+import sqlite3
 import time
 from collections import defaultdict
 
@@ -129,6 +149,377 @@ def _have_torch():
     # importing torch (and paying its import cost) just to check whether
     # --classifier metric_learning is even usable.
     return importlib.util.find_spec('torch') is not None
+
+
+class _CacheLockedError(RuntimeError):
+    """Another process already holds the lock on a feature-cache file (see
+    _acquire_lock) — surfaced as a clean error message rather than an
+    opaque OSError."""
+
+
+def _acquire_lock(cache_path):
+    """Exclusive, non-blocking advisory lock on a sibling `.lock` file next
+    to `cache_path` — held for this process's entire lifetime (never
+    unlocked explicitly; released automatically when the file handle is
+    garbage-collected/the process exits). Guards against two
+    train_character_classifier runs writing the same SQLite cache at once,
+    which SQLite itself does not safely support for concurrent writers
+    without WAL-mode tuning this command doesn't otherwise need.
+
+    Returns the open file handle (caller must keep a reference — closing
+    or dropping it releases the lock) or raises _CacheLockedError.
+    """
+    lock_fh = open(cache_path + '.lock', 'w')
+    try:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_fh.close()
+        raise _CacheLockedError(
+            f'Another train_character_classifier run already holds the lock on {cache_path} '
+            '— wait for it to finish, or pass a different cache path for this run.'
+        )
+    return lock_fh
+
+
+class FeatureCache:
+    """SQLite-backed, resumable cache of (item_id, img_order) -> (character,
+    feature vector) for _extract_features's single-character extraction
+    pass. Always created (no opt-in flag needed — see the module docstring)
+    and always resumed from: a row is committed to disk immediately after
+    each image's feature is successfully extracted, so a crash (power loss,
+    OOM kill, etc.) partway through a multi-hour extraction run loses at
+    most the one image that was in flight, not the whole run — the next
+    invocation just skips every (item_id, img_order) pair already present
+    and extracts the rest. This is also how adding new single-character
+    items to the DB gets picked up cheaply later: it looks identical to a
+    "resume" from this cache's point of view (some images are new, i.e.
+    not yet cached), so no separate mechanism is needed for that case.
+
+    `item_id` alone is NOT unique — one item can contribute multiple images
+    (item.preview_images), so `img_order` (PreviewImage.order, or -1 for
+    the single legacy item.preview_data image) disambiguates.
+
+    `legacy_joblib_path`: this cache replaced an older, non-resumable
+    single-blob .joblib cache (same command, before this SQLite rewrite —
+    see the module docstring's history). If one already exists on disk
+    from an earlier training run (e.g. an onnx cache built before this
+    change, while a canary cache gets built fresh under the new code) and
+    this SQLite cache is brand new (0 rows), its rows are imported once on
+    open so that work isn't thrown away — the next extraction pass then
+    only needs to fill in whatever's genuinely missing, same as any other
+    resume. Silently ignored if the path doesn't exist or its own stored
+    backend/feature_source don't match (never blocks startup).
+    """
+
+    def __init__(self, path, backend, feature_source, legacy_joblib_path=None):
+        self.path = path
+        self._lock_fh = _acquire_lock(path)
+        self.conn = sqlite3.connect(path)
+        self.conn.execute('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)')
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS features (
+            item_id INTEGER NOT NULL, img_order INTEGER NOT NULL,
+            character TEXT NOT NULL, feature BLOB NOT NULL,
+            PRIMARY KEY (item_id, img_order)
+        )''')
+        self.conn.commit()
+        self._validate_or_init_meta(backend, feature_source)
+        if legacy_joblib_path and self.count() == 0:
+            self._import_legacy_joblib(legacy_joblib_path, backend, feature_source)
+
+    def _import_legacy_joblib(self, legacy_path, backend, feature_source):
+        if not os.path.exists(legacy_path):
+            return
+        import joblib
+        try:
+            cache = joblib.load(legacy_path)
+        except Exception:
+            return  # unreadable/corrupt — treat as absent, a fresh extraction still works
+        if cache.get('backend') != backend or cache.get('feature_source', 'tags') != feature_source:
+            return  # not compatible with this run — never seen before, from this cache's POV
+        rows = cache.get('rows') or []
+        if not rows:
+            return
+        names = cache.get('general_tag_names')
+        if names is not None:
+            self.set_general_tag_names(names)
+        # The old format never recorded which image within an item a row
+        # came from (item_id alone, not (item_id, img_order)) — reproduce
+        # a stable per-item index by counting duplicates in the order they
+        # appear, which matches real PreviewImage.order in practice (both
+        # were populated by iterating item.preview_images in the same
+        # order). Worst case on a mismatch is one redundant re-extraction
+        # later, never lost or incorrect training data.
+        next_order = defaultdict(int)
+        for item_id, character, feature in rows:
+            img_order = next_order[item_id]
+            next_order[item_id] += 1
+            self.add(item_id, img_order, character, feature)
+        self.conn.commit()
+        print(f'Imported {len(rows)} row(s) from the legacy cache {legacy_path} into {self.path}.')
+
+    def _meta_get(self, key):
+        row = self.conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+        return row[0] if row else None
+
+    def _meta_set(self, key, value):
+        self.conn.execute('INSERT OR REPLACE INTO meta VALUES (?, ?)', (key, value))
+        self.conn.commit()
+
+    def _validate_or_init_meta(self, backend, feature_source):
+        cached_backend = self._meta_get('backend')
+        if cached_backend is None:
+            self._meta_set('backend', backend)
+            self._meta_set('feature_source', feature_source)
+            return
+        cached_fs = self._meta_get('feature_source')
+        if cached_backend != backend or cached_fs != feature_source:
+            raise RuntimeError(
+                f'{self.path} was created with backend={cached_backend!r}/feature_source={cached_fs!r}, '
+                f'but backend={backend!r}/feature_source={feature_source!r} was requested this run — '
+                'features are not compatible. Use a different --feature-cache path, or delete the old file '
+                'if you meant to start over.'
+            )
+
+    def get_general_tag_names(self):
+        raw = self._meta_get('general_tag_names')
+        return json.loads(raw) if raw is not None else None
+
+    def set_general_tag_names(self, names):
+        self._meta_set('general_tag_names', json.dumps(list(names)))
+
+    def has(self, item_id, img_order):
+        return self.conn.execute(
+            'SELECT 1 FROM features WHERE item_id=? AND img_order=?', (item_id, img_order),
+        ).fetchone() is not None
+
+    def add(self, item_id, img_order, character, feature):
+        self.conn.execute(
+            'INSERT OR REPLACE INTO features VALUES (?, ?, ?, ?)',
+            (item_id, img_order, character, np.asarray(feature, dtype=np.float32).tobytes()),
+        )
+        self.conn.commit()  # commit per-row: a crash loses at most this one insert
+
+    def all_rows(self):
+        """[(item_id, character, feature_vector), ...] — same shape the
+        rest of this command has always worked with."""
+        return [
+            (item_id, character, np.frombuffer(blob, dtype=np.float32))
+            for item_id, character, blob in self.conn.execute(
+                'SELECT item_id, character, feature FROM features'
+            )
+        ]
+
+    def count(self):
+        return self.conn.execute('SELECT COUNT(*) FROM features').fetchone()[0]
+
+
+class MultiFeatureCache:
+    """SQLite-backed, resumable cache for _get_multi_character_rows's
+    per-item person-detection + crop-feature-extraction pass. One row per
+    item_id (unlike FeatureCache, an item is checked exactly once here
+    regardless of how many people it contains) — `crop_count=0` marks an
+    item that was checked and deterministically found NOT to have a clean
+    box<->character-count match (a stable fact that will never change on
+    retry, so it's cached too and never re-checked), while `crop_count>0`
+    stores the actual extracted crop features. An exception during
+    detection/cropping/feature-extraction is NOT cached either way — those
+    are treated as transient and simply retried on the next run.
+
+    `legacy_joblib_path`: same one-time import as FeatureCache's own
+    parameter, for a pre-SQLite-rewrite .joblib multi-character cache.
+    Only ever recorded "usable" items (crop_count>0 equivalent) in the old
+    format, never the "checked, not a clean match" ones — so migrating one
+    in means every previously-skipped item gets re-checked once more (a
+    person-detection pass, not a full tagger forward pass per box; cheap
+    relative to what's being saved).
+    """
+
+    def __init__(self, path, backend, feature_source, legacy_joblib_path=None):
+        self.path = path
+        self._lock_fh = _acquire_lock(path)
+        self.conn = sqlite3.connect(path)
+        self.conn.execute('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)')
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS multi_features (
+            item_id INTEGER PRIMARY KEY, chars TEXT NOT NULL,
+            crop_count INTEGER NOT NULL, crops BLOB
+        )''')
+        self.conn.commit()
+        self._validate_or_init_meta(backend, feature_source)
+        if legacy_joblib_path and self.count_checked() == 0:
+            self._import_legacy_joblib(legacy_joblib_path, backend, feature_source)
+
+    def _import_legacy_joblib(self, legacy_path, backend, feature_source):
+        if not os.path.exists(legacy_path):
+            return
+        import joblib
+        try:
+            cache = joblib.load(legacy_path)
+        except Exception:
+            return
+        if cache.get('backend') != backend or cache.get('feature_source', 'tags') != feature_source:
+            return
+        rows = cache.get('rows') or []
+        if not rows:
+            return
+        for item_id, chars, crop_features in rows:
+            self.add(item_id, chars, crop_features)
+        print(f'Imported {len(rows)} row(s) from the legacy cache {legacy_path} into {self.path}.')
+
+    def _meta_get(self, key):
+        row = self.conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+        return row[0] if row else None
+
+    def _meta_set(self, key, value):
+        self.conn.execute('INSERT OR REPLACE INTO meta VALUES (?, ?)', (key, value))
+        self.conn.commit()
+
+    def _validate_or_init_meta(self, backend, feature_source):
+        cached_backend = self._meta_get('backend')
+        if cached_backend is None:
+            self._meta_set('backend', backend)
+            self._meta_set('feature_source', feature_source)
+            return
+        cached_fs = self._meta_get('feature_source')
+        if cached_backend != backend or cached_fs != feature_source:
+            raise RuntimeError(
+                f'{self.path} was created with backend={cached_backend!r}/feature_source={cached_fs!r}, '
+                f'but backend={backend!r}/feature_source={feature_source!r} was requested this run. '
+                'Use a different --multi-feature-cache path, or delete the old file if you meant to start over.'
+            )
+
+    def has(self, item_id):
+        return self.conn.execute(
+            'SELECT 1 FROM multi_features WHERE item_id=?', (item_id,),
+        ).fetchone() is not None
+
+    def add_unusable(self, item_id):
+        self.conn.execute(
+            'INSERT OR REPLACE INTO multi_features VALUES (?, ?, 0, NULL)', (item_id, '[]'),
+        )
+        self.conn.commit()
+
+    def add(self, item_id, chars, crop_features):
+        stacked = np.stack([np.asarray(f, dtype=np.float32) for f in crop_features])
+        self.conn.execute(
+            'INSERT OR REPLACE INTO multi_features VALUES (?, ?, ?, ?)',
+            (item_id, json.dumps(list(chars)), len(crop_features), stacked.tobytes()),
+        )
+        self.conn.commit()
+
+    def usable_rows(self):
+        """[(item_id, chars, [feature_vector, ...]), ...] — same shape
+        _get_multi_character_rows has always returned, skipping the
+        crop_count=0 (deterministically unusable) rows."""
+        rows = []
+        for item_id, chars_json, crop_count, blob in self.conn.execute(
+            'SELECT item_id, chars, crop_count, crops FROM multi_features WHERE crop_count > 0'
+        ):
+            chars = json.loads(chars_json)
+            flat = np.frombuffer(blob, dtype=np.float32)
+            crops = list(flat.reshape(crop_count, -1))
+            rows.append((item_id, chars, crops))
+        return rows
+
+    def count_checked(self):
+        return self.conn.execute('SELECT COUNT(*) FROM multi_features').fetchone()[0]
+
+    def count_usable(self):
+        return self.conn.execute(
+            'SELECT COUNT(*) FROM multi_features WHERE crop_count > 0'
+        ).fetchone()[0]
+
+
+class RegionFeatureCache:
+    """SQLite-backed, resumable cache of manually-labeled-region crop
+    features for _get_manual_labeled_rows — same always-on, always-
+    resumed, per-row-committed design as FeatureCache/MultiFeatureCache.
+
+    Deliberately caches ONLY the crop's feature vector, keyed on
+    (item_id, image_index, box) — NOT the resolved label. A region's
+    `characters` list (and therefore its label, via CharacterAliasGroup)
+    is cheap to re-read from Item.character_regions directly and can
+    change over time (a human edits a region, or links/unlinks an alias
+    group) independently of the box's pixel content — re-deriving the
+    label fresh every run from the live DB avoids ever serving a stale
+    label from a cache that has no way to know a group was just linked.
+    Only the expensive part (crop + tagger forward pass) is skipped on a
+    cache hit.
+
+    `image_index` is normalized to -1 for the legacy single-image
+    fallback (Item.character_regions stores None there — see its own
+    docstring) since SQLite treats NULL as never equal to itself in a
+    PRIMARY KEY, which would silently defeat deduplication.
+    `box` is normalized to a tuple of rounded ints before being JSON-
+    encoded into the key, so int/float storage quirks in the same
+    logical box don't cause spurious cache misses.
+    """
+
+    def __init__(self, path, backend, feature_source):
+        self.path = path
+        self._lock_fh = _acquire_lock(path)
+        self.conn = sqlite3.connect(path)
+        self.conn.execute('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)')
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS region_features (
+            item_id INTEGER NOT NULL, image_index INTEGER NOT NULL, box TEXT NOT NULL,
+            feature BLOB NOT NULL,
+            PRIMARY KEY (item_id, image_index, box)
+        )''')
+        self.conn.commit()
+        self._validate_or_init_meta(backend, feature_source)
+
+    def _meta_get(self, key):
+        row = self.conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+        return row[0] if row else None
+
+    def _meta_set(self, key, value):
+        self.conn.execute('INSERT OR REPLACE INTO meta VALUES (?, ?)', (key, value))
+        self.conn.commit()
+
+    def _validate_or_init_meta(self, backend, feature_source):
+        cached_backend = self._meta_get('backend')
+        if cached_backend is None:
+            self._meta_set('backend', backend)
+            self._meta_set('feature_source', feature_source)
+            return
+        cached_fs = self._meta_get('feature_source')
+        if cached_backend != backend or cached_fs != feature_source:
+            raise RuntimeError(
+                f'{self.path} was created with backend={cached_backend!r}/feature_source={cached_fs!r}, '
+                f'but backend={backend!r}/feature_source={feature_source!r} was requested this run. '
+                'Use a different --region-feature-cache path, or delete the old file if you meant to start over.'
+            )
+
+    @staticmethod
+    def _key(item_id, image_index, box):
+        idx = -1 if image_index is None else image_index
+        box_key = json.dumps([round(float(v)) for v in box])
+        return item_id, idx, box_key
+
+    def has(self, item_id, image_index, box):
+        item_id, idx, box_key = self._key(item_id, image_index, box)
+        return self.conn.execute(
+            'SELECT 1 FROM region_features WHERE item_id=? AND image_index=? AND box=?',
+            (item_id, idx, box_key),
+        ).fetchone() is not None
+
+    def get(self, item_id, image_index, box):
+        item_id, idx, box_key = self._key(item_id, image_index, box)
+        row = self.conn.execute(
+            'SELECT feature FROM region_features WHERE item_id=? AND image_index=? AND box=?',
+            (item_id, idx, box_key),
+        ).fetchone()
+        return np.frombuffer(row[0], dtype=np.float32) if row else None
+
+    def add(self, item_id, image_index, box, feature):
+        item_id, idx, box_key = self._key(item_id, image_index, box)
+        self.conn.execute(
+            'INSERT OR REPLACE INTO region_features VALUES (?, ?, ?, ?)',
+            (item_id, idx, box_key, np.asarray(feature, dtype=np.float32).tobytes()),
+        )
+        self.conn.commit()  # commit per-row: a crash loses at most this one insert
+
+    def count(self):
+        return self.conn.execute('SELECT COUNT(*) FROM region_features').fetchone()[0]
 
 
 class NearestCentroidClassifier:
@@ -370,13 +761,11 @@ class Command(BaseCommand):
                              help='Where to save the trained classifier (.joblib). Default: '
                                   "character_classifier_<backend>.joblib under the tagger's own cache dir.")
         parser.add_argument('--feature-cache', type=str, default=None,
-                             help='Where to save extracted (item_id, character, feature) data after '
-                                  "extraction, for reuse by a later --use-cache run. Default: "
-                                  "character_features_<backend>.joblib under the tagger's own cache dir.")
-        parser.add_argument('--use-cache', type=str, default=None,
-                             help='Path to a previously-saved --feature-cache file — skip DB scanning and '
-                                  'feature extraction entirely and refit straight from these cached '
-                                  'features (still applies --exclude/--min-images as filters first).')
+                             help='SQLite cache of extracted (item_id, character, feature) data. Always '
+                                  'used (no opt-in needed) and always resumed from — a previous run that '
+                                  "was interrupted partway just continues where it left off. Default: "
+                                  "character_features_<backend>.sqlite3 under the tagger's own cache dir; "
+                                  'pass a custom path to keep separate caches for parallel experiments.')
         parser.add_argument('--include-multi-character', action='store_true',
                              help='Also bootstrap-learn from multi-character items via person-detection '
                                   'crops + self-training (see module docstring). Off by default since it '
@@ -400,11 +789,13 @@ class Command(BaseCommand):
                                   "learned embedding projection + margin loss — the literature survey's "
                                   "priority-1 approach; requires torch, see requirements-timm.txt)")
         parser.add_argument('--multi-feature-cache', type=str, default=None,
-                             help='Where to cache extracted multi-character crop features (raw, before '
-                                  'pseudo-labeling). Default: character_features_multi_<backend>.joblib.')
-        parser.add_argument('--use-multi-cache', type=str, default=None,
-                             help='Path to a previously-saved --multi-feature-cache file — skip person '
-                                  'detection/crop extraction and pseudo-label straight from these.')
+                             help='SQLite cache of extracted multi-character crop features (raw, before '
+                                  'pseudo-labeling). Always used and always resumed from, same as '
+                                  '--feature-cache. Default: character_features_multi_<backend>.sqlite3.')
+        parser.add_argument('--region-feature-cache', type=str, default=None,
+                             help='SQLite cache of extracted manually-labeled-region crop features (see '
+                                  'RegionFeatureCache). Always used and always resumed from, same as '
+                                  '--feature-cache. Default: character_features_region_<backend>.sqlite3.')
 
     def handle(self, *args, **options):
         try:
@@ -456,38 +847,41 @@ class Command(BaseCommand):
             ))
             return
 
-        general_tag_names = None
-        if options['use_cache']:
-            self.stdout.write(f"Loading cached features from {options['use_cache']}...")
-            cache = joblib.load(options['use_cache'])
-            if cache.get('backend') != tagger_backend or cache.get('feature_source', 'tags') != feature_source:
-                self.stderr.write(self.style.ERROR(
-                    f"Cache was extracted with backend={cache.get('backend')!r}/"
-                    f"feature_source={cache.get('feature_source', 'tags')!r}, but backend={tagger_backend!r}/"
-                    f"feature_source={feature_source!r} was requested — features aren't compatible."
-                ))
-                return
-            raw_rows = cache['rows']  # [(item_id, character, feature_vector), ...]
-            general_tag_names = cache['general_tag_names']
-            self.stdout.write(f'Loaded {len(raw_rows)} cached (item, character, feature) rows.\n')
-        else:
-            raw_rows, general_tag_names = self._extract_features(
-                min_images, tagger_backend, feature_source, options['max_images_per_character'],
-            )
-            if raw_rows is None:
-                return
-            default_cache_name = (
+        default_cache_name = (
+            f'character_features_{backend_choice}.sqlite3' if feature_source == 'tags'
+            else f'character_features_{backend_choice}_{feature_source}.sqlite3'
+        )
+        feature_cache_path = options['feature_cache'] or os.path.join(tagger._data_dir(), default_cache_name)
+        # Pre-SQLite-rewrite cache from an earlier training run under the
+        # old code (see FeatureCache's own docstring) — only relevant when
+        # `feature_cache_path` is still at its default location, since a
+        # custom --feature-cache path was never used by the old .joblib
+        # naming convention either.
+        legacy_joblib_path = None
+        if not options['feature_cache']:
+            legacy_name = (
                 f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
                 else f'character_features_{backend_choice}_{feature_source}.joblib'
             )
-            feature_cache_path = options['feature_cache'] or os.path.join(tagger._data_dir(), default_cache_name)
-            joblib.dump({'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
-                         'general_tag_names': general_tag_names},
-                        feature_cache_path)
-            self.stdout.write(self.style.SUCCESS(
-                f'\nCached {len(raw_rows)} extracted features to {feature_cache_path} '
-                '(reuse with --use-cache to skip re-extraction next time).\n'
-            ))
+            legacy_joblib_path = os.path.join(tagger._data_dir(), legacy_name)
+        try:
+            feature_cache = FeatureCache(feature_cache_path, tagger_backend, feature_source, legacy_joblib_path)
+        except _CacheLockedError as e:
+            self.stderr.write(self.style.ERROR(str(e)))
+            return
+
+        already_cached = feature_cache.count()
+        if already_cached:
+            self.stdout.write(f'Resuming from {feature_cache_path}: {already_cached} image(s) already '
+                               'extracted in a previous run.')
+        general_tag_names = self._extract_features(
+            feature_cache, min_images, tagger_backend, feature_source, options['max_images_per_character'],
+        )
+        if general_tag_names is None:
+            return
+        raw_rows = feature_cache.all_rows()  # [(item_id, character, feature_vector), ...]
+        self.stdout.write(f'{len(raw_rows)} total (item, character, feature) rows available '
+                           f'(cache: {feature_cache_path}).\n')
 
         # Apply --exclude and --min-images as filters on whatever rows we now have
         # (freshly extracted or loaded from cache) — this is the cheap part, so
@@ -547,7 +941,7 @@ class Command(BaseCommand):
             # bootstrap teacher has never seen such a character, so its
             # confidence for it is never reliable enough to clear
             # --bootstrap-confidence on its own.
-            manual_rows = self._get_manual_labeled_rows(tagger_backend, options['feature_source'], general_tag_names)
+            manual_rows = self._get_manual_labeled_rows(options, tagger_backend, general_tag_names)
 
             multi_rows = self._get_multi_character_rows(options, tagger_backend, general_tag_names)
             pseudo_rows = self._bootstrap_label(
@@ -607,7 +1001,7 @@ class Command(BaseCommand):
         }, output_path)
         self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
 
-    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names):
+    def _get_manual_labeled_rows(self, options, tagger_backend, expected_general_tag_names):
         """[(character, feature), ...] for every human-labeled region across
         all items with Item.character_regions set (see RegionAnnotator.jsx /
         ItemViewSet.character_regions_view) — already correctly paired, no
@@ -635,13 +1029,39 @@ class Command(BaseCommand):
         skipped rather than taught as any one name (or, worse, as all of
         them).
 
+        Backed by a resumable RegionFeatureCache (see its own docstring for
+        why it caches only the crop feature, not the resolved label) —
+        always used, always resumed from, same as _extract_features. Label
+        resolution (the CharacterAliasGroup lookup above) is re-run fresh
+        every call regardless of cache state, since it's cheap and can
+        change over time independently of the box's pixel content.
+
         Regions span potentially several of an item's images (see
         Item.character_regions' own docstring) — grouped by image_index per
         item here so each distinct image is only fetched/selected once
         (item.views._select_image_bytes) no matter how many boxes are on
-        it, rather than once per region.
+        it, rather than once per region — and only for images that still
+        have at least one region not already in the cache.
         """
         from item.views import _select_image_bytes
+
+        backend_choice = options['backend']
+        feature_source = options['feature_source']
+        default_region_name = (
+            f'character_features_region_{backend_choice}.sqlite3' if feature_source == 'tags'
+            else f'character_features_region_{backend_choice}_{feature_source}.sqlite3'
+        )
+        region_cache_path = options['region_feature_cache'] or os.path.join(tagger._data_dir(), default_region_name)
+        try:
+            region_cache = RegionFeatureCache(region_cache_path, tagger_backend, feature_source)
+        except _CacheLockedError as e:
+            self.stderr.write(self.style.ERROR(str(e)))
+            return []
+
+        already_cached = region_cache.count()
+        if already_cached:
+            self.stdout.write(f'Resuming from {region_cache_path}: {already_cached} region(s) already '
+                               'extracted in a previous run.')
 
         linked_groups = {
             tuple(sorted(set(g.characters))): sorted(set(g.characters))
@@ -653,6 +1073,7 @@ class Command(BaseCommand):
         skipped_mismatch = 0
         skipped_multi_label = 0
         linked_alias_rows = 0
+        newly_extracted = 0
         for item in items.iterator():
             regions = item.character_regions or []
             if not regions:
@@ -663,38 +1084,59 @@ class Command(BaseCommand):
                 by_image[region.get('image_index')].append(region)
 
             for image_index, image_regions in by_image.items():
-                image_bytes, _resolved_index = _select_image_bytes(item, image_index)
-                if image_bytes is None:
-                    self.stderr.write(f'item {item.id}: no image available for its manual regions (image_index={image_index}), skipping')
-                    continue
+                # Resolve labels first (cheap, no image access) so the
+                # image is only fetched if at least one of its regions
+                # actually needs a fresh extraction.
+                eligible = []  # (box, label, is_multi_label)
                 for region in image_regions:
                     box = region.get('box')
                     names = region.get('characters') or []
                     if not box or not names:
                         continue
-                    label = None
                     if len(names) == 1:
                         label = names[0]
                     else:
                         group = linked_groups.get(tuple(sorted(set(names))))
-                        if group is not None:
-                            label = group[0]  # canonical name — see this method's own docstring
-                        else:
+                        if group is None:
                             skipped_multi_label += 1
                             continue
-                    try:
-                        crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
-                        feature, feat_names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
-                    except Exception as e:
-                        self.stderr.write(f'item {item.id}: manual-region feature extraction failed ({e}), skipping region')
+                        label = group[0]  # canonical name — see this method's own docstring
+                    eligible.append((box, label, len(names) > 1))
+
+                if not eligible:
+                    continue
+
+                needs_image = any(not region_cache.has(item.id, image_index, box) for box, _l, _m in eligible)
+                image_bytes = None
+                if needs_image:
+                    image_bytes, _resolved_index = _select_image_bytes(item, image_index)
+                    if image_bytes is None:
+                        self.stderr.write(f'item {item.id}: no image available for its manual regions '
+                                           f'(image_index={image_index}), skipping')
                         continue
-                    if feat_names != expected_general_tag_names:
-                        skipped_mismatch += 1
-                        continue
-                    if len(names) > 1:
+
+                for box, label, is_multi in eligible:
+                    feature = region_cache.get(item.id, image_index, box)
+                    if feature is None:
+                        try:
+                            crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
+                            feature, feat_names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
+                        except Exception as e:
+                            self.stderr.write(f'item {item.id}: manual-region feature extraction failed '
+                                               f'({e}), skipping region')
+                            continue
+                        if feat_names != expected_general_tag_names:
+                            skipped_mismatch += 1
+                            continue
+                        region_cache.add(item.id, image_index, box, feature)
+                        newly_extracted += 1
+                    if is_multi:
                         linked_alias_rows += 1
                     rows.append((label, feature))
 
+        if newly_extracted:
+            self.stdout.write(f'{newly_extracted} region(s) newly extracted this run '
+                               f'(cache: {region_cache_path}).')
         if linked_alias_rows:
             self.stdout.write(f'{linked_alias_rows} region(s) trained via a confirmed CharacterAliasGroup (2+ names, same identity).')
         if skipped_mismatch:
@@ -717,23 +1159,34 @@ class Command(BaseCommand):
         way to know which box is which character otherwise. Raw and
         unlabeled — pairing crops to specific character names happens in
         _bootstrap_label, using a teacher classifier that isn't fit yet
-        when this runs."""
-        import joblib
+        when this runs.
 
+        Backed by a resumable MultiFeatureCache (see its own docstring) —
+        always used, always resumed from, same as _extract_features."""
         backend_choice = options['backend']
         feature_source = options['feature_source']
-        if options['use_multi_cache']:
-            self.stdout.write(f"Loading cached multi-character crops from {options['use_multi_cache']}...")
-            cache = joblib.load(options['use_multi_cache'])
-            if cache.get('backend') != tagger_backend or cache.get('feature_source', 'tags') != feature_source:
-                self.stderr.write(self.style.ERROR(
-                    f"Multi-character cache was extracted with backend={cache.get('backend')!r}/"
-                    f"feature_source={cache.get('feature_source', 'tags')!r}, but backend={tagger_backend!r}/"
-                    f"feature_source={feature_source!r} was requested."
-                ))
-                return []
-            self.stdout.write(f"Loaded {len(cache['rows'])} cached multi-character items.\n")
-            return cache['rows']
+        default_multi_name = (
+            f'character_features_multi_{backend_choice}.sqlite3' if feature_source == 'tags'
+            else f'character_features_multi_{backend_choice}_{feature_source}.sqlite3'
+        )
+        multi_cache_path = options['multi_feature_cache'] or os.path.join(tagger._data_dir(), default_multi_name)
+        legacy_joblib_path = None
+        if not options['multi_feature_cache']:
+            legacy_name = (
+                f'character_features_multi_{backend_choice}.joblib' if feature_source == 'tags'
+                else f'character_features_multi_{backend_choice}_{feature_source}.joblib'
+            )
+            legacy_joblib_path = os.path.join(tagger._data_dir(), legacy_name)
+        try:
+            multi_cache = MultiFeatureCache(multi_cache_path, tagger_backend, feature_source, legacy_joblib_path)
+        except _CacheLockedError as e:
+            self.stderr.write(self.style.ERROR(str(e)))
+            return []
+
+        already_checked = multi_cache.count_checked()
+        if already_checked:
+            self.stdout.write(f'Resuming from {multi_cache_path}: {already_checked} multi-character item(s) '
+                               'already checked in a previous run.')
 
         max_chars = options['max_characters_per_item']
         items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
@@ -744,6 +1197,8 @@ class Command(BaseCommand):
             chars = [c for c in (item.characters or []) if c]
             if not (2 <= len(chars) <= max_chars):
                 continue
+            if multi_cache.has(item.id):
+                continue  # already checked (usable or deterministically not) in a previous run
             imgs = list(item.preview_images.order_by('order'))
             if imgs:
                 image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
@@ -753,17 +1208,23 @@ class Command(BaseCommand):
                 continue
             candidates.append((item.id, chars, image_bytes))
 
-        self.stdout.write(f'\n{len(candidates)} multi-character items to check for a clean person-detection match...')
-        rows = []
+        if not candidates:
+            self.stdout.write('\nNo new multi-character items to check (cache up to date).')
+            return multi_cache.usable_rows()
+
+        self.stdout.write(f'\n{len(candidates)} new multi-character item(s) to check for a clean '
+                           'person-detection match...')
         t0 = time.time()
+        newly_usable = 0
         for i, (item_id, chars, image_bytes) in enumerate(candidates):
             try:
                 boxes = tagger._detect_person_boxes(image_bytes)
             except Exception as e:
-                self.stderr.write(f'item {item_id}: person detection failed ({e}), skipping')
+                self.stderr.write(f'item {item_id}: person detection failed ({e}), skipping (will retry later)')
                 continue
             if len(boxes) != len(chars):
-                continue  # ambiguous — can't assign crops to characters reliably
+                multi_cache.add_unusable(item_id)  # a stable fact — never worth re-checking
+                continue
 
             crop_features = []
             ok = True
@@ -772,7 +1233,8 @@ class Command(BaseCommand):
                     crop_bytes = tagger._crop_with_padding(image_bytes, box)
                     feature, names = self._compute_feature(crop_bytes, tagger_backend, options['feature_source'])
                 except Exception as e:
-                    self.stderr.write(f'item {item_id}: crop feature extraction failed ({e}), skipping item')
+                    self.stderr.write(f'item {item_id}: crop feature extraction failed ({e}), '
+                                       'skipping item (will retry later)')
                     ok = False
                     break
                 if names != expected_general_tag_names:
@@ -781,20 +1243,16 @@ class Command(BaseCommand):
                     break
                 crop_features.append(feature)
             if ok and crop_features:
-                rows.append((item_id, chars, crop_features))
+                multi_cache.add(item_id, chars, crop_features)
+                newly_usable += 1
             if (i + 1) % 25 == 0 or i + 1 == len(candidates):
-                self.stdout.write(f'  checked {i + 1}/{len(candidates)} items, {len(rows)} usable so far '
+                self.stdout.write(f'  checked {i + 1}/{len(candidates)} items, {newly_usable} newly usable '
                                    f'({time.time() - t0:.0f}s elapsed)')
 
-        default_multi_name = (
-            f'character_features_multi_{backend_choice}.joblib' if feature_source == 'tags'
-            else f'character_features_multi_{backend_choice}_{feature_source}.joblib'
-        )
-        multi_cache_path = options['multi_feature_cache'] or os.path.join(tagger._data_dir(), default_multi_name)
-        joblib.dump({'rows': rows, 'backend': tagger_backend, 'feature_source': feature_source}, multi_cache_path)
+        rows = multi_cache.usable_rows()
         self.stdout.write(self.style.SUCCESS(
-            f'\n{len(rows)}/{len(candidates)} multi-character items had a clean box<->character-count match. '
-            f'Cached to {multi_cache_path}.\n'
+            f'\n{multi_cache.count_usable()}/{multi_cache.count_checked()} multi-character items had a clean '
+            f'box<->character-count match (cache: {multi_cache_path}).\n'
         ))
         return rows
 
@@ -856,14 +1314,21 @@ class Command(BaseCommand):
         feature = np.asarray(preds, dtype=np.float32)[general_idx]
         return feature, [tag_names[i] for i in general_idx]
 
-    def _extract_features(self, min_images, tagger_backend, feature_source='tags', max_images_per_character=None):
+    def _extract_features(self, feature_cache, min_images, tagger_backend, feature_source='tags',
+                           max_images_per_character=None):
         """Scans the DB for single-character items and runs the tagger's
-        forward pass once per image. Returns (rows, general_tag_names) where
-        rows is [(item_id, character, feature_vector), ...] for every
-        character with >= min_images single-character images — deliberately
-        NOT filtered by --exclude here, so the resulting feature-cache file
-        stays maximally reusable for a later run with a different --exclude
-        list (excluding is a cheap post-filter, see handle()).
+        forward pass once per image NOT already in `feature_cache` (see
+        FeatureCache — this is what makes an interrupted run resumable,
+        and what lets a later run with newly-added items only extract
+        those). Returns general_tag_names (None on a hard failure) —
+        callers read the actual rows back via feature_cache.all_rows(),
+        the cache is the source of truth, not this method's return value.
+
+        Eligibility (>= min_images single-character images per character)
+        is still computed fresh every run from the DB directly, deliberately
+        NOT filtered by --exclude here, so the same cache stays maximally
+        reusable for a later run with a different --exclude list (excluding
+        is a cheap post-filter, see handle()).
 
         `max_images_per_character` caps how many of each character's images
         actually get extracted (first N found, no special sampling) — the
@@ -873,7 +1338,7 @@ class Command(BaseCommand):
         architecture comparison; a capped, smaller-but-still-real sample is
         far more useful than not comparing at all.
         """
-        by_char = defaultdict(list)  # character name -> [(item_id, image_bytes), ...]
+        by_char = defaultdict(list)  # character name -> [(item_id, img_order, image_bytes), ...]
         items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
             'id', 'characters', 'preview_data',
         )
@@ -886,9 +1351,9 @@ class Command(BaseCommand):
                 continue
             imgs = list(item.preview_images.all())
             if imgs:
-                by_char[char].extend((item.id, bytes(img.data)) for img in imgs)
+                by_char[char].extend((item.id, img.order, bytes(img.data)) for img in imgs)
             elif item.preview_data:
-                by_char[char].append((item.id, bytes(item.preview_data)))
+                by_char[char].append((item.id, -1, bytes(item.preview_data)))  # -1: legacy single-image field
             if max_images_per_character is not None:
                 by_char[char] = by_char[char][:max_images_per_character]
 
@@ -899,34 +1364,53 @@ class Command(BaseCommand):
                 'need at least 2 distinct classes to train a classifier. Lower --min-images, or gather '
                 'more single-character-item data first (see character_image_stats).'
             ))
-            return None, None
+            return None
 
         self.stdout.write(f'{len(eligible)} characters qualify (>= {min_images} single-character images each):')
         for c, imgs in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
             self.stdout.write(f'  {len(imgs):>5}  {c}')
 
         total = sum(len(imgs) for imgs in eligible.values())
-        self.stdout.write(f'\nExtracting features for {total} images '
-                           f'(backend={tagger_backend}, feature_source={feature_source})...')
-        rows = []
-        general_tag_names = None
+        to_extract = [
+            (char, item_id, img_order, image_bytes)
+            for char, imgs in eligible.items()
+            for item_id, img_order, image_bytes in imgs
+            if not feature_cache.has(item_id, img_order)
+        ]
+        already_done = total - len(to_extract)
+        general_tag_names = feature_cache.get_general_tag_names()
+        if not to_extract:
+            self.stdout.write(f'\nAll {total} eligible images already extracted (cache up to date) — '
+                               'skipping straight to fit.')
+            return general_tag_names
+
+        self.stdout.write(f'\nExtracting features for {len(to_extract)} images '
+                           f'({already_done} already cached, {total} total; '
+                           f'backend={tagger_backend}, feature_source={feature_source})...')
         t0 = time.time()
         done = 0
-        for char, imgs in eligible.items():
-            for item_id, image_bytes in imgs:
-                try:
-                    feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
-                except Exception as e:
-                    self.stderr.write(f'item {item_id}: feature extraction failed ({e}), skipping')
-                    continue
-                if general_tag_names is None:
-                    general_tag_names = names
-                rows.append((item_id, char, feature))
-                done += 1
-                if done % 50 == 0 or done == total:
-                    self.stdout.write(f'  {done}/{total} ({time.time() - t0:.0f}s elapsed)')
+        for char, item_id, img_order, image_bytes in to_extract:
+            try:
+                feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
+            except Exception as e:
+                self.stderr.write(f'item {item_id}#{img_order}: feature extraction failed ({e}), skipping')
+                continue
+            if general_tag_names is None:
+                general_tag_names = names
+                feature_cache.set_general_tag_names(names)
+            elif names != general_tag_names:
+                self.stderr.write(self.style.ERROR(
+                    f'item {item_id}#{img_order}: general-tag vocabulary differs from earlier cached rows '
+                    f'(the tagger model likely changed since this cache was started) — aborting rather than '
+                    f'mixing incompatible feature vectors. Delete the cache to start over.'
+                ))
+                return None
+            feature_cache.add(item_id, img_order, char, feature)
+            done += 1
+            if done % 50 == 0 or done == len(to_extract):
+                self.stdout.write(f'  {done}/{len(to_extract)} ({time.time() - t0:.0f}s elapsed)')
 
-        if len(rows) < 2:
+        if feature_cache.count() < 2:
             self.stderr.write(self.style.ERROR('Not enough successfully-extracted features.'))
-            return None, None
-        return rows, general_tag_names
+            return None
+        return general_tag_names

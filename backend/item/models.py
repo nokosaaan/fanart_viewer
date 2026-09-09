@@ -111,6 +111,38 @@ class TwitterCredential(models.Model):
         return f"TwitterCredential(updated_at={self.updated_at})"
 
 
+class PollerSettings(models.Model):
+    """Single-row on/off switch + rate controls for poll_twitter_updates's
+    background polling — see item.management.commands.poll_twitter_updates.
+    Defaults to enabled=True at the field level, matching this app's
+    always-on docker `poller` service default (it previously only ever
+    checked has_credentials(), with no separate opt-in) — this row lets an
+    operator dial the rate down (or off) without editing docker-compose or
+    passing --tick-seconds by hand, and without restarting the poller
+    process (poll_twitter_updates re-reads this every tick).
+    """
+    UNIT_CHOICES = [
+        ('minutes', '分'), ('hours', '時間'), ('days', '日'), ('weeks', '週'),
+    ]
+    _UNIT_SECONDS = {'minutes': 60, 'hours': 3600, 'days': 86400, 'weeks': 604800}
+
+    enabled = models.BooleanField(default=True)
+    # How many queued items poll_twitter_updates's _tick drains per tick
+    # (previously hardcoded to exactly 1).
+    items_per_tick = models.IntegerField(default=1)
+    interval_value = models.IntegerField(default=6)
+    interval_unit = models.CharField(max_length=10, choices=UNIT_CHOICES, default='minutes')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def interval_seconds(self) -> int:
+        seconds = self.interval_value * self._UNIT_SECONDS.get(self.interval_unit, 60)
+        return max(60, seconds)  # floor: never busy-loop on a misconfigured tiny value
+
+    def __str__(self):
+        return f"PollerSettings(enabled={self.enabled}, every {self.interval_value} {self.interval_unit})"
+
+
 class SocialFetchQueueItem(models.Model):
     """FIFOキュー行1件 = ポーリングで見つかった、まだ取り込んでいない
     ブックマーク/いいね1件 (see item.management.commands.poll_twitter_updates).
@@ -137,7 +169,7 @@ class SocialFetchQueueItem(models.Model):
     url = models.URLField()
     # Post text, already extracted from the Bookmarks/Likes GraphQL response
     # during discovery (see twitter_gql_fetch._extract_full_text) — carried
-    # through to Item creation in poll_twitter_updates._drain_one so it
+    # through to Item creation in poll_twitter_updates._drain so it
     # isn't thrown away and re-derived (unreliably — see
     # ItemViewSet.fetch_and_save_preview's own description-backfill step,
     # which only ever runs as a fallback) by the later fetch_and_save_preview
