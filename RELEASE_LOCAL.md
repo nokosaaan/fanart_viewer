@@ -163,11 +163,19 @@ docker compose -f docker-compose.prod.yml exec web python manage.py backfill_des
 
 ### Twitterブックマーク/いいねの手動ポーリング
 
-通常は`poller`サービスが自動で(6分おきに)実行する。手動で1回だけ試したい場合:
+通常は`poller`サービスが自動で実行する。頻度・件数・オンオフは管理画面の「Twitter/X 認証情報」パネル内の設定（`PollerSettings`）から変更でき、**`poller`コンテナを再起動しなくても次のtickから即座に反映される**（1tickごとに設定をDBから読み直しているため）。手動で1回だけ試したい場合:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec web python manage.py poll_twitter_updates --once
 ```
+
+⚠️ 上記の「再起動不要でリアルタイム反映」は、コード自体がその対応済みの状態で動いている場合の話。既に起動中の`poller`コンテナは起動時点のコードのままなので、この機能を追加/修正した際は一度だけ
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build poller
+```
+
+でコンテナを作り直す必要がある（コードの再デプロイ全般に言えることで、設定変更そのものとは別の話）。
 
 ### AI提案パイプライン: キャラリンク・分類器学習
 

@@ -117,9 +117,11 @@ class PollerSettings(models.Model):
     Defaults to enabled=True at the field level, matching this app's
     always-on docker `poller` service default (it previously only ever
     checked has_credentials(), with no separate opt-in) — this row lets an
-    operator dial the rate down (or off) without editing docker-compose or
-    passing --tick-seconds by hand, and without restarting the poller
-    process (poll_twitter_updates re-reads this every tick).
+    operator dial the rate (and interval) down or off entirely from the
+    settings panel, without editing docker-compose or restarting the
+    poller process: poll_twitter_updates re-reads both `enabled` and
+    `interval_seconds` fresh after every single tick, never just once at
+    process start.
     """
     UNIT_CHOICES = [
         ('minutes', '分'), ('hours', '時間'), ('days', '日'), ('weeks', '週'),

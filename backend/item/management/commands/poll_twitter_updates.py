@@ -8,11 +8,15 @@ fetch_account_retweets for the pattern this mirrors):
 - Runs as its own long-lived process (a separate `poller` docker-compose
   service), never inside the `web` request/response cycle.
 - Gated on PollerSettings (see item.models): does nothing at all unless
-  `enabled` is set — lets an operator turn this off (or dial the rate
-  down) from the settings panel without touching docker-compose or
-  restarting the process, since it's re-read fresh every tick.
-- One tick every `--tick-seconds` (default 360s = 6 min), or whatever
-  interval the caller derives from PollerSettings.interval_seconds:
+  `enabled` is set, and the delay between ticks is PollerSettings.
+  interval_seconds — both re-read fresh from the DB after every single
+  tick (not just once at process start), so a change made through the
+  settings panel (TwitterCredsManager.jsx) takes effect on the very next
+  cycle with no restart of this long-lived process needed. This is the
+  docker `poller` service's equivalent of exe/launcher.py's own poller
+  thread on the exe-packaged build, which re-reads the same field the
+  same way for the same reason.
+- One tick every PollerSettings.interval_seconds (default 360s = 6 min):
   1. discovery: pull the newest page of Bookmarks and of Likes, stopping as
      soon as a tweet already known (already an Item, or already queued) is
      seen — so this only ever costs a couple of lightweight GraphQL calls
@@ -75,13 +79,8 @@ class Command(BaseCommand):
             '--once', action='store_true',
             help='Run a single tick then exit, instead of looping forever.',
         )
-        parser.add_argument(
-            '--tick-seconds', type=int, default=TICK_SECONDS_DEFAULT,
-            help=f'Seconds between ticks (default: {TICK_SECONDS_DEFAULT}).',
-        )
 
     def handle(self, *args, **options):
-        tick_seconds = options['tick_seconds']
         while True:
             try:
                 self._tick()
@@ -89,7 +88,15 @@ class Command(BaseCommand):
                 logger.exception('poll_twitter_updates: unhandled error in tick')
             if options['once']:
                 break
-            time.sleep(tick_seconds)
+            # Re-read fresh every cycle (not cached in a local variable at
+            # process start) — see the module docstring on why this makes
+            # the settings panel's frequency control take effect without a
+            # restart.
+            try:
+                interval = PollerSettings.objects.get(pk=1).interval_seconds
+            except PollerSettings.DoesNotExist:
+                interval = TICK_SECONDS_DEFAULT
+            time.sleep(interval)
 
     # --- one tick = discovery + drain exactly one queued item -----------
 
