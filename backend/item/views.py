@@ -2963,7 +2963,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if image_bytes is None:
             return Response({'detail': 'No image available for this item'}, status=status.HTTP_404_NOT_FOUND)
 
-        boxes = tagger._detect_person_boxes(image_bytes)
+        try:
+            boxes = tagger._detect_person_boxes(image_bytes)
+        except Exception:
+            # Matches every other call site of this function (see
+            # tagger.py's suggest_tags) — its docstring's "never raises"
+            # contract is actually enforced by the caller, not the
+            # function itself (e.g. imgutils not being installed raises
+            # here), so this needs the same try/except those have.
+            logging.exception('detect_regions: person detection failed')
+            boxes = []
         return Response({
             'image_index': resolved_index,
             'boxes': [list(box) for box in boxes],
