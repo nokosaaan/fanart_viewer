@@ -225,6 +225,16 @@ def list_backups() -> list:
     return resp.get('files', [])
 
 
+def get_backup_folder_url() -> str:
+    """Direct link to the Drive folder backups are stored in, for the
+    settings panel to link out to (previously there was no way to reach
+    it from the app itself — you had to already know to search Drive for
+    BACKUP_FOLDER_NAME)."""
+    service = get_drive_service()
+    folder_id = _get_or_create_backup_folder(service)
+    return f'https://drive.google.com/drive/folders/{folder_id}'
+
+
 def restore_backup(file_id: str, overwrite: bool = False) -> None:
     """Download the given Drive backup and load it into the database.
 

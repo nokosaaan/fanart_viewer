@@ -29,6 +29,7 @@ const TABLE_LABELS = {
 // Google Drive backup/restore panel. Opened from the app header (admin only).
 export default function BackupManager({ onClose }) {
   const [files, setFiles] = useState([])
+  const [folderUrl, setFolderUrl] = useState('')
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [restoringId, setRestoringId] = useState(null)
@@ -50,6 +51,7 @@ export default function BackupManager({ onClose }) {
       }
       const j = await r.json()
       setFiles(j.files || [])
+      setFolderUrl(j.folder_url || '')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -165,10 +167,15 @@ export default function BackupManager({ onClose }) {
             </div>
           ) : (
           <>
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16 }}>
             <button className="btn" onClick={createBackup} disabled={creating}>
               {creating ? 'バックアップ中…' : '今すぐバックアップ'}
             </button>
+            {folderUrl && (
+              <a href={folderUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>
+                Google Driveフォルダを開く ↗
+              </a>
+            )}
           </div>
 
           <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 8 }}>
@@ -190,6 +197,10 @@ export default function BackupManager({ onClose }) {
                     <div>{f.name}</div>
                     <div style={{ fontSize: 12, color: '#94a3b8' }}>
                       {formatDate(f.createdTime)} · {formatSize(f.size)}
+                      {' · '}
+                      <a href={`https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noopener noreferrer">
+                        Driveで開く
+                      </a>
                     </div>
                   </div>
                   <button

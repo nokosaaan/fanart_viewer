@@ -3,7 +3,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from security.token_utils import require_admin as _admin_only
-from .drive_backup import create_backup, list_backups, restore_backup, DriveBackupError, ExistingDataError
+from .drive_backup import create_backup, list_backups, restore_backup, get_backup_folder_url, DriveBackupError, ExistingDataError
 
 
 @csrf_exempt
@@ -27,9 +27,10 @@ def backup_list_view(request):
         return denied
     try:
         files = list_backups()
+        folder_url = get_backup_folder_url()
     except DriveBackupError as e:
         return JsonResponse({'detail': str(e)}, status=500)
-    return JsonResponse({'files': files})
+    return JsonResponse({'files': files, 'folder_url': folder_url})
 
 
 @csrf_exempt
