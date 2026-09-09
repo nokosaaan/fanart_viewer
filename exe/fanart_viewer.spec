@@ -18,7 +18,7 @@ import sys
 # file's own directory, regardless of the cwd build.sh runs from.
 sys.path.insert(0, os.path.join(SPECPATH, '..', 'backend'))
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 hiddenimports = [
     'whitenoise.middleware',
@@ -34,12 +34,26 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules('rest_framework')
 hiddenimports += collect_submodules('item.migrations')
+# call_command('poll_twitter_updates', ...) (launcher.py's in-process
+# poller loop) discovers management commands the same pkgutil-based way
+# MigrationLoader discovers migrations — same silent-failure-in-frozen-
+# build class of bug fixed above for item.migrations.
+hiddenimports += collect_submodules('item.management.commands')
+
+# Playwright's driver (Node runtime + JS bundle, item/playwright_setup.py)
+# is plain data, not Python source, so Analysis() won't pick it up on its
+# own — it has to be bundled as `datas`, not `hiddenimports`. This is the
+# ~130MB fixed cost of having Playwright-based fetching available at all;
+# only the actual Chromium *browser* binary (~280MB) is deferred to a
+# first-use download (see playwright_setup.py's own header comment).
+datas = [('../frontend/dist', 'frontend_dist')]
+datas += collect_data_files('playwright')
 
 a = Analysis(
     ['launcher.py'],
     pathex=['../backend'],
     binaries=[],
-    datas=[('../frontend/dist', 'frontend_dist')],
+    datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

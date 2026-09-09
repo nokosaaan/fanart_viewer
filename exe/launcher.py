@@ -14,6 +14,7 @@ deleted after the process exits, so anything written there would vanish
 on every relaunch. Only the frontend's static build (read-only, identical
 every launch) is served straight out of the bundle itself.
 """
+import logging
 import os
 import secrets
 import sys
@@ -35,6 +36,12 @@ os.environ.setdefault('SQLITE_PATH', str(USER_DATA_DIR / 'db.sqlite3'))
 # the downloaded base tagger model, the HF cache, AND the locally-trained
 # character_classifier_*.joblib (all three live under _data_dir()).
 os.environ.setdefault('TAGGER_CACHE_DIR', str(USER_DATA_DIR / 'tagger_cache'))
+# Playwright's own Chromium download target — item/playwright_setup.py
+# downloads Chromium here on first actual use (never bundled into the
+# exe itself; only the Playwright package + its driver are). Redirecting
+# this away from Playwright's OS-default cache dir means the download
+# survives app updates and lives alongside this app's other data.
+os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', str(USER_DATA_DIR / 'playwright_browsers'))
 os.environ.setdefault('DJANGO_DEBUG', '0')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.settings')
 os.environ.setdefault('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost')
@@ -104,7 +111,26 @@ def _open_browser_when_ready():
     webbrowser.open(f'http://{HOST}:{PORT}/')
 
 
+def _poller_loop():
+    """In-process replacement for docker-compose's separate `poller`
+    container (poller_entrypoint.sh -> manage.py poll_twitter_updates).
+    There's no second process to run here, so this just calls the same
+    management command's single-tick mode (`--once`, already exercised
+    for manual testing) on a timer instead. poll_twitter_updates._tick()
+    itself already no-ops quickly when no Twitter credentials are set, so
+    it's safe to always run this rather than gating it on setup state.
+    """
+    tick_seconds = int(os.environ.get('POLLER_TICK_SECONDS', '360'))
+    while True:
+        try:
+            call_command('poll_twitter_updates', once=True)
+        except Exception:
+            logging.getLogger(__name__).exception('poller tick failed')
+        time.sleep(tick_seconds)
+
+
 if __name__ == '__main__':
     threading.Thread(target=_open_browser_when_ready, daemon=True).start()
+    threading.Thread(target=_poller_loop, daemon=True).start()
     print(f'fanart_viewer starting at http://{HOST}:{PORT}/ (data: {USER_DATA_DIR})')
     serve(application, host=HOST, port=PORT)

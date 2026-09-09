@@ -48,9 +48,15 @@ def fetch_rendered_media(url: str, browser_name: str = 'chromium', headless: boo
         try:
           browser = browser_ctor.launch(headless=headless, args=launch_args, executable_path=chrome_exe)
         except Exception:
-          # fallback to bundled
+          # fallback to bundled Chromium, downloading it first if this is
+          # the first time it's actually needed (see playwright_setup.py)
+          from .playwright_setup import ensure_chromium_installed
+          ensure_chromium_installed()
           browser = browser_ctor.launch(headless=headless, args=launch_args)
       else:
+        if browser_name == 'chromium':
+          from .playwright_setup import ensure_chromium_installed
+          ensure_chromium_installed()
         browser = browser_ctor.launch(headless=headless, args=launch_args)
       # Create a context that resembles a regular Chrome/Brave environment
       ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"

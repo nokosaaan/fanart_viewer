@@ -36,6 +36,9 @@ def fetch_images_with_playwright(target_url, headful=False, timeout_ms=12000):
     results = []
     logged_in = False
 
+    from .playwright_setup import ensure_chromium_installed
+    ensure_chromium_installed()
+
     with sync_playwright() as p:
         launch_args = [
             '--no-sandbox',
