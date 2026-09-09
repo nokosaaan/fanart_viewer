@@ -69,7 +69,15 @@ VIEWER_PASSWORD=閲覧者パスワード（不要なら空）
 - Twitter/Xの認証情報 — 管理画面の「Twitter/X 認証情報」パネルから`auth_token`/`ct0`を設定（`.env`の`TWITTER_AUTH_TOKEN`/`TWITTER_CT0`でも可）
 - `NOTIFY_DISCORD_WEBHOOK_URL`（任意） — 認証切れ検知時にDiscordへ通知
 
-⚠️ **いいねは自動ポーリングの対象外**です（ログイン中アカウント自身のscreen_name解決が`twid`Cookieに依存しており、毎tick走らせるには不安定すぎるため）。いいねを取り込みたい場合はヘッダーメニューの「いいねを取得」から都度手動で（ブックマークの「ブックマークを取得」と同じUI）。
+⚠️ **いいねは自動ポーリングの対象外**です（ログイン中アカウント自身のscreen_name解決が`twid`Cookieに依存しており、毎tick走らせるには不安定すぎるため）。いいねを取り込みたい場合はヘッダーメニューの「いいねを取得」から都度手動で（ブックマークの「ブックマークを取得」と同じUI）。`poller`は`SocialFetchQueueItem`の`kind='bookmark'`行しか触らないので、以前の自動いいね取得時代のキュー行が残っていても自動処理はされない。念のため削除したい場合:
+
+```bash
+docker compose -f docker-compose.prod.yml exec web python manage.py shell -c "
+from item.models import SocialFetchQueueItem
+count, _ = SocialFetchQueueItem.objects.filter(kind='like').delete()
+print(f'{count} 件のいいねキュー行を削除しました')
+"
+```
 
 **取得失敗した行は自動で再試行されます**（`SocialFetchQueueItem.status='failed'`）。以前は失敗した行が「既知」として扱われてしまい、それより古いブックマークが二度と発見されなくなるバグがあったが修正済み。手動でのDBクリーンアップ等は不要 — 次回のtickから自動で再試行される。
 

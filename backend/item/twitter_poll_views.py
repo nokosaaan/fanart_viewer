@@ -1,5 +1,5 @@
-"""Admin-only, read-only status endpoint for the Twitter bookmark/like
-poller (see item.management.commands.poll_twitter_updates). Surfaces
+"""Admin-only, read-only status endpoint for the Twitter bookmark poller
+(see item.management.commands.poll_twitter_updates). Surfaces
 TwitterPollState + the pending queue depth so the frontend can show a
 banner when polling has stopped working (auth expired, query IDs stale,
 etc.) instead of it failing silently for months.
@@ -18,7 +18,11 @@ def twitter_poll_status_view(request):
         return denied
 
     state = TwitterPollState.objects.first()
-    pending_count = SocialFetchQueueItem.objects.filter(status='pending').count()
+    # kind='bookmark' only — the poller no longer touches Likes at all
+    # (see poll_twitter_updates.py's own docstring), so a leftover/stray
+    # 'like' row here would just inflate this health indicator with a
+    # backlog the automatic poller was never going to process anyway.
+    pending_count = SocialFetchQueueItem.objects.filter(status='pending', kind='bookmark').count()
 
     if state is None:
         return JsonResponse({

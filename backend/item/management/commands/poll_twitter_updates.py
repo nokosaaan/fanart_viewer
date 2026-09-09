@@ -274,9 +274,16 @@ class Command(BaseCommand):
             # comment on why a failed row must not count as "known"
             # either) only once there's no pending work left this tick, so
             # a backlog of retries can never crowd out brand new content.
+            #
+            # kind='bookmark' only — this command no longer discovers
+            # Likes at all (see the module docstring), but a 'like' row
+            # queued from before that change (or any other stray one)
+            # must never be silently auto-fetched here either; Likes are
+            # opt-in only, via LikeFetchManager.jsx's own manual scan,
+            # which doesn't go through this queue at all.
             row = (
-                SocialFetchQueueItem.objects.filter(status='pending').order_by('-external_id').first()
-                or SocialFetchQueueItem.objects.filter(status='failed').order_by('-external_id').first()
+                SocialFetchQueueItem.objects.filter(status='pending', kind='bookmark').order_by('-external_id').first()
+                or SocialFetchQueueItem.objects.filter(status='failed', kind='bookmark').order_by('-external_id').first()
             )
             if row is None:
                 break
@@ -310,8 +317,8 @@ class Command(BaseCommand):
             if not ok:
                 failed += 1
 
-        remaining_pending = SocialFetchQueueItem.objects.filter(status='pending').count()
-        remaining_failed = SocialFetchQueueItem.objects.filter(status='failed').count()
+        remaining_pending = SocialFetchQueueItem.objects.filter(status='pending', kind='bookmark').count()
+        remaining_failed = SocialFetchQueueItem.objects.filter(status='failed', kind='bookmark').count()
         logger.info(
             'poll_twitter_updates: drain fetched %d (of which %d failed), skipped %d '
             'already-processed, %d still pending, %d still failed (retried next tick)',
