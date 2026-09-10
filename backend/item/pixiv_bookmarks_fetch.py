@@ -1,25 +1,39 @@
 """
 Pixiv bookmarks fetcher using pixiv.net's own internal ajax API
-(/ajax/user/{uid}/illusts/bookmarks) -- browser-free (plain HTTP via
-requests), mirroring item.twitter_gql_fetch's approach but considerably
-simpler: Pixiv's bookmarks endpoint is directly offset-paginated (a
-plain `offset` query param), unlike Twitter's opaque pagination cursor,
-and there's no separate "Likes" concept to track alongside it.
+(/ajax/user/{uid}/illusts/bookmarks), mirroring item.twitter_gql_fetch's
+approach but considerably simpler: Pixiv's bookmarks endpoint is directly
+offset-paginated (a plain `offset` query param), unlike Twitter's opaque
+pagination cursor, and there's no separate "Likes" concept to track
+alongside it.
 
 Required: a PHPSESSID cookie from a logged-in pixiv.net session (see
 item.pixiv_creds -- the same credential store playwright_helper.py's
 Pixiv fetcher already uses).
 
-NOTE: this endpoint's exact shape (particularly `body.works[].id`) is
-based on Pixiv's known ajax API conventions (the same family of
-endpoints playwright_helper.py's _master/img-original URL reconstruction
-already relies on) but has not been exercised against a live,
-authenticated session in development -- verify against a real response
-(DevTools -> Network tab while opening your own bookmarks page) if
-bookmarks stop showing up as expected. gallery-dl (already a dependency
-of this project) was checked as a possible reference for this, but its
-Pixiv support goes through the separate mobile-app OAuth API instead of
-PHPSESSID-based ajax calls, so it wasn't directly reusable here.
+Requests go through a real (headless) Chromium browser context via
+Playwright's ctx.request.get() -- the same pattern playwright_helper.py's
+own Pixiv fetcher already uses for its ajax calls -- rather than the
+`requests` library directly. This was a deliberate fix, not the original
+design: a plain `requests.get('https://www.pixiv.net/', cookies=...)`
+was tried first and failed live with `requests.exceptions.TooManyRedirects:
+Exceeded 30 redirects`, repeatedly, against a real account -- consistent
+with Pixiv (or a CDN/WAF in front of it) redirect-looping traffic that
+doesn't look like a real browser. ctx.request.get shares the real
+Chromium network stack/TLS fingerprint with the browser context it's
+created from, which playwright_helper.py's own already-working Pixiv
+calls rely on for the same reason.
+
+NOTE: the bookmarks endpoint's exact response shape (particularly
+`body.works[].id`) is based on Pixiv's known ajax API conventions (the
+same family of endpoints playwright_helper.py's _master/img-original URL
+reconstruction already relies on) but has not been exercised against a
+live, authenticated session in development -- verify against a real
+response (DevTools -> Network tab while opening your own bookmarks page)
+if bookmarks stop showing up as expected. gallery-dl (already a
+dependency of this project) was checked as a possible reference for
+this, but its Pixiv support goes through the separate mobile-app OAuth
+API instead of PHPSESSID-based ajax calls, so it wasn't directly
+reusable here.
 
 Resolving "my own user id" specifically (resolve_own_user_id, below)
 uses a different, longer-established convention instead: pixiv.net embeds
@@ -27,12 +41,11 @@ the logged-in user's info as JSON in a `<meta id="meta-global-data">` tag
 on every page -- this is not a dedicated API endpoint, just what's already
 present in the HTML of any page load.
 """
+import contextlib
 import html
 import json
 import logging
 import re
-
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +55,7 @@ _UA = (
 )
 _PAGE_SIZE = 48
 # Order-independent: don't assume name= comes before id= comes before
-# content= within the tag (an earlier, stricter fixed-order regex here
-# failed live, repeatedly -- either the attribute order isn't what was
-# assumed, or the page no longer carries this tag at all; see
-# resolve_own_user_id's own diagnostic logging for telling those apart).
+# content= within the tag.
 _META_TAG_RE = re.compile(r'<meta\b[^>]*>')
 _META_ID_RE = re.compile(r'id=["\']meta-global-data["\']')
 _META_CONTENT_RE = re.compile(r'content=["\']((?:[^"\']|(?<=\\)["\'])*)["\']')
@@ -76,6 +86,38 @@ def _get_phpsessid() -> str:
     return get_credentials()['phpsessid']
 
 
+@contextlib.contextmanager
+def _pixiv_request_context():
+    """A Playwright browser context with the stored PHPSESSID cookie
+    injected, for making ctx.request.get() calls through -- see this
+    module's own docstring for why this replaced plain `requests` calls.
+    Downloads Chromium on first use if it isn't already present (see
+    item.playwright_setup); never bundled into the exe itself.
+    """
+    phpsessid = _get_phpsessid()
+    if not phpsessid:
+        raise RuntimeError('PIXIV_PHPSESSIDが設定されていません')
+
+    from playwright.sync_api import sync_playwright
+
+    from .playwright_setup import ensure_chromium_installed
+
+    ensure_chromium_installed()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'],
+        )
+        try:
+            ctx = browser.new_context()
+            ctx.add_cookies([{
+                'name': 'PHPSESSID', 'value': phpsessid, 'domain': '.pixiv.net', 'path': '/',
+            }])
+            yield ctx
+        finally:
+            browser.close()
+
+
 def resolve_own_user_id() -> str:
     """The logged-in account's numeric user id -- needed since the
     bookmarks endpoint is per-user, not "my own" implicitly. See this
@@ -87,17 +129,17 @@ def resolve_own_user_id() -> str:
         PixivAPIError:  page didn't load, or its expected structure wasn't found
         RuntimeError:   PHPSESSID not configured
     """
-    phpsessid = _get_phpsessid()
-    if not phpsessid:
-        raise RuntimeError('PIXIV_PHPSESSIDが設定されていません')
+    with _pixiv_request_context() as ctx:
+        resp = ctx.request.get(
+            'https://www.pixiv.net/',
+            headers={'User-Agent': _UA, 'Accept': 'text/html'},
+            timeout=20000,
+        )
+        if resp.status != 200:
+            raise PixivAPIError(f'HTTP {resp.status}')
+        body_text = resp.text()
 
-    resp = requests.get(
-        'https://www.pixiv.net/', cookies={'PHPSESSID': phpsessid}, headers={'User-Agent': _UA}, timeout=15,
-    )
-    if resp.status_code != 200:
-        raise PixivAPIError(f'HTTP {resp.status_code}')
-
-    raw_json = _find_global_data_json(resp.text)
+    raw_json = _find_global_data_json(body_text)
     if raw_json is None:
         # Diagnostic breadcrumb for next time, without logging the page
         # body itself (could contain the session's own cookies/tokens
@@ -106,7 +148,7 @@ def resolve_own_user_id() -> str:
         # attribute order/quoting differs from what the regex expects"
         # (marker present) from "pixiv.net dropped this mechanism
         # entirely" (marker absent) -- see this module's docstring.
-        marker_present = 'meta-global-data' in resp.text
+        marker_present = 'meta-global-data' in body_text
         logger.warning(
             'pixiv_bookmarks_fetch: meta-global-data tag not found (marker text present in response: %s)',
             marker_present,
@@ -144,45 +186,46 @@ def fetch_account_bookmarks(
         PixivAPIError:  unexpected HTTP/API failure
         RuntimeError:   credentials not configured
     """
-    phpsessid = _get_phpsessid()
-    if not phpsessid:
-        raise RuntimeError('PIXIV_PHPSESSIDが設定されていません')
-
     candidates = []
     offset = start_offset
-    for _ in range(max_pages):
-        resp = requests.get(
-            f'https://www.pixiv.net/ajax/user/{user_id}/illusts/bookmarks',
-            params={'tag': '', 'offset': offset, 'limit': _PAGE_SIZE, 'rest': 'show'},
-            cookies={'PHPSESSID': phpsessid}, headers={'User-Agent': _UA}, timeout=15,
-        )
-        if resp.status_code == 401:
-            raise PixivAuthError('Pixivセッションが無効です(PHPSESSIDの期限切れの可能性)')
-        if resp.status_code != 200:
-            raise PixivAPIError(f'HTTP {resp.status_code}')
+    with _pixiv_request_context() as ctx:
+        for _ in range(max_pages):
+            resp = ctx.request.get(
+                f'https://www.pixiv.net/ajax/user/{user_id}/illusts/bookmarks',
+                params={'tag': '', 'offset': offset, 'limit': _PAGE_SIZE, 'rest': 'show'},
+                headers={
+                    'User-Agent': _UA, 'Accept': 'application/json',
+                    'Referer': f'https://www.pixiv.net/users/{user_id}/bookmarks/artworks',
+                },
+                timeout=20000,
+            )
+            if resp.status == 401:
+                raise PixivAuthError('Pixivセッションが無効です(PHPSESSIDの期限切れの可能性)')
+            if resp.status != 200:
+                raise PixivAPIError(f'HTTP {resp.status}')
 
-        data = resp.json()
-        if data.get('error'):
-            raise PixivAPIError(data.get('message') or 'unknown error')
+            data = resp.json()
+            if data.get('error'):
+                raise PixivAPIError(data.get('message') or 'unknown error')
 
-        works = (data.get('body') or {}).get('works') or []
-        if not works:
-            return candidates, 0  # nothing more to backfill
+            works = (data.get('body') or {}).get('works') or []
+            if not works:
+                return candidates, 0  # nothing more to backfill
 
-        caught_up = False
-        for w in works:
-            illust_id = int(w['id'])
-            if illust_id in known_ids:
-                caught_up = True
-                break
-            candidates.append({
-                'illust_id': illust_id,
-                'user_name': w.get('userName') or '',
-                'description': w.get('title') or '',
-            })
+            caught_up = False
+            for w in works:
+                illust_id = int(w['id'])
+                if illust_id in known_ids:
+                    caught_up = True
+                    break
+                candidates.append({
+                    'illust_id': illust_id,
+                    'user_name': w.get('userName') or '',
+                    'description': w.get('title') or '',
+                })
 
-        offset += len(works)
-        if caught_up:
-            return candidates, 0
+            offset += len(works)
+            if caught_up:
+                return candidates, 0
 
     return candidates, offset

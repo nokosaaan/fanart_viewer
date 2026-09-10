@@ -14,9 +14,20 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 
 import requests
+
+# The exe-packaged build has no separate `gallery-dl` executable on PATH
+# (pip's normal console-script wrapper never gets bundled by PyInstaller --
+# only gallery_dl the PYTHON PACKAGE does) -- exe/launcher.py handles this
+# with its own --run-gallery-dl mode, re-invoking this same frozen exe as a
+# subprocess instead of a nonexistent `gallery-dl` binary. `sys.frozen` is
+# the standard PyInstaller idiom for "am I running from a frozen build".
+_GALLERYDL_CMD = (
+    [sys.executable, '--run-gallery-dl'] if getattr(sys, 'frozen', False) else ['gallery-dl']
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +99,7 @@ def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], st
         # media), type 3 carries a bare media URL string.
         proc = subprocess.run(
             [
-                "gallery-dl",
+                *_GALLERYDL_CMD,
                 "--config", config_path,
                 "-j",
                 url,

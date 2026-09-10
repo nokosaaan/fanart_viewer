@@ -48,6 +48,12 @@ hiddenimports += collect_submodules('item.management.commands')
 # first-use download (see playwright_setup.py's own header comment).
 datas = [('../frontend/dist', 'frontend_dist')]
 datas += collect_data_files('playwright')
+# pykakasi's kanji/kana romanization tables (item/danbooru_lookup.py's
+# _romaji, used by the キャラ↔Danbooru link resolver) are data files too --
+# same class of bug as playwright's driver above (confirmed live:
+# FileNotFoundError for pykakasi/data/kanwadict4.db in a build built
+# without this).
+datas += collect_data_files('pykakasi')
 
 a = Analysis(
     ['launcher.py'],

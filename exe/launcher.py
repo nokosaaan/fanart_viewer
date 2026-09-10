@@ -58,11 +58,35 @@ except ImportError:
 TRAIN_FLAG = '--train-classifier'
 IS_TRAINING_MODE = TRAIN_FLAG in sys.argv
 
+# --run-gallery-dl: item.gallerydl_fetch normally shells out to a
+# `gallery-dl` executable that pip's install creates on PATH -- which
+# doesn't exist anywhere in a frozen build (only gallery_dl the PYTHON
+# PACKAGE gets bundled, no separate wrapper binary). Detected there via
+# sys.frozen and re-invoked as `[sys.executable, '--run-gallery-dl', *args]`
+# instead -- this same exe, in a fresh child process (for the same
+# isolation a real separate gallery-dl process would have; gallery_dl.
+# main() itself mutates global config/logging state, not safe to call
+# concurrently in-process). Everything after the flag is passed straight
+# through as gallery-dl's own argv, and stdout/stderr are deliberately
+# left untouched (no log-file redirect below) since the parent process's
+# subprocess.run(capture_output=True) needs to see them directly, exactly
+# like it would from a real standalone gallery-dl.
+RUN_GALLERYDL_FLAG = '--run-gallery-dl'
+IS_GALLERYDL_MODE = RUN_GALLERYDL_FLAG in sys.argv
+
 if pyi_splash:
-    if IS_TRAINING_MODE:
+    if IS_TRAINING_MODE or IS_GALLERYDL_MODE:
         pyi_splash.close()
     else:
         pyi_splash.update_text('起動準備中…')
+
+if IS_GALLERYDL_MODE:
+    _flag_index = sys.argv.index(RUN_GALLERYDL_FLAG)
+    _gallerydl_argv = sys.argv[_flag_index + 1:]
+    import gallery_dl
+
+    sys.argv = ['gallery-dl', *_gallerydl_argv]
+    sys.exit(gallery_dl.main())
 
 # --- Persistent per-user data directory -------------------------------
 # ~/.fanart_viewer on every OS (Path.home() resolves to %USERPROFILE% on
