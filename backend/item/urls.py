@@ -11,6 +11,9 @@ from .poipiku_poll_views import poipiku_poll_status_view
 from .poller_settings_views import poller_settings_status_view, poller_settings_set_view
 from .drive_creds_views import drive_creds_status_view, drive_creds_set_view, drive_creds_authenticate_view
 from .train_classifier_views import train_classifier_status_view, train_classifier_start_view
+from .browser_login_views import (
+    browser_login_status_view, browser_login_open_view, browser_login_capture_view, browser_login_cancel_view,
+)
 from django.urls import path, include
 
 router = DefaultRouter()
@@ -42,4 +45,8 @@ urlpatterns = [
     path('drive_creds/authenticate/', drive_creds_authenticate_view),
     path('train_classifier/status/', train_classifier_status_view),
     path('train_classifier/start/', train_classifier_start_view),
+    path('browser_login/status/', browser_login_status_view),
+    path('browser_login/open/', browser_login_open_view),
+    path('browser_login/capture/', browser_login_capture_view),
+    path('browser_login/cancel/', browser_login_cancel_view),
 ]

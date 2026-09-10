@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import PollerSettingsPanel from './PollerSettingsPanel'
+import BrowserLoginPanel from './BrowserLoginPanel'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -132,6 +133,10 @@ export default function PixivCredsManager({ onClose }) {
           )}
 
           <PollerSettingsPanel platform="pixiv" label="自動でブックマークを取得する" />
+
+          <BrowserLoginPanel platform="pixiv" onApplied={j => { setStatus(j); setNotice('ログインを検知し、認証情報を自動保存しました。次回のfetchから即座に使われます(再起動不要)。') }} />
+
+          <div style={{ fontSize: 12, color: '#64748b', margin: '4px 0 10px' }}>または手動で入力:</div>
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>PHPSESSID(推奨)</label>
