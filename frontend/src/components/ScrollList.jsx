@@ -2,6 +2,19 @@ import React, { useState, useRef, useEffect } from 'react'
 import EditFields from './EditFields'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 import { notify } from '../lib/crossWindowSync'
+import { getPlatformIcon } from '../lib/platformIcon'
+
+// Shows the platform badge (Twitter/Pixiv/Poipiku) when the link is
+// recognized, falling back to the generic "opens externally" icon
+// otherwise — either way this is what "Open link"'s own icon shows, so
+// recognized links convey both "this leaves the app" and "which site"
+// in the same glance instead of a second lookup.
+function OpenLinkIcon({ link }) {
+  const platform = getPlatformIcon(link)
+  return platform
+    ? <img src={platform.icon} alt={platform.label} style={{ width: 16, height: 16, borderRadius: 3 }} />
+    : <img src="/icons/export-link.svg" alt="Open" style={{ width: 16, height: 16 }} />
+}
 
 function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   const [url, setUrl] = useState(it.link || '')
@@ -198,7 +211,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
                       <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} style={{marginLeft:4, padding:'6px'}} title="タイトルをコピー">
                         <img src="/icons/copy.svg" alt="Copy title" style={{width:16, height:16}} />
                       </button>
-                    {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{marginLeft:4, padding:'6px'}} title="Open link"><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
+                    {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{marginLeft:4, padding:'6px'}} title="Open link"><OpenLinkIcon link={it.link} /></a>}
                   </div>
                 ))}
                 {titlesState.length>2 && (
@@ -208,7 +221,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
             ) : (
               <div style={{display:'inline-flex', alignItems:'center', gap:4}}>
                 <span className="empty">—</span>
-                {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{padding:'6px'}} title="Open link"><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
+                {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{padding:'6px'}} title="Open link"><OpenLinkIcon link={it.link} /></a>}
               </div>
             )}
             {showTitles && Array.isArray(titlesState) && (
@@ -220,7 +233,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
                         <button className="chip" onClick={async ()=>{ try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} title="タイトルをコピー" style={{padding:6}}>
                         <img src="/icons/copy.svg" alt="Copy" style={{width:16, height:16}} />
                       </button>
-                      {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" title="Open link" style={{padding:6}}><img src="/icons/export-link.svg" alt="Open" style={{width:16, height:16}} /></a>}
+                      {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" title="Open link" style={{padding:6}}><OpenLinkIcon link={it.link} /></a>}
                     </div>
                   </div>
                 ))}

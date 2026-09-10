@@ -6,6 +6,8 @@
 # /frontend
 /frontend/.env
 /frontend/package-lock.json
+/frontend/node_modules/
+/frontend/.dist_old_root_owned_unused/
 # /scripts/*
 /backend/data/tagger
 /backend/data/*.json

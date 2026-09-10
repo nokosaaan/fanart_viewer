@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { saveImagesChunked } from '../lib/saveImages'
 import { notify } from '../lib/crossWindowSync'
+import ProgressBar from './ProgressBar'
 
 function timeAgo(ts){
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000))
@@ -98,6 +99,9 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
           </button>
           {bulkRunning && (
             <button className="btn" onClick={onCancelBulkFetch}>キャンセル</button>
+          )}
+          {bulkRunning && bulkProgress && bulkProgress.total > 0 && (
+            <ProgressBar done={bulkProgress.done} total={bulkProgress.total} />
           )}
           {!bulkRunning && bulkSummary && <span style={{fontSize:12, color:'#6b7280'}}>{bulkSummary}</span>}
           {bulkRunning && (

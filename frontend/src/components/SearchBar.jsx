@@ -28,7 +28,12 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
     setIncludeR18(willEnable)
   }
 
-  const matched = suggestions.filter(s=> s && s.toLowerCase().includes(query.toLowerCase())).slice(0,10)
+  // Empty query would otherwise match every suggestion (''.includes('') is
+  // always true), so clearing the box left the full candidate list showing
+  // instead of hiding it -- require at least one real character first.
+  const matched = query.trim().length === 0
+    ? []
+    : suggestions.filter(s=> s && s.toLowerCase().includes(query.toLowerCase())).slice(0,10)
 
   return (
     <div className="searchbar">

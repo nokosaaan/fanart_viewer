@@ -59,8 +59,10 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .col{ display:flex; flex-direction:column; gap:6px }
 .col-header{ font-size:12px; color:#6b7280 }
 .chips{ display:flex; gap:8px; flex-wrap:wrap; align-items:center }
-.chip{ background:#f3f4f6; border:0; padding:6px 10px; border-radius:999px; cursor:pointer; font-size:13px }
+.chip{ background:#f3f4f6; border:0; padding:6px 10px; border-radius:999px; cursor:pointer; font-size:13px; transition:background-color 0.15s ease, color 0.15s ease }
+.chip:hover{ background:#dbeafe; color:#1d4ed8 }
 .chip.more{ background:#eef2ff }
+.chip.more:hover{ background:#c7d2fe }
 .chip-dropdown{ margin-top:8px; background:#fff; border:1px solid #e6e6f0; box-shadow:0 6px 14px rgba(16,24,40,0.06); border-radius:8px; padding:8px }
 .chip-row{ padding:6px 4px; border-bottom:1px dashed #f0f0f0 }
 .chip-row:last-child{ border-bottom:0 }
@@ -78,7 +80,8 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .link-text{ color:#0b5fff; text-decoration:underline }
 .actions-row{ margin-top:10px; display:flex; gap:8px; align-items:center }
 .url-input{ padding:8px; border-radius:8px; border:1px solid #e5e7eb; width:380px }
-.btn{ background:#2563eb; color:#fff; border:0; padding:8px 12px; border-radius:999px; cursor:pointer }
+.btn{ background:#2563eb; color:#fff; border:0; padding:8px 12px; border-radius:999px; cursor:pointer; transition:background-color 0.15s ease }
+.btn:hover:not([disabled]){ background:#1d4ed8 }
 .btn[disabled]{ opacity:0.6; cursor:default }
 
 /* Preview pane styles */
@@ -87,7 +90,8 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .preview-body{ padding:10px }
 .preview-list{ display:flex; flex-direction:column; gap:10px }
 .preview-item{ display:flex; gap:10px; align-items:center }
-.preview-thumb{ width:96px; height:72px; object-fit:cover; border-radius:6px; background:#f3f4f6 }
+.preview-thumb{ width:96px; height:72px; object-fit:cover; border-radius:6px; background:#f3f4f6; transition:opacity 0.15s ease }
+.preview-thumb-btn:hover .preview-thumb{ opacity:0.8 }
 .preview-meta{ display:flex; flex-direction:column; font-size:13px }
 .preview-item-id{ font-size:10px; color:#94a3b8; font-family:monospace; user-select:all }
 .preview-title{ font-weight:600 }
@@ -107,6 +111,7 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 
 /* Timeline: full-width horizontal scroll strip at the bottom of the modal */
 .modal-timeline-wrap{ flex:0 0 auto; border-top:1px solid rgba(255,255,255,0.08); padding-top:6px }
+.modal-timeline-hint{ text-align:center; font-size:11px; color:rgba(255,255,255,0.4); padding-bottom:4px }
 .modal-timeline{ display:flex; gap:6px; overflow-x:auto; padding:6px 8px; width:100%; box-sizing:border-box; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,0.3) transparent }
 .modal-timeline::-webkit-scrollbar{ height:5px }
 .modal-timeline::-webkit-scrollbar-track{ background:transparent }
@@ -132,8 +137,18 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 	.url-input{ width:220px }
 }
 
-.pagination-controls{ display:flex; justify-content:center; align-items:center; gap:8px; margin:12px 0 }
+.pagination-controls{ display:flex; justify-content:center; align-items:center; gap:8px; margin:12px 0; flex-wrap:wrap }
 .pagination-controls .btn{ padding:6px 10px }
+.pagination-pages{ display:flex; align-items:center; gap:4px }
+.pagination-page-btn{
+	min-width:32px; height:32px; padding:0 6px; border:1px solid #e5e7eb; border-radius:6px;
+	background:#fff; color:#374151; font-size:13px; cursor:pointer;
+	transition:background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.pagination-page-btn:hover:not(.current){ background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe }
+.pagination-page-btn.current{ background:#3b82f6; color:#fff; border-color:#3b82f6; cursor:default; font-weight:600 }
+.pagination-ellipsis{ padding:0 4px; color:#9ca3af; font-size:13px }
+.pagination-results-label{ margin-left:8px; font-size:12px; color:#6b7280 }
 
 /* Google Drive style toast notification */
 @keyframes fv-toast-in{ from{ opacity:0; transform:translateY(12px) } to{ opacity:1; transform:translateY(0) } }

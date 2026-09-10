@@ -17,9 +17,21 @@ import TwitterCredsManager from './components/TwitterCredsManager'
 import PixivCredsManager from './components/PixivCredsManager'
 import PoipikuCredsManager from './components/PoipikuCredsManager'
 import HeaderMenu from './components/HeaderMenu'
+import Pagination from './components/Pagination'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { notify } from './lib/crossWindowSync'
 import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
+
+// Platform badge + text for a header-menu label — see HeaderMenu.jsx's
+// MenuEntry, which renders `label` as-is (plain string or JSX both work).
+function MenuIconLabel({ icon, text }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <img src={icon} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />
+      {text}
+    </span>
+  )
+}
 
 function AppMain({ role, onLogout }){
   const readOnly = role === 'viewer'
@@ -173,7 +185,6 @@ function AppMain({ role, onLogout }){
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
-  const [pageInputVal, setPageInputVal] = useState('')
   const PAGE_SIZE = 50
   const [nextPageUrl, setNextPageUrl] = useState(null)
   const [loadingPages, setLoadingPages] = useState(false)
@@ -555,19 +566,19 @@ function AppMain({ role, onLogout }){
                 ],
               },
               {
-                label: 'Twitter',
+                label: <MenuIconLabel icon="/icons/twitter.svg" text="Twitter" />,
                 submenu: [
                   { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true) },
                   { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
                 ],
               },
               {
-                label: 'Pixiv',
+                label: <MenuIconLabel icon="/icons/pixiv.svg" text="Pixiv" />,
                 submenu: [
                   { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
                 ],
               },
-              { label: 'Poipiku 認証情報', onClick: () => setPoipikuCredsOpen(true) },
+              { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),
             ...(role !== 'none' ? [
@@ -604,32 +615,16 @@ function AppMain({ role, onLogout }){
         </div>
       )}
       {filtered.length > PAGE_SIZE && (
-        <div className="pagination-controls">
-          <button className="btn" onClick={()=>setPageIndex(p=>Math.max(0, p-1))} disabled={pageIndex===0}>Prev</button>
-          <span style={{margin:'0 8px'}}>Page</span>
-          <input
-            type="number"
-            min={1}
-            max={totalPages}
-            value={pageInputVal !== '' ? pageInputVal : pageIndex+1}
-            onChange={e=>setPageInputVal(e.target.value)}
-            onKeyDown={e=>{
-              if(e.key==='Enter'){
-                const v = parseInt(pageInputVal, 10)
-                if(!isNaN(v)) goToPage(v-1)
-                setPageInputVal('')
-                e.target.blur()
-              } else if(e.key==='Escape'){
-                setPageInputVal('')
-                e.target.blur()
-              }
-            }}
-            onBlur={()=>setPageInputVal('')}
-            style={{width:56, textAlign:'center', padding:'2px 4px'}}
-          />
-          <span style={{margin:'0 8px'}}>/ {totalPages} — {filtered.length} results</span>
-          <button className="btn" onClick={goToNextPage} disabled={pageIndex>=totalPages-1 && !nextPageUrl}>Next</button>
-        </div>
+        <Pagination
+          page={pageIndex}
+          totalPages={totalPages}
+          onGoToPage={goToPage}
+          onPrev={()=>setPageIndex(p=>Math.max(0, p-1))}
+          onNext={goToNextPage}
+          prevDisabled={pageIndex===0}
+          nextDisabled={pageIndex>=totalPages-1 && !nextPageUrl}
+          resultsLabel={`${filtered.length} results`}
+        />
       )}
       {previewOpen && (
         <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>

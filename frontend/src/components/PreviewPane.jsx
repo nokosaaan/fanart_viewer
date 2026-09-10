@@ -1,5 +1,6 @@
 import React, {useEffect, useState, useRef} from 'react'
 import { notify } from '../lib/crossWindowSync'
+import { getPlatformIcon } from '../lib/platformIcon'
 
 const PANE_PAGE_SIZE = 50
 
@@ -177,10 +178,15 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       if(e.key==='Escape') setSelectedIndex(null)
       if(e.key==='ArrowLeft') prev()
       if(e.key==='ArrowRight') next()
+      // Up/Down page through THIS item's own images instead — see
+      // nextPreviewImage/prevPreviewImage's own comment for why these
+      // don't reuse Left/Right.
+      if(e.key==='ArrowUp'){ e.preventDefault(); prevPreviewImage() }
+      if(e.key==='ArrowDown'){ e.preventDefault(); nextPreviewImage() }
     }
     window.addEventListener('keydown', onKey)
     return ()=> window.removeEventListener('keydown', onKey)
-  }, [selectedIndex, items])
+  }, [selectedIndex, items, previews])
 
   // wheel navigation: accumulate deltas to avoid accidental small scrolls
   const wheelAccRef = useRef(0)
@@ -245,6 +251,24 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }, [currentPreviewIdx])
 
   const [deleting, setDeleting] = useState(false)
+
+  // Paging through THIS item's own images (e.g. a multi-page manga fetch)
+  // is deliberately bound to Up/Down rather than Left/Right or the wheel —
+  // both of those already move to the prev/next ITEM (see onKey/handleWheel
+  // below), so reusing them here would make "next page of this item" and
+  // "next item entirely" indistinguishable from the same gesture. Up/Down
+  // pairs naturally with Left/Right's existing meaning (perpendicular axis
+  // = perpendicular kind of "next") without touching either existing
+  // binding.
+  function nextPreviewImage(){
+    if(!previews || previews.length === 0) return
+    selectPreviewIndex((currentPreviewIdxRef.current + 1) % previews.length)
+  }
+
+  function prevPreviewImage(){
+    if(!previews || previews.length === 0) return
+    selectPreviewIndex((currentPreviewIdxRef.current - 1 + previews.length) % previews.length)
+  }
 
   function selectPreviewIndex(idx){
     currentPreviewIdxRef.current = idx
@@ -432,7 +456,13 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 <div className="modal-meta">
                   <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
                   <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
-                  <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer">Open source</a>
+                  <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                    {(() => {
+                      const platform = getPlatformIcon(items[selectedIndex].link)
+                      return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
+                    })()}
+                    Open source
+                  </a>
                   {!readOnly && (
                     <div style={{marginTop:12}}>
                       <button className="btn" style={{padding:'7px 10px', lineHeight:1}} title="Delete this preview" onClick={deleteCurrentPreview} disabled={deleting}>
@@ -446,6 +476,9 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 </div>
               </div>
               <div className="modal-timeline-wrap">
+                {previews && previews.length>1 && (
+                  <div className="modal-timeline-hint">↑/↓キーでこのアイテムの前後のページへ</div>
+                )}
                 <div className="modal-timeline">
                   {previews && previews.length>0 ? previews.map(p=> (
                     <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
