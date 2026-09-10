@@ -28,6 +28,13 @@ import React, { useState, useEffect, useRef } from 'react'
 export default function Tour({ steps, onClose, onMenuNeed }){
   const [idx, setIdx] = useState(0)
   const [rect, setRect] = useState(null) // DOMRect | 'not-found' | null (centered)
+  // The target's own containing dropdown (see HeaderMenu.jsx's
+  // .header-menu-dropdown), when there is one — cardStyle's fallback
+  // placement (neither side has room, e.g. a narrower/non-maximized
+  // window) uses THIS instead of the single target's own rect, so the
+  // card lands below/above the whole dropdown column rather than
+  // overlapping a sibling item packed right next to the target.
+  const [dropdownRect, setDropdownRect] = useState(null)
   const step = steps[idx]
 
   useEffect(() => {
@@ -54,10 +61,12 @@ export default function Tour({ steps, onClose, onMenuNeed }){
         const toggle = document.querySelector(`[data-tour="${step.groupToggleId}"]`)
         if (toggle && toggle.getAttribute('aria-expanded') === 'false') toggle.click()
       }
-      if (!step.targetId) { setRect(null); return }
+      if (!step.targetId) { setRect(null); setDropdownRect(null); return }
       const el = document.querySelector(`[data-tour="${step.targetId}"]`)
       if (el) {
         setRect(el.getBoundingClientRect())
+        const dropdown = el.closest('.header-menu-dropdown')
+        setDropdownRect(dropdown ? dropdown.getBoundingClientRect() : null)
         el.scrollIntoView({ block: 'center', behavior: 'smooth' })
       } else if (attempts < 20) {
         attempts++
@@ -71,7 +80,11 @@ export default function Tour({ steps, onClose, onMenuNeed }){
     function onReflow(){
       if (!step.targetId) return
       const el = document.querySelector(`[data-tour="${step.targetId}"]`)
-      if (el) setRect(el.getBoundingClientRect())
+      if (el) {
+        setRect(el.getBoundingClientRect())
+        const dropdown = el.closest('.header-menu-dropdown')
+        setDropdownRect(dropdown ? dropdown.getBoundingClientRect() : null)
+      }
     }
     window.addEventListener('resize', onReflow)
     window.addEventListener('scroll', onReflow, true)
@@ -120,7 +133,7 @@ export default function Tour({ steps, onClose, onMenuNeed }){
         <div style={dim(0, 0, '100%', '100%')} />
       )}
 
-      <div style={cardStyle(rect)}>
+      <div style={cardStyle(rect, dropdownRect)}>
         <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{idx + 1} / {steps.length}</div>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#f8fafc', marginBottom: 8 }}>{step.title}</div>
         <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, marginBottom: 16, whiteSpace: 'pre-wrap' }}>{step.body}</div>
@@ -144,20 +157,31 @@ const CARD_WIDTH = 320
 const CARD_HEIGHT_ESTIMATE = 180 // rough; only used to keep the card on-screen vertically, not for layout
 const MARGIN = 16
 
-function cardStyle(rect){
-  const base = {
-    position: 'fixed', zIndex: 5001, width: CARD_WIDTH, maxWidth: '90vw',
-    background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
-    padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-  }
+function cardStyle(rect, dropdownRect){
   if (!rect || rect === 'not-found') {
-    return { ...base, left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }
+    return {
+      position: 'fixed', zIndex: 5001, width: CARD_WIDTH, maxWidth: '90vw',
+      background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
+      padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+      left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+    }
   }
   // clientWidth/clientHeight (excludes any scrollbar) rather than
   // window.innerWidth/innerHeight (includes it) — the more conservative
   // of the two, so the card never ends up partly behind a scrollbar.
   const vw = document.documentElement.clientWidth || window.innerWidth
   const vh = document.documentElement.clientHeight || window.innerHeight
+  // Actual rendered width, not just the CSS max-width safety net — the
+  // POSITION math below needs to agree with this, not the fixed
+  // CARD_WIDTH, or a narrower-than-usual window (not maximized) could
+  // still place the card such that the (CSS-shrunk) box either overflows
+  // the edge it's anchored away from or leaves an oddly large gap.
+  const width = Math.min(CARD_WIDTH, vw - MARGIN * 2)
+  const base = {
+    position: 'fixed', zIndex: 5001, width, maxWidth: '90vw',
+    background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
+    padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+  }
 
   // Prefer placing the card beside the target (left, then right),
   // vertically centered on it and clamped to stay fully on-screen —
@@ -175,19 +199,37 @@ function cardStyle(rect){
     MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN,
   )
 
-  if (spaceLeft >= CARD_WIDTH + MARGIN * 2) {
-    return { ...base, left: rect.left - CARD_WIDTH - MARGIN, top: centeredTop }
+  if (spaceLeft >= width + MARGIN * 2) {
+    return { ...base, left: rect.left - width - MARGIN, top: centeredTop }
   }
-  if (spaceRight >= CARD_WIDTH + MARGIN * 2) {
+  if (spaceRight >= width + MARGIN * 2) {
     return { ...base, left: rect.right + MARGIN, top: centeredTop }
   }
 
-  // Neither side has room (e.g. the target itself spans most of the
-  // width, like the search input) — fall back to above/below instead.
-  const left = clamp(rect.left, MARGIN, vw - CARD_WIDTH - MARGIN)
-  const spaceBelow = vh - rect.bottom
-  if (spaceBelow > 220) return { ...base, left, top: rect.bottom + MARGIN }
-  return { ...base, left, top: Math.max(rect.top - 220, MARGIN) }
+  // Neither side has room -- typically means the window itself is
+  // narrower than usual (not maximized), not just that this particular
+  // target is wide. If the target lives inside a dropdown, fall back to
+  // placing the card below/above the WHOLE dropdown column (not just
+  // this one item) instead: an above/below placement anchored to a
+  // single item risks overlapping the sibling row right next to it,
+  // exactly the problem side-placement exists to avoid in the first
+  // place -- using the container's own bounds instead keeps that
+  // guarantee even when side-placement itself isn't possible. The
+  // spotlight ring still makes it obvious which row the card is about,
+  // even though the card no longer sits flush against it.
+  const bounds = dropdownRect || rect
+  const left = clamp(bounds.left, MARGIN, vw - width - MARGIN)
+  const spaceBelow = vh - bounds.bottom
+  const spaceAbove = bounds.top
+  if (spaceBelow >= CARD_HEIGHT_ESTIMATE + MARGIN) {
+    return { ...base, left, top: bounds.bottom + MARGIN }
+  }
+  if (spaceAbove >= CARD_HEIGHT_ESTIMATE + MARGIN) {
+    return { ...base, left, top: Math.max(bounds.top - CARD_HEIGHT_ESTIMATE - MARGIN, MARGIN) }
+  }
+  // No room above or below the container either (a very short window) --
+  // nothing left to offset against; center vertically as a last resort.
+  return { ...base, left, top: clamp(vh / 2 - CARD_HEIGHT_ESTIMATE / 2, MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN) }
 }
 
 function clamp(v, lo, hi){
