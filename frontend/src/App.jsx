@@ -576,6 +576,17 @@ function AppMain({ role, onLogout }){
                 label: <MenuIconLabel icon="/icons/pixiv.svg" text="Pixiv" />,
                 submenu: [
                   { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
+                  {
+                    label: '削除済み作品をpixiv-searchで検索',
+                    onClick: () => {
+                      const input = window.prompt('作品IDまたはpixiv.netのURLを入力してください')
+                      if (!input || !input.trim()) return
+                      const trimmed = input.trim()
+                      const m = trimmed.match(/(\d+)/)
+                      if (!m) { window.alert('作品IDが見つかりませんでした'); return }
+                      window.open(`https://pixiv-search.mgcup.net/search?id=${m[1]}`, '_blank', 'noopener,noreferrer')
+                    },
+                  },
                 ],
               },
               { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true) },

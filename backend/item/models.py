@@ -129,7 +129,7 @@ class PollerSettings(models.Model):
     unattended background fetching without the user having opted in is
     exactly what a personal, per-user install shouldn't do silently.
     """
-    PLATFORM_CHOICES = [('twitter', 'Twitter/X'), ('pixiv', 'Pixiv')]
+    PLATFORM_CHOICES = [('twitter', 'Twitter/X'), ('pixiv', 'Pixiv'), ('poipiku', 'Poipiku')]
     UNIT_CHOICES = [
         ('minutes', '分'), ('hours', '時間'), ('days', '日'), ('weeks', '週'),
     ]
@@ -231,6 +231,27 @@ class PixivPollState(models.Model):
         return f"PixivPollState(last_success_at={self.last_success_at})"
 
 
+class PoipikuPollState(models.Model):
+    """Singleton health-state row for the Poipiku bookmark ("お気に入り")
+    poller, mirroring PixivPollState. `resume_url` (not an offset) since
+    Poipiku's own bookmark-list pagination links already embed whatever
+    the resume target should be (see item.poipiku_bookmarks_fetch's own
+    docstring for why the next-page URL is read off the page itself
+    rather than constructed here) -- storing the exact URL to continue
+    from is simpler and more robust than reconstructing one from a bare
+    page number.
+    """
+    resume_url = models.CharField(max_length=255, blank=True, default='')
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default='')
+    last_error_at = models.DateTimeField(null=True, blank=True)
+    last_notified_at = models.DateTimeField(null=True, blank=True)
+    consecutive_failures = models.IntegerField(default=0)
+
+    def __str__(self):
+        return f"PoipikuPollState(last_success_at={self.last_success_at})"
+
+
 class SocialFetchQueueItem(models.Model):
     """FIFOキュー行1件 = ポーリングで見つかった、まだ取り込んでいない
     ブックマーク/いいね1件 (see item.management.commands.poll_twitter_updates
@@ -245,7 +266,7 @@ class SocialFetchQueueItem(models.Model):
     新規発見分を古い順に反転してから投入するので、キュー全体を
     id昇順で辿ればブックマーク/いいねした順に近い形で処理できる。
     """
-    PLATFORM_CHOICES = [('twitter', 'twitter'), ('pixiv', 'pixiv')]
+    PLATFORM_CHOICES = [('twitter', 'twitter'), ('pixiv', 'pixiv'), ('poipiku', 'poipiku')]
     KIND_CHOICES = [('bookmark', 'bookmark'), ('like', 'like')]
     STATUS_CHOICES = [
         ('pending', 'pending'),

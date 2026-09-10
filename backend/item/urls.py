@@ -7,6 +7,7 @@ from .pixiv_creds_views import pixiv_creds_status_view, pixiv_creds_set_view
 from .poipiku_creds_views import poipiku_creds_status_view, poipiku_creds_set_view
 from .twitter_poll_views import twitter_poll_status_view
 from .pixiv_poll_views import pixiv_poll_status_view
+from .poipiku_poll_views import poipiku_poll_status_view
 from .poller_settings_views import poller_settings_status_view, poller_settings_set_view
 from .drive_creds_views import drive_creds_status_view, drive_creds_set_view, drive_creds_authenticate_view
 from django.urls import path, include
@@ -31,6 +32,7 @@ urlpatterns = [
     path('poipiku_creds/set/', poipiku_creds_set_view),
     path('twitter_poll/status/', twitter_poll_status_view),
     path('pixiv_poll/status/', pixiv_poll_status_view),
+    path('poipiku_poll/status/', poipiku_poll_status_view),
     path('poller_settings/<str:platform>/status/', poller_settings_status_view),
     path('poller_settings/<str:platform>/set/', poller_settings_set_view),
     path('drive_creds/status/', drive_creds_status_view),

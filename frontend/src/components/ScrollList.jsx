@@ -56,7 +56,8 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   const [uploadingLocal, setUploadingLocal] = useState(false)
   const localFileInputRef = useRef(null)
   const [salvaging, setSalvaging] = useState(false)
-  const isPixivArtwork = !!(it.link && /pixiv\.net\/artworks\/\d+/.test(it.link))
+  const pixivArtworkIdMatch = it.link && it.link.match(/pixiv\.net\/artworks\/(\d+)/)
+  const isPixivArtwork = !!pixivArtworkIdMatch
   // The URL box defaults to read-only (selectable/copyable, not typeable) so
   // it can't be accidentally overwritten mid-click -- editing is an
   // explicit opt-in via the lock icon, for the deliberate "retry from a
@@ -371,6 +372,19 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
               </svg>
             )}
           </button>
+        )}
+        {!readOnly && isPixivArtwork && (
+          <a className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1, display:'inline-flex'}}
+            title="CDNサルベージでも見つからない場合、外部の検索サイト(pixiv-search)でこの作品IDを探します(見つかる確率は高くありません)"
+            href={`https://pixiv-search.mgcup.net/search?id=${pixivArtworkIdMatch[1]}`}
+            target="_blank" rel="noopener noreferrer"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+              <circle cx="11" cy="11" r="7"/>
+              <line x1="16.65" y1="16.65" x2="21" y2="21"/>
+              <path d="M14 3h7v7M21 3l-7 7"/>
+            </svg>
+          </a>
         )}
         {!readOnly && <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear previews" onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')

@@ -296,6 +296,7 @@ def _start_backend(window):
 
     PollerSettings.objects.get_or_create(platform='twitter', defaults={'enabled': False})
     PollerSettings.objects.get_or_create(platform='pixiv', defaults={'enabled': False})
+    PollerSettings.objects.get_or_create(platform='poipiku', defaults={'enabled': False})
 
     from waitress import serve
 
@@ -305,6 +306,7 @@ def _start_backend(window):
 
     threading.Thread(target=_poller_loop, args=('twitter', 'poll_twitter_updates'), daemon=True).start()
     threading.Thread(target=_poller_loop, args=('pixiv', 'poll_pixiv_bookmarks'), daemon=True).start()
+    threading.Thread(target=_poller_loop, args=('poipiku', 'poll_poipiku_bookmarks'), daemon=True).start()
     threading.Thread(target=lambda: serve(application, host=HOST, port=PORT), daemon=True).start()
 
     logging.getLogger(__name__).info(
