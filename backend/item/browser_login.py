@@ -100,10 +100,29 @@ def _worker_loop():
                 if browser is not None:
                     reply_q.put((False, 'already_open'))
                     continue
+                # --disable-blink-features=AutomationControlled: same flag
+                # playwright_helper.py's own (already-working) Pixiv fetch
+                # path already launches with -- without it, Chromium leaves
+                # navigator.webdriver=true and a few other automation
+                # fingerprints in place, which is exactly the kind of thing
+                # a real site's own login-abuse detection looks for. Confirmed
+                # live: x.com's login form returned "ログインを一時的に制限
+                # しました" (temporarily restricted) against a plain launch
+                # with no such flag.
                 browser = pw.chromium.launch(
-                    headless=False, args=['--no-sandbox', '--disable-dev-shm-usage'],
+                    headless=False,
+                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'],
                 )
                 context = browser.new_context()
+                # Belt-and-suspenders on top of the launch flag above --
+                # some Chromium builds still partially expose the webdriver
+                # flag to page JS regardless, so mask it directly too. Runs
+                # before any site script gets a chance to check it, on every
+                # navigation in this context (add_init_script, not a one-off
+                # page.evaluate).
+                context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+                )
                 page = context.new_page()
                 page.goto(_LOGIN_URLS[platform], timeout=30000)
                 with _state_lock:
