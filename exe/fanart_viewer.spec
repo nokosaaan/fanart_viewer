@@ -34,6 +34,13 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules('rest_framework')
 hiddenimports += collect_submodules('item.migrations')
+# gallery_dl.job discovers its ~300 site-specific extractor modules the
+# same dynamic/directory-scanning way Django discovers migrations/
+# management commands -- same silent-gap-in-a-frozen-build issue,
+# confirmed live: ModuleNotFoundError: No module named
+# 'gallery_dl.extractor.2ch' (the first one it happens to try) via
+# exe/launcher.py's --run-gallery-dl mode.
+hiddenimports += collect_submodules('gallery_dl.extractor')
 # call_command('poll_twitter_updates', ...) (launcher.py's in-process
 # poller loop) discovers management commands the same pkgutil-based way
 # MigrationLoader discovers migrations — same silent-failure-in-frozen-

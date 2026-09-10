@@ -121,6 +121,14 @@ os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', str(USER_DATA_DIR / 'playwrigh
 os.environ.setdefault('DJANGO_DEBUG', '0')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.settings')
 os.environ.setdefault('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost')
+# Gates force_method='playwright' in item/views.py -- an explicit opt-in
+# for the docker deployment (where headless fetching is a meaningful
+# resource/security tradeoff on a shared/exposed server), but the exe is
+# a single local user's own machine already running this same code
+# unattended, so there's no separate "should this be allowed" question
+# to ask here the way there is there. Confirmed live: Playwright/headless
+# fetch requests were silently 403ing before this was added.
+os.environ.setdefault('HEADLESS_ALLOWED', '1')
 
 # A real random secret key, generated once and reused across launches
 # (settings.py refuses to start in non-DEBUG mode with the placeholder
@@ -148,6 +156,7 @@ def _persistent_fernet_key(filename):
 os.environ.setdefault('TWITTER_CREDS_ENC_KEY', _persistent_fernet_key('twitter_creds_key.txt'))
 os.environ.setdefault('PIXIV_CREDS_ENC_KEY', _persistent_fernet_key('pixiv_creds_key.txt'))
 os.environ.setdefault('DRIVE_CREDS_ENC_KEY', _persistent_fernet_key('drive_creds_key.txt'))
+os.environ.setdefault('POIPIKU_CREDS_ENC_KEY', _persistent_fernet_key('poipiku_creds_key.txt'))
 
 
 def _bundle_path(relative):

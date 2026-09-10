@@ -39,6 +39,11 @@ def ensure_chromium_installed(timeout_sec=600):
             capture_output=True,
             text=True,
             timeout=timeout_sec,
+            # Avoid a briefly-flashing console window on Windows -- this
+            # runs from a background thread of a windowed app that
+            # otherwise never shows one (see the identical fix/comment in
+            # item/gallerydl_fetch.py). Windows-only flag; no-op elsewhere.
+            **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
         )
         if result.returncode != 0:
             raise RuntimeError(

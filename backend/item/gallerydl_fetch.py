@@ -107,6 +107,13 @@ def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], st
             capture_output=True,
             text=True,
             timeout=60,
+            # In the frozen exe, this launches the exe itself again (see
+            # _GALLERYDL_CMD) -- without this, Windows briefly flashes a
+            # console window for that child process on every single
+            # fetch, which reads as broken/janky for a windowed app that
+            # otherwise never shows one. CREATE_NO_WINDOW only exists on
+            # Windows; harmless no-op via getattr elsewhere.
+            **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
         )
 
         if proc.returncode not in (0, 1):
