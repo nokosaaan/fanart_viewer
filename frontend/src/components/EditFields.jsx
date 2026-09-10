@@ -167,6 +167,16 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // recognition, the Danbooru link table, or neither ever firing at all.
   const [charCandidates, setCharCandidates] = useState([])
   const [expandedCandidate, setExpandedCandidate] = useState(null)
+  // Same shape/review-not-auto-apply treatment as charCandidates, now that
+  // the backend returns titles with per-candidate score/contributors
+  // instead of a bare string list that got silently auto-applied (see
+  // applySuggestion — a title is no more guaranteed correct than a
+  // character candidate is, and unlike characters, a title suggestion can
+  // come from 'danbooru' — a live Danbooru reverse-lookup — which can name
+  // a title that has never been used anywhere in this app before, so
+  // blind auto-apply was actually riskier here, not less).
+  const [titleSuggestions, setTitleSuggestions] = useState([])
+  const [expandedTitleCandidate, setExpandedTitleCandidate] = useState(null)
   // Only offered once tagger_capabilities/ confirms the heavier 'timm'
   // backend is actually installed on this server (see requirements-timm.txt
   // — not every deployment opts into torch).
@@ -204,15 +214,26 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   function applySuggestion(j){
     let added = false
 
-    // Titles inferred by cross-referencing matched characters' groups (the
-    // tagger itself can't suggest titles — its public tag list has no
-    // copyright/series tags at all).
-    setTitleList(prev => {
-      const toAdd = (j.suggested_titles || []).filter(t => !prev.includes(t))
-      if(toAdd.length === 0) return prev
-      added = true
-      return [...prev, ...toAdd]
-    })
+    // Titles: the ensemble backend (the default — see suggestUseEnsemble)
+    // now returns `titles`, the same {name, score, contributors} shape as
+    // `characters` — reviewed and picked by the user below, never auto-
+    // applied. The older cascade path (opt-out fallback, `use_ensemble:
+    // false`) has no such per-candidate breakdown and still returns the
+    // old `suggested_titles` bare-string-list shape instead, which keeps
+    // its original auto-apply behavior for backward compatibility.
+    if(Array.isArray(j.titles)){
+      setTitleSuggestions(j.titles)
+      setExpandedTitleCandidate(null)
+      if(j.titles.length > 0) added = true
+    } else {
+      setTitleSuggestions([])
+      setTitleList(prev => {
+        const toAdd = (j.suggested_titles || []).filter(t => !prev.includes(t))
+        if(toAdd.length === 0) return prev
+        added = true
+        return [...prev, ...toAdd]
+      })
+    }
     // Characters are NOT auto-applied — up to 3 ranked candidates are
     // surfaced for review instead (see charCandidates' own comment). A
     // "matched" candidate can still be the wrong person (a tagger
@@ -250,6 +271,14 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     setTitleCandidates(prev => prev.filter(x => x !== t))
   }
 
+  // Toggle, not one-way accept, mirroring toggleCharCandidate — a title
+  // candidate stays visible with its contributor breakdown after being
+  // added (an item can legitimately have more than one title, e.g. a
+  // crossover), and can be removed again if it turns out wrong.
+  function toggleTitleCandidate(name){
+    setTitleList(prev => prev.includes(name) ? prev.filter(t => t !== name) : [...prev, name])
+  }
+
   // Toggle (not one-way accept): a candidate stays visible with its
   // diagnostic breakdown after being added, in case its contributors are
   // still worth checking, or the user changes their mind — unlike
@@ -263,6 +292,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     hashtag: 'ハッシュタグ', artist_history: '作家履歴(強)', artist_history_weak: '作家履歴(弱)',
     tag_similarity: 'タグ類似度(強)', tag_similarity_weak: 'タグ類似度(弱)',
     tagger: 'タガー直接認識', tagger_group: 'タガー+キャラグループ', classifier: '独自分類器', danbooru: 'Danbooru照合',
+    oc_heuristic: 'オリジナル創作(推定)',
   }
   const MATCH_METHOD_LABELS = { direct: '既存表記と直接一致', danbooru_link: 'Danbooruリンク経由で翻訳' }
 
@@ -485,6 +515,61 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         </span>
         {suggestError && <div style={{marginTop:6, fontSize:12, color:'#f87171'}}>{suggestError}</div>}
       </div>
+
+      {titleSuggestions.length > 0 && (
+        <div style={{marginBottom:10, padding:'0 14px'}}>
+          <div style={{fontSize:11, color:'#94a3b8', marginBottom:6}}>
+            AI提案候補(スコア高い順、クリックで追加/解除。作品名データベースに無い新規タイトルの可能性もあります。どれも違う場合は下のTitlesで直接手動選択・入力してください):
+          </div>
+          <div style={{display:'flex', flexDirection:'column', gap:6}}>
+            {titleSuggestions.map(t => {
+              const isAdded = titleList.includes(t.name)
+              const isExpanded = expandedTitleCandidate === t.name
+              const tier = candidateSourceTier(t.contributors)
+              return (
+                <div key={t.name} style={{border:'1px solid #334155', borderRadius:6, background:'#1e293b'}}>
+                  <div style={{display:'flex', alignItems:'center', gap:8, padding:'6px 10px'}}>
+                    <button className="btn" onClick={()=>toggleTitleCandidate(t.name)}
+                      style={{fontSize:12, background: isAdded ? '#166534' : '#334155', color:'#f1f5f9'}}>
+                      {isAdded ? '✓ 追加済み' : '＋ 追加'}
+                    </button>
+                    <span style={{fontSize:13, color:'#f1f5f9', fontWeight:600}}>{t.name}</span>
+                    <span style={{fontSize:11, color:'#94a3b8'}}>score {t.score}</span>
+                    {tier === 'low_only' && (
+                      <span title="作家履歴・タグ類似度など、他アイテムからの類推のみが根拠です。画像やハッシュタグを直接見て判断したものではありません"
+                        style={{fontSize:11, padding:'2px 6px', borderRadius:4, background:'#78350f', color:'#fde68a'}}>
+                        ⚠ 類推のみ
+                      </span>
+                    )}
+                    {tier === 'mixed' && (
+                      <span title="作家履歴・タグ類似度による類推と、それ以外の根拠(ハッシュタグ/タガー直接認識/Danbooru照合など)が両方とも支持しています"
+                        style={{fontSize:11, padding:'2px 6px', borderRadius:4, background:'#1e3a8a', color:'#bfdbfe'}}>
+                        🔀 混合根拠
+                      </span>
+                    )}
+                    {t.contributors && (
+                      <button className="btn" onClick={()=>setExpandedTitleCandidate(isExpanded ? null : t.name)}
+                        style={{fontSize:11, marginLeft:'auto', background:'transparent', color:'#60a5fa'}}>
+                        {isExpanded ? '詳細を閉じる ▲' : '根拠を見る ▼'}
+                      </button>
+                    )}
+                  </div>
+                  {isExpanded && t.contributors && (
+                    <div style={{padding:'0 10px 8px', fontSize:11, color:'#cbd5e1'}}>
+                      {t.contributors.map((ct, i) => (
+                        <div key={i} style={{padding:'3px 0', borderTop: i>0 ? '1px solid #334155' : 'none'}}>
+                          <span style={{color:'#93c5fd'}}>{SOURCE_LABELS[ct.source] || ct.source}</span>
+                          {' '}(確信度 {ct.confidence})
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <TagField
         label="Titles ★"

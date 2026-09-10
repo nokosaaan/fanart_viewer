@@ -1463,12 +1463,22 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         image_index=image_index,
     )
 
-    title_values, _title_scores = _combine_candidates(collected['title'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    title_values, title_scores = _combine_candidates(collected['title'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
     # top_k=3 (not more): this is a REVIEW list a human picks from (see
     # EditFields.jsx's candidate cards), not an auto-apply-everything list
     # — three ranked options is enough to catch "the right answer wasn't
     # #1" without turning the review UI into a wall of low-confidence
-    # noise.
+    # noise. Titles used to be dumped straight into `suggested_titles` and
+    # auto-applied wholesale despite this very comment already describing
+    # the intended review-card design — this finishes that: titles now get
+    # the exact same {name, score, contributors} shape `characters` does,
+    # via the same (source-name-agnostic) _character_breakdown helper, so
+    # a title suggestion is never applied without a human choosing it, and
+    # always shows which source proposed it (crucially including 'danbooru'
+    # — a live reverse lookup against Danbooru's OWN tag database, so it can
+    # already name a title that has never been used anywhere in this app
+    # before; that capability existed in `collected['title']` all along, it
+    # just never survived past this function).
     char_values, char_scores = _combine_candidates(collected['character'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
     situation_values, _situation_scores = _combine_candidates(collected['situation'], DEFAULT_SITUATION_WEIGHTS, top_k=1)
 
@@ -1481,16 +1491,29 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         for name in char_values
     ]
 
-    # Same last-resort OC fallback _suggest_for_item uses — a zero-score
-    # title is just as much "nothing found" as the cascade's empty list.
-    if collected['want_titles'] and not title_values and _looks_like_oc(item.description):
-        title_values = ['OC']
+    title_breakdown = _character_breakdown(collected['title'], title_values)
+    titles = [
+        {'name': name, 'score': round(title_scores[name], 4), 'contributors': title_breakdown[name]}
+        for name in title_values
+    ]
+
+    # Same last-resort OC fallback _suggest_for_item uses — nothing else
+    # proposed a title at all, but the post's own text reads like an OC
+    # disclaimer. No real source found this, so it gets a synthetic one
+    # (score 0) purely so the frontend's card UI — which always shows a
+    # contributor/source for every candidate — has something to label it
+    # with instead of an empty list.
+    if collected['want_titles'] and not titles and _looks_like_oc(item.description):
+        titles = [{'name': 'OC', 'score': 0.0, 'contributors': [
+            {'source': 'oc_heuristic', 'confidence': 1.0, 'raw_name': None, 'match_method': None},
+        ]}]
 
     return {
         'characters': characters,
+        'titles': titles,
         'tags': collected['tags'],
         'situation_hint': situation_values[0] if situation_values else None,
-        'suggested_titles': title_values,
+        'suggested_titles': [],
         'title_candidates': [],
         'source': 'ensemble',
         'sample_size': 0,
