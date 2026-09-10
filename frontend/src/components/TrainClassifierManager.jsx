@@ -98,7 +98,13 @@ export default function TrainClassifierManager({ onClose }) {
       <div className="cgm-panel" style={{ width: 640 }} onClick={e => e.stopPropagation()}>
         <div className="cgm-panel-header">
           <strong>キャラクター分類器の学習</strong>
-          <button className="cgm-panel-close" onClick={onClose}>✕</button>
+          <button
+            className="cgm-panel-close"
+            onClick={onClose}
+            title={finished && status.returncode === 0
+              ? '学習が完了しています。このパネルを閉じた後、アプリ本体のウィンドウも閉じて fanart_viewer.exe をもう一度起動すると、新しいモデルが反映されます'
+              : undefined}
+          >✕</button>
         </div>
 
         <div className="cgm-panel-body">
@@ -173,7 +179,7 @@ export default function TrainClassifierManager({ onClose }) {
               {finished && (
                 <div style={{ fontSize: 13, marginBottom: 10, color: status.returncode === 0 ? '#4ade80' : '#f87171' }}>
                   {status.returncode === 0
-                    ? '学習が正常に完了しました。アプリを再起動すると反映されます。'
+                    ? '学習が正常に完了しました。反映するには、アプリのウィンドウを閉じて fanart_viewer.exe をもう一度起動してください(このパネルを閉じるだけでは反映されません)。'
                     : `学習がエラーで終了しました(終了コード ${status.returncode})。下のログを確認してください。`}
                 </div>
               )}
