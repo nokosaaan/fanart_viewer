@@ -4,7 +4,8 @@ from django.views.decorators.http import require_http_methods
 
 from security.token_utils import require_admin as _admin_only
 from . import backup_progress
-from .drive_backup import list_backups, restore_backup, get_backup_folder_url, DriveBackupError, ExistingDataError
+from . import restore_progress
+from .drive_backup import list_backups, get_backup_folder_url, DriveBackupError
 
 
 @csrf_exempt
@@ -50,6 +51,13 @@ def backup_list_view(request):
 @csrf_exempt
 @require_http_methods(['POST'])
 def backup_restore_view(request):
+    """Starts a restore on a background thread and returns immediately —
+    BackupManager.jsx polls backup_restore_status_view instead of this
+    request blocking (see restore_progress.py). The existing-data
+    confirmation (needs_confirmation) is now a state the status endpoint
+    reports, not a synchronous 409 from this same call — a restore that
+    turns out to need confirmation touches nothing, and the frontend
+    re-POSTs here with the user's chosen mode once they decide."""
     denied = _admin_only(request)
     if denied:
         return denied
@@ -67,13 +75,16 @@ def backup_restore_view(request):
         return JsonResponse({'detail': 'file_idが必要です'}, status=400)
 
     try:
-        result = restore_backup(file_id, mode=mode)
-    except ExistingDataError as e:
-        return JsonResponse({
-            'needs_confirmation': True,
-            'current': e.current,
-            'backup': e.backup,
-        }, status=409)
-    except DriveBackupError as e:
+        restore_progress.start(file_id, mode)
+    except RuntimeError as e:
         return JsonResponse({'detail': str(e)}, status=409)
-    return JsonResponse({'ok': True, 'merge_result': result})
+    return JsonResponse(restore_progress.get_status())
+
+
+@csrf_exempt
+@require_http_methods(['GET'])
+def backup_restore_status_view(request):
+    denied = _admin_only(request)
+    if denied:
+        return denied
+    return JsonResponse(restore_progress.get_status())

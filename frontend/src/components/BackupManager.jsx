@@ -33,6 +33,8 @@ const PHASE_LABELS = {
   dumping: 'ダンプ中…',
   compressing: '圧縮中…',
   uploading: 'Google Driveへアップロード中…',
+  downloading: 'Google Driveからダウンロード中…',
+  importing: 'データベースへ反映中…',
 }
 
 // Google Drive backup/restore panel. Opened from the app header (admin only).
@@ -55,6 +57,15 @@ export default function BackupManager({ onClose }) {
   // spinner for however long it takes.
   const [backupStatus, setBackupStatus] = useState(null)
   const pollRef = useRef(null)
+  // Same background+poll treatment as backup, for restore's own
+  // (potentially just as slow) Drive download — see restore_progress.py.
+  const [restoreStatus, setRestoreStatus] = useState(null)
+  const restorePollRef = useRef(null)
+  // restore_progress.py's state has no idea which `file` a restore was
+  // FOR (just a file_id string) — this is purely local, so confirmState
+  // (which needs the file's display name too) can be reconstructed from
+  // whichever file doRestore was last called with.
+  const pendingFileRef = useRef(null)
 
   // Google Drive OAuth client — the exe build has no .env a user could
   // edit, so this replaces scripts/google_drive_auth.py's out-of-band
@@ -183,7 +194,71 @@ export default function BackupManager({ onClose }) {
     }
   }, [backupStatus])
 
+  // `react`: whether to act on a terminal (not-running) result — true only
+  // while actively polling a restore THIS session started (or resumed
+  // because it was already running on mount). The one-off mount-time
+  // check below always passes false: needs_confirmation/result/error
+  // persist server-side until the next start(), so reacting to a
+  // terminal state found only on mount (nothing was ever polling) would
+  // re-show a confirmation dialog or "restore complete" notice for an
+  // attempt the user already saw and dismissed in an earlier visit here.
+  const pollRestoreStatus = useCallback(async (react) => {
+    try {
+      const r = await fetch('/api/backup/restore/status/', { credentials: 'same-origin' })
+      if (!r.ok) return null
+      const j = await r.json()
+      setRestoreStatus(j)
+      if (!j.running) {
+        if (restorePollRef.current) {
+          clearInterval(restorePollRef.current)
+          restorePollRef.current = null
+        }
+        if (react) {
+          const file = pendingFileRef.current
+          if (j.needs_confirmation && file) {
+            setConfirmState({ file, current: j.needs_confirmation.current, backup: j.needs_confirmation.backup })
+          } else if (j.error) {
+            setError(j.error)
+            setRestoringId(null)
+          } else if (j.result !== null) {
+            // result is {} for strict/overwrite, or the merge summary dict
+            setConfirmState(null)
+            setRestoringId(null)
+            if (j.result && Object.keys(j.result).length > 0) {
+              const mr = j.result
+              setNotice(
+                `追記が完了しました: アイテム${mr.items_added}件追加` +
+                (mr.items_skipped ? `(重複${mr.items_skipped}件はスキップ)` : '') +
+                `、プレビュー画像${mr.previews_added}件、キャラクターグループ${mr.groups_added}件追加。ページを再読み込みしてください。`
+              )
+            } else {
+              setNotice('復元が完了しました。ページを再読み込みしてください。')
+            }
+          }
+        }
+      }
+      return j
+    } catch (_) {
+      return null
+    }
+  }, [])
+
+  function startRestorePolling() {
+    if (restorePollRef.current) return
+    restorePollRef.current = setInterval(() => pollRestoreStatus(true), 1000)
+  }
+
+  // Only resumes polling for an ALREADY-RUNNING restore (mirrors backup's
+  // own mount-resume effect) — see pollRestoreStatus's own comment on why
+  // `react` is false here specifically.
+  useEffect(() => {
+    pollRestoreStatus(false).then(j => { if (j && j.running) startRestorePolling() })
+    return () => { if (restorePollRef.current) clearInterval(restorePollRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function doRestore(file, mode) {
+    pendingFileRef.current = file
     setRestoringId(file.id)
     setError('')
     setNotice('')
@@ -193,25 +268,11 @@ export default function BackupManager({ onClose }) {
         body: JSON.stringify({ file_id: file.id, mode }),
       })
       const j = await r.json().catch(() => ({}))
-      if (r.status === 409 && j.needs_confirmation) {
-        setConfirmState({ file, current: j.current, backup: j.backup })
-        return
-      }
       if (!r.ok) throw new Error(j.detail || `復元失敗 (${r.status})`)
-      setConfirmState(null)
-      if (mode === 'merge' && j.merge_result) {
-        const mr = j.merge_result
-        setNotice(
-          `追記が完了しました: アイテム${mr.items_added}件追加` +
-          (mr.items_skipped ? `(重複${mr.items_skipped}件はスキップ)` : '') +
-          `、プレビュー画像${mr.previews_added}件、キャラクターグループ${mr.groups_added}件追加。ページを再読み込みしてください。`
-        )
-      } else {
-        setNotice('復元が完了しました。ページを再読み込みしてください。')
-      }
+      setRestoreStatus(j)
+      startRestorePolling()
     } catch (e) {
       setError(e.message)
-    } finally {
       setRestoringId(null)
     }
   }
@@ -232,6 +293,7 @@ export default function BackupManager({ onClose }) {
 
   function cancelOverwrite() {
     setConfirmState(null)
+    setRestoringId(null)
   }
 
   return (
@@ -352,6 +414,17 @@ export default function BackupManager({ onClose }) {
               </a>
             )}
           </div>
+
+          {restoreStatus?.running && (
+            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>復元中: {PHASE_LABELS[restoreStatus.phase] || '処理中…'}</span>
+              {restoreStatus.percent != null ? (
+                <ProgressBar done={restoreStatus.percent} total={100} />
+              ) : (
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>(進捗率は不明 — 完了までお待ちください)</span>
+              )}
+            </div>
+          )}
 
           <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 8 }}>
             バックアップ一覧（新しい順）

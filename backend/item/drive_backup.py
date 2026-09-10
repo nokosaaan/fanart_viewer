@@ -365,12 +365,25 @@ def get_backup_folder_url() -> str:
     return f'https://drive.google.com/drive/folders/{folder_id}'
 
 
-def restore_backup(file_id: str, mode: str = 'strict') -> None:
+def restore_backup(file_id: str, mode: str = 'strict', progress_cb=None) -> None:
     """Download the given Drive backup and load it into the database --
     dispatches the same way create_backup does. A SQLite backup can only
     be restored into a SQLite deployment (and a Postgres one only into
     Postgres); there's no cross-engine restore path (see create_backup's
     docstring for why).
+
+    `progress_cb(phase, percent)` — same contract as create_backup's:
+    real percent (via MediaIoBaseDownload's own per-chunk status) while
+    downloading the backup file from Drive (the phase most likely to
+    actually take a while on a slow home connection), phase='importing'
+    with percent=None for the DB-side load itself (a single SQL statement
+    for 'strict'/'overwrite', or the row-by-row merge — see
+    _merge_backup_sqlite — for 'merge'; none of those expose a meaningful
+    fine-grained progress signal of their own without much more invasive
+    changes to that already-intricate function, so this stays honest
+    about not having one rather than faking a percentage). Defaults to a
+    no-op so callers with no status view to feed (none currently) don't
+    have to pass one.
 
     `mode`:
       'strict'    (default) -- raise ExistingDataError if the DB already
@@ -387,12 +400,13 @@ def restore_backup(file_id: str, mode: str = 'strict') -> None:
                   Postgres restore doesn't support this mode (see
                   _restore_backup_postgres).
     """
+    progress_cb = progress_cb or _noop_progress
     if _is_sqlite():
-        return _restore_backup_sqlite(file_id, mode=mode)
-    return _restore_backup_postgres(file_id, mode=mode)
+        return _restore_backup_sqlite(file_id, mode=mode, progress_cb=progress_cb)
+    return _restore_backup_postgres(file_id, mode=mode, progress_cb=progress_cb)
 
 
-def _restore_backup_sqlite(file_id: str, mode: str = 'strict') -> None:
+def _restore_backup_sqlite(file_id: str, mode: str = 'strict', progress_cb=None) -> None:
     """Download a SQLite snapshot backup and copy this app's own tables
     from it into the live DB via SQLite's ATTACH DATABASE (attaching the
     downloaded file as a second, temporary database on the SAME
@@ -414,6 +428,7 @@ def _restore_backup_sqlite(file_id: str, mode: str = 'strict') -> None:
 
     from .models import Item, CharacterGroup, PreviewImage
 
+    progress_cb = progress_cb or _noop_progress
     has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
 
     service = get_drive_service()
@@ -428,11 +443,15 @@ def _restore_backup_sqlite(file_id: str, mode: str = 'strict') -> None:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while not done:
-                _, done = downloader.next_chunk(num_retries=_NUM_RETRIES)
+                status, done = downloader.next_chunk(num_retries=_NUM_RETRIES)
+                if status is not None:
+                    progress_cb('downloading', status.progress() * 100)
+        progress_cb('downloading', 100)
 
         with open(download_path, 'rb') as fh:
             is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename
 
+        progress_cb('importing', None)
         if is_gz:
             with gzip.open(download_path, 'rb') as f_in, open(plain_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
@@ -686,7 +705,7 @@ def _merge_backup_sqlite(connection) -> dict:
     }
 
 
-def _restore_backup_postgres(file_id: str, mode: str = 'strict') -> None:
+def _restore_backup_postgres(file_id: str, mode: str = 'strict', progress_cb=None) -> None:
     """Download the given Drive backup and load it into the database.
 
     If the database already has data and `mode` is 'strict' (the
@@ -711,6 +730,7 @@ def _restore_backup_postgres(file_id: str, mode: str = 'strict') -> None:
 
     from .models import Item, CharacterGroup, PreviewImage
 
+    progress_cb = progress_cb or _noop_progress
     has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
 
     service = get_drive_service()
@@ -723,7 +743,10 @@ def _restore_backup_postgres(file_id: str, mode: str = 'strict') -> None:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
             while not done:
-                _, done = downloader.next_chunk(num_retries=_NUM_RETRIES)
+                status, done = downloader.next_chunk(num_retries=_NUM_RETRIES)
+                if status is not None:
+                    progress_cb('downloading', status.progress() * 100)
+        progress_cb('downloading', 100)
 
         with open(dump_path, 'rb') as fh:
             is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename
@@ -738,6 +761,7 @@ def _restore_backup_postgres(file_id: str, mode: str = 'strict') -> None:
                 backup=_count_dump_rows(dump_path, is_gz),
             )
 
+        progress_cb('importing', None)
         env = {**os.environ, 'PGPASSWORD': params['password']}
         psql_cmd = [
             'psql',
