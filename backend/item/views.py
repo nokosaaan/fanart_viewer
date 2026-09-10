@@ -2952,6 +2952,58 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'created', 'item': serializer.data}, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['post'], url_path='upload_preview')
+    def upload_preview(self, request, pk=None):
+        """Attach locally-held image file(s) to an EXISTING item — for
+        when the item itself is already registered (e.g. via a Danbooru
+        link, or a fetch that only got tags/metadata) but has no preview
+        because its source link is dead/private, while the user happens
+        to have the actual image saved elsewhere. Mirrors create_manual's
+        file-upload/validation (same MAX_MANUAL_UPLOAD_BYTES cap, same
+        image/* content-type check) but appends PreviewImage rows to an
+        item that already exists instead of creating a new one.
+
+        Multipart form fields:
+          images: one or more image files (required — at least one)
+
+        Appends after any existing preview images (order = current count
+        + index) rather than replacing them — a caller that specifically
+        wants a clean slate first should DELETE previews/ before calling
+        this, exactly like clearing before a normal re-fetch.
+        """
+        item = self.get_object()
+
+        files = request.FILES.getlist('images')
+        if not files:
+            return Response({'detail': '画像ファイルを1枚以上指定してください'}, status=status.HTTP_400_BAD_REQUEST)
+
+        for f in files:
+            if not (f.content_type or '').startswith('image/'):
+                return Response({'detail': f'{f.name} は画像ファイルではありません'}, status=status.HTTP_400_BAD_REQUEST)
+            if f.size > MAX_MANUAL_UPLOAD_BYTES:
+                return Response(
+                    {'detail': f'{f.name} が大きすぎます(1ファイルの上限{MAX_MANUAL_UPLOAD_BYTES // (1024 * 1024)}MB)'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        start_order = item.preview_images.count()
+        created = 0
+        for offset, f in enumerate(files):
+            try:
+                PreviewImage.objects.create(
+                    item=item, order=start_order + offset,
+                    data=f.read(), content_type=f.content_type or 'image/jpeg',
+                )
+                created += 1
+            except Exception:
+                logging.exception('Failed to save uploaded image %s for item %s', f.name, item.pk)
+
+        if created == 0:
+            return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'uploaded', 'added': created, 'item': serializer.data})
+
     @action(detail=True, methods=['post'], url_path='detect_regions')
     def detect_regions(self, request, pk=None):
         """Person-detection candidate boxes for one of this item's images —

@@ -30,6 +30,8 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   const [situationState, setSituationState] = useState(it.situation || '')
   const [artistState, setArtistState] = useState(it.artist || '')
   const [copied, setCopied] = useState(false)
+  const [uploadingLocal, setUploadingLocal] = useState(false)
+  const localFileInputRef = useRef(null)
 
   // Saving now happens from the fetch queue (see FetchQueueManager), which is
   // a separate component from whichever ItemRow originally fetched the
@@ -42,6 +44,34 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
     window.addEventListener('item-preview-updated', onPreviewUpdated)
     return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
   }, [it.id])
+
+  // For when the item is already registered but has no usable preview
+  // (source link dead/private) while the user happens to have the image
+  // saved locally (e.g. via Danbooru, or an old local backup) — attaches
+  // it directly instead of going through the URL-fetch pipeline. Mirrors
+  // ManualAddItem.jsx's upload, but appends to an EXISTING item (see
+  // ItemViewSet.upload_preview).
+  async function onUploadLocalFiles(e){
+    const files = Array.from((e && e.target && e.target.files) || [])
+    if(files.length === 0) return
+    setUploadingLocal(true)
+    try{
+      const formData = new FormData()
+      for(const f of files) formData.append('images', f)
+      const resp = await fetch(`/api/items/${it.id}/upload_preview/`, { method: 'POST', body: formData })
+      const j = await resp.json().catch(()=>({}))
+      if(!resp.ok){ alert('画像のアップロードに失敗しました: '+(j.detail||resp.status)); return }
+      setHasPreviewLocal(true)
+      notify('item-preview-updated', { id: it.id })
+      showToast(`画像を追加しました(${j.added||files.length}件) ✓`, 'success')
+    }catch(err){
+      console.error(err)
+      alert('画像のアップロードに失敗しました')
+    }finally{
+      setUploadingLocal(false)
+      if(localFileInputRef.current) localFileInputRef.current.value = ''
+    }
+  }
 
   async function onFetch(e){
     e && e.preventDefault()
@@ -227,6 +257,27 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
               {loading ? '…' : '+'}
             </button>
           </div>
+        )}
+        {!readOnly && (
+          <>
+            <input
+              ref={localFileInputRef} type="file" accept="image/*" multiple
+              style={{display:'none'}} onChange={onUploadLocalFiles}
+            />
+            <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}}
+              title="手元にある画像ファイルをこのアイテムのプレビューとして追加(URLが死んでいる場合など)"
+              onClick={()=>localFileInputRef.current && localFileInputRef.current.click()}
+              disabled={uploadingLocal}
+            >
+              {uploadingLocal ? '…' : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+              )}
+            </button>
+          </>
         )}
         {!readOnly && <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear previews" onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
