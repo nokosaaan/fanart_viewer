@@ -176,13 +176,14 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     function onKey(e){
       if(selectedIndex===null) return
       if(e.key==='Escape') setSelectedIndex(null)
-      if(e.key==='ArrowLeft') prev()
-      if(e.key==='ArrowRight') next()
-      // Up/Down page through THIS item's own images instead — see
-      // nextPreviewImage/prevPreviewImage's own comment for why these
-      // don't reuse Left/Right.
-      if(e.key==='ArrowUp'){ e.preventDefault(); prevPreviewImage() }
-      if(e.key==='ArrowDown'){ e.preventDefault(); nextPreviewImage() }
+      // Up/Down move to the prev/next ITEM, matching the mouse wheel below
+      // (deltaY drives next()/prev()) — Left/Right instead page through
+      // THIS item's own images. Keeping both input methods on the same
+      // axis for "next item" avoids the two disagreeing with each other.
+      if(e.key==='ArrowUp') prev()
+      if(e.key==='ArrowDown') next()
+      if(e.key==='ArrowLeft'){ e.preventDefault(); prevPreviewImage() }
+      if(e.key==='ArrowRight'){ e.preventDefault(); nextPreviewImage() }
     }
     window.addEventListener('keydown', onKey)
     return ()=> window.removeEventListener('keydown', onKey)
@@ -253,13 +254,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [deleting, setDeleting] = useState(false)
 
   // Paging through THIS item's own images (e.g. a multi-page manga fetch)
-  // is deliberately bound to Up/Down rather than Left/Right or the wheel —
-  // both of those already move to the prev/next ITEM (see onKey/handleWheel
-  // below), so reusing them here would make "next page of this item" and
-  // "next item entirely" indistinguishable from the same gesture. Up/Down
-  // pairs naturally with Left/Right's existing meaning (perpendicular axis
-  // = perpendicular kind of "next") without touching either existing
-  // binding.
+  // is bound to Left/Right, not Up/Down — the mouse wheel already moves to
+  // the prev/next ITEM on its own axis (deltaY, see handleWheel below), so
+  // Up/Down mirrors that for the keyboard too (see onKey above) rather than
+  // disagreeing with it. Left/Right was free precisely because Up/Down took
+  // over "next item".
   function nextPreviewImage(){
     if(!previews || previews.length === 0) return
     selectPreviewIndex((currentPreviewIdxRef.current + 1) % previews.length)
@@ -480,7 +479,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   {!readOnly && (
                     <div style={{marginTop:12}}>
                       <button className="btn" style={{padding:'7px 10px', lineHeight:1}} title="Delete this preview" onClick={deleteCurrentPreview} disabled={deleting}>
-                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>}
+                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M4 6h16"/><path d="M4 6c0 2 1 3 3 3"/><path d="M20 6c0 2-1 3-3 3"/><line x1="12" y1="6" x2="12" y2="20"/></svg>}
                       </button>
                       <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear all previews" onClick={clearAllPreviews} disabled={deleting}>
                         {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M4 6h16"/><path d="M4 6c0 2 1 3 3 3"/><path d="M20 6c0 2-1 3-3 3"/><line x1="12" y1="6" x2="12" y2="20"/></svg>}
@@ -493,7 +492,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               })()}
               <div className="modal-timeline-wrap">
                 {previews && previews.length>1 && (
-                  <div className="modal-timeline-hint">↑/↓キーでこのアイテムの前後のページへ</div>
+                  <div className="modal-timeline-hint">←/→キーでこのアイテムの前後のページへ</div>
                 )}
                 <div className="modal-timeline">
                   {previews && previews.length>0 ? previews.map(p=> (

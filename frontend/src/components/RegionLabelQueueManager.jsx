@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import RegionAnnotator from './RegionAnnotator'
 import CharacterPicker from './CharacterPicker'
 import { notify } from '../lib/crossWindowSync'
+import { getPlatformIcon } from '../lib/platformIcon'
 import Pagination from './Pagination'
 
 function getCookie(name) {
@@ -44,6 +45,20 @@ function characterDiff(it) {
   }
 }
 
+// Lets the actual source image be checked (e.g. "which of these two people
+// is which character, again?") without leaving this panel at all — opens in
+// a new tab, so nothing here gets unmounted/reset by it.
+function SourceLink({ item }) {
+  if (!item.link) return null
+  const platform = getPlatformIcon(item.link)
+  return (
+    <a className="link-text" href={item.link} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+      {platform ? <img src={platform.icon} alt={platform.label} style={{ width: 14, height: 14, borderRadius: 3 }} /> : null}
+      元リンクを開く
+    </a>
+  )
+}
+
 function isMismatched(it) {
   if (!Array.isArray(it.character_regions) || it.character_regions.length === 0) return false
   const { regionOnly, itemOnly } = characterDiff(it)
@@ -60,7 +75,7 @@ function isMismatched(it) {
 // shrinks, standalone gets its own allItems snapshot via a localStorage
 // handoff and only falls back to querying the server if none was handed
 // off, the in-panel pager for moving between already-loaded pages, etc).
-export default function RegionLabelQueueManager({ onClose, standalone = false, allItems = null, pageSize = 50, initialPage = 0, onPopOut = null }) {
+export default function RegionLabelQueueManager({ onClose, standalone = false, allItems = null, pageSize = 50, initialPage = 0, onPopOut = null, hidden = false }) {
   const [queuePageIndex, setQueuePageIndex] = useState(initialPage || 0)
   const queuePageCount = Array.isArray(allItems) ? Math.max(1, Math.ceil(allItems.length / pageSize)) : 1
   const scopedItems = useMemo(() => (
@@ -360,7 +375,10 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, a
               return (
                 <div style={{ background: '#1e293b', borderRadius: 8, padding: '16px 20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                    <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
+                      <SourceLink item={selected} />
+                    </span>
                     <button className="btn" style={{ padding: '4px 10px' }} onClick={skipCurrent}>スキップ（後で対応）</button>
                   </div>
 
@@ -412,7 +430,10 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, a
           ) : (
             <div style={{ background: '#1e293b', borderRadius: 8, padding: '16px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 16 }}>Item #{selected.id}</span>
+                  <SourceLink item={selected} />
+                </span>
                 <div style={{ display: 'flex', gap: 8 }}>
                   {mode === 'mismatch' && (
                     <button className="btn" style={{ padding: '4px 10px' }} onClick={() => { if (confirmDiscardIfDirty()) setAnnotating(false) }}>
@@ -442,8 +463,12 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, a
     return <div className="cgm-panel" style={{ width: '100%', height: '100vh', maxHeight: '100vh', borderRadius: 0 }}>{content}</div>
   }
 
+  // App.jsx keeps this mounted across close/reopen so state (selected item,
+  // in-progress region labeling) survives — see EditQueueManager.jsx's own
+  // comment on `hidden` for why this is an inline style, not the `hidden`
+  // attribute.
   return (
-    <div className="cgm-panel-backdrop" onClick={handleClose}>
+    <div className="cgm-panel-backdrop" style={hidden ? { display: 'none' } : undefined} onClick={handleClose}>
       <div className="cgm-panel" style={{ width: 1000 }} onClick={e => e.stopPropagation()}>{content}</div>
     </div>
   )

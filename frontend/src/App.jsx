@@ -61,8 +61,20 @@ function AppMain({ role, onLogout }){
     setPreviewOpen(false)
     setPreviewInitialItemId(null)
   }
+  // editQueueOpen/regionQueueOpen only ever control visibility, not
+  // whether the component is mounted at all (see editQueueMounted/
+  // regionQueueMounted below) — closing either queue used to fully unmount
+  // it, throwing away everything (which item was selected, any characters
+  // typed into ItemEditForm but not yet saved) the moment you closed it to
+  // go check something else, like the original source link, and forcing a
+  // separate popped-out window to become the only way to avoid that. Once
+  // opened, the panel now just gets hidden on close and keeps its state for
+  // the rest of the session, so "close briefly, come back, keep going" no
+  // longer needs a whole other window.
   const [editQueueOpen, setEditQueueOpen] = useState(false)
+  const [editQueueMounted, setEditQueueMounted] = useState(false)
   const [regionQueueOpen, setRegionQueueOpen] = useState(false)
+  const [regionQueueMounted, setRegionQueueMounted] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
@@ -574,8 +586,8 @@ function AppMain({ role, onLogout }){
                 onClick: () => setFetchQueueOpen(true),
                 badge: fetchQueue.length > 0 ? fetchQueue.length : null,
               },
-              { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
-              { label: '領域ラベル付けキュー', onClick: () => setRegionQueueOpen(true) },
+              { label: '編集キュー', onClick: () => { setEditQueueMounted(true); setEditQueueOpen(true) } },
+              { label: '領域ラベル付けキュー', onClick: () => { setRegionQueueMounted(true); setRegionQueueOpen(true) } },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
               { divider: true },
               {
@@ -677,8 +689,9 @@ function AppMain({ role, onLogout }){
           onCancelBulkFetch={cancelBulkFetch}
         />
       )}
-      {editQueueOpen && (
+      {editQueueMounted && (
         <EditQueueManager
+          hidden={!editQueueOpen}
           onClose={()=>setEditQueueOpen(false)}
           allItems={filtered}
           pageSize={PAGE_SIZE}
@@ -686,8 +699,9 @@ function AppMain({ role, onLogout }){
           onPopOut={() => { popOutQueue('editQueue', filtered, PAGE_SIZE, pageIndex); setEditQueueOpen(false) }}
         />
       )}
-      {regionQueueOpen && (
+      {regionQueueMounted && (
         <RegionLabelQueueManager
+          hidden={!regionQueueOpen}
           onClose={()=>setRegionQueueOpen(false)}
           allItems={filtered}
           pageSize={PAGE_SIZE}

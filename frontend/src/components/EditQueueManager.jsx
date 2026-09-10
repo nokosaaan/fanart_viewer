@@ -58,7 +58,7 @@ function summarizeMissing(it){
 // sharing memory with the main window; only when no snapshot was handed off
 // at all (e.g. `?panel=editQueue` opened directly, with no opener) does it
 // fall back to querying the server across the whole DB.
-export default function EditQueueManager({ onClose, standalone = false, allItems = null, pageSize = 50, initialPage = 0, onPopOut = null }){
+export default function EditQueueManager({ onClose, standalone = false, allItems = null, pageSize = 50, initialPage = 0, onPopOut = null, hidden = false }){
   const [activeFields, setActiveFields] = useState(() => new Set(MISSING_FIELDS.map(f => f.key)))
   const [queuePageIndex, setQueuePageIndex] = useState(initialPage || 0)
   const queuePageCount = Array.isArray(allItems) ? Math.max(1, Math.ceil(allItems.length / pageSize)) : 1
@@ -521,8 +521,14 @@ export default function EditQueueManager({ onClose, standalone = false, allItems
     return <div className="cgm-panel" style={{width:'100%', height:'100vh', maxHeight:'100vh', borderRadius:0}}>{content}</div>
   }
 
+  // App.jsx keeps this component mounted across close/reopen so its state
+  // (selected item, in-progress edits) survives — `hidden` just controls
+  // visibility, not whether it's in the tree at all. An inline style (not
+  // the plain `hidden` attribute) because it must beat .cgm-panel-backdrop's
+  // own `display:flex` of equal selector specificity, which the `hidden`
+  // attribute's UA-stylesheet default can't do on its own.
   return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
+    <div className="cgm-panel-backdrop" style={hidden ? {display:'none'} : undefined} onClick={onClose}>
       <div className="cgm-panel" style={{width:900}} onClick={e=>e.stopPropagation()}>{content}</div>
     </div>
   )

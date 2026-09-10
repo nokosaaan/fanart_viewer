@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import CharacterPicker from './CharacterPicker'
+import { getPlatformIcon } from '../lib/platformIcon'
 
 function getCookie(name){
   const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -351,6 +352,33 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20}}>
         <span style={{color:'#f8fafc', fontWeight:700, fontSize:16}}>Edit #{item.id}</span>
         <button className="btn" style={{padding:'4px 10px'}} onClick={onClose}>✕</button>
+      </div>
+
+      {/* キャラを記入する前に実際の画像を確認できるように — 元リンクを
+          開く(新しいタブ、このフォームは閉じない)か、この画像自体を新しい
+          タブで開く。編集キューを閉じずに済むので、いちいち別ウィンドウを
+          開き直す必要がない(このフォームの入力内容もそのまま残る)。 */}
+      <div style={{...SECTION.wrap, background:'#0f172a', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap'}}>
+        <img
+          src={`/api/items/${item.id}/preview/${selectedImageIndex !== null ? `?index=${selectedImageIndex}` : ''}`}
+          alt=""
+          style={{width:120, height:120, objectFit:'cover', borderRadius:6, flexShrink:0, background:'#1e293b'}}
+        />
+        <div style={{display:'flex', flexDirection:'column', gap:8}}>
+          {item.link && (
+            <a className="link-text" href={item.link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+              {(() => {
+                const platform = getPlatformIcon(item.link)
+                return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
+              })()}
+              元リンクを開く(実際の画像を確認)
+            </a>
+          )}
+          <a className="link-text" href={`/api/items/${item.id}/preview/${selectedImageIndex !== null ? `?index=${selectedImageIndex}` : ''}`} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            この画像を新しいタブで開く
+          </a>
+        </div>
       </div>
 
       <div style={{...SECTION.wrap, background:'#0f172a'}}>
