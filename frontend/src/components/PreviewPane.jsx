@@ -445,13 +445,23 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               <button className="modal-close" onClick={()=>setSelectedIndex(null)} aria-label="Close">✕</button>
 
             <div className="modal-content" onClick={e=>e.stopPropagation()}>
+              {(() => {
+                // The URL powering <img> below is itself already a raw-bytes
+                // endpoint (ItemViewSet.preview: HttpResponse(img.data,
+                // content_type=...), no wrapping page) — exactly the same
+                // shape as an x.com pbs.twimg.com link. So "open the image
+                // alone in a new tab, right-click, save" needs nothing new
+                // server-side; just a link to this same URL, kept in sync
+                // with whichever page of a multi-image item is on screen
+                // (currentPreviewIdx) so it's never just "the first page"
+                // regardless of what's actually being looked at.
+                const previewImgSrc = (previews && previews.length>0)
+                  ? `/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
+                  : `/api/items/${items[selectedIndex].id}/preview/`
+                return (
               <div className="modal-top">
                 <div className="modal-main">
-                  <img className="preview-modal-img" src={
-                    (previews && previews.length>0)
-                      ? `/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
-                      : `/api/items/${items[selectedIndex].id}/preview/`
-                  } alt={(items[selectedIndex].titles && items[selectedIndex].titles[0])||items[selectedIndex].title||''} />
+                  <img className="preview-modal-img" src={previewImgSrc} alt={(items[selectedIndex].titles && items[selectedIndex].titles[0])||items[selectedIndex].title||''} />
                 </div>
                 <div className="modal-meta">
                   <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
@@ -462,6 +472,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
                     })()}
                     Open source
+                  </a>
+                  <a className="link-text" href={previewImgSrc} target="_blank" rel="noreferrer" title="この画像だけを表示するページを新しいタブで開きます。右クリック→名前を付けて画像を保存、で保存できます" style={{display:'inline-flex', alignItems:'center', gap:6, marginTop:4}}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    画像を新しいタブで開く(保存用)
                   </a>
                   {!readOnly && (
                     <div style={{marginTop:12}}>
@@ -475,6 +489,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   )}
                 </div>
               </div>
+                )
+              })()}
               <div className="modal-timeline-wrap">
                 {previews && previews.length>1 && (
                   <div className="modal-timeline-hint">↑/↓キーでこのアイテムの前後のページへ</div>
