@@ -12,7 +12,17 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   const [debugInfo, setDebugInfo] = useState(null)
   // debugInfo is kept for internal use; we do not render it in the UI.
   // Keep fetch debug objects available on `window.__fv_fetch_debug` and expose a helper to show them.
-  const [fetchMethod, setFetchMethod] = useState('html')
+  // Pixiv's own og:image (what the plain HTML-scrape method reads) is
+  // always the small square1200 thumbnail, never the original image --
+  // getting the real original requires the Playwright-based Pixiv helper
+  // (see views.py's force_method == 'playwright' branch, which already
+  // has dedicated Pixiv handling via fetch_images_with_playwright), so a
+  // pixiv/pximg link starts on that method instead of the generic default,
+  // to avoid the "fetch once, get a thumbnail, fetch again with Playwright
+  // to get the real image" two-step this had otherwise.
+  const [fetchMethod, setFetchMethod] = useState(
+    (it.link && (it.link.includes('pixiv.net') || it.link.includes('pximg.net'))) ? 'playwright' : 'html'
+  )
   const [showEditor, setShowEditor] = useState(false)
   const [titlesState, setTitlesState] = useState(it.titles || [])
   const [charsState, setCharsState] = useState(it.characters || [])

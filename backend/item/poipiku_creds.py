@@ -20,10 +20,10 @@ def _fernet():
 
     key = os.environ.get('POIPIKU_CREDS_ENC_KEY', '').strip()
     if not key:
-        raise PoipikuCredsConfigError(
-            'POIPIKU_CREDS_ENC_KEY is not set. Generate one with: '
-            'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
-        )
+        # Should never actually happen -- see TwitterCredsConfigError's
+        # identical comment in item/twitter_creds.py for why this message
+        # deliberately says nothing about env vars or terminal commands.
+        raise PoipikuCredsConfigError('内部エラー: 暗号化キーが設定されていません。アプリを再起動しても直らない場合は開発者にご連絡ください。')
     return Fernet(key.encode())
 
 

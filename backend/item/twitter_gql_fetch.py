@@ -405,9 +405,9 @@ def fetch_twitter_media(tweet_url: str) -> tuple[list[tuple[bytes, str]], str]:
     auth_token, ct0 = _get_creds()
 
     if not auth_token:
-        raise RuntimeError("TWITTER_AUTH_TOKEN が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
     if not ct0:
-        raise RuntimeError("TWITTER_CT0 が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
 
     media_urls, description = fetch_tweet_media_urls(tweet_url, auth_token, ct0)
     if not media_urls:
@@ -459,7 +459,7 @@ def fetch_tweet_description(tweet_url: str) -> str:
     """
     auth_token, ct0 = _get_creds()
     if not auth_token or not ct0:
-        raise RuntimeError("TWITTER_AUTH_TOKEN/ct0 が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
 
     _media_urls, description = fetch_tweet_media_urls(tweet_url, auth_token, ct0)
     return description
@@ -648,9 +648,9 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
     """
     auth_token, ct0 = _get_creds()
     if not auth_token:
-        raise RuntimeError("TWITTER_AUTH_TOKEN が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
     if not ct0:
-        raise RuntimeError("TWITTER_CT0 が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
 
     if max_items is None:
         max_items = _ACCOUNT_RETWEETS_DEFAULT_MAX
@@ -1023,7 +1023,7 @@ def fetch_account_bookmarks(
     """
     auth_token, ct0 = _get_creds()
     if not auth_token or not ct0:
-        raise RuntimeError("TWITTER_AUTH_TOKEN/ct0 が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
 
     variables = {"count": 20, "includePromotedContent": False}
     return _fetch_social_timeline(
@@ -1052,7 +1052,7 @@ def fetch_account_likes(
     """
     auth_token, ct0 = _get_creds()
     if not auth_token or not ct0:
-        raise RuntimeError("TWITTER_AUTH_TOKEN/ct0 が設定されていません")
+        raise RuntimeError("Twitter認証情報が設定されていません(ヘッダーメニューの「Twitter/X 認証情報」から設定してください)")
 
     user_id = _resolve_user_id(screen_name.lstrip("@"), auth_token, ct0)
     variables = {

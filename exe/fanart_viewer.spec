@@ -46,6 +46,18 @@ hiddenimports += collect_submodules('gallery_dl.extractor')
 # MigrationLoader discovers migrations — same silent-failure-in-frozen-
 # build class of bug fixed above for item.migrations.
 hiddenimports += collect_submodules('item.management.commands')
+# item.drive_creds_views only imports this lazily (inside a function, for
+# the Google Drive OAuth consent flow) -- confirmed live that PyInstaller's
+# static analysis doesn't follow it: "google-auth-oauthlib がインストール
+# されていません" (the ImportError fallback message) firing in the built
+# exe despite the package being installed in the build venv. Same
+# dynamic-import-blind-spot class as gallery_dl.extractor/item.migrations
+# above; collect its own submodules plus its two direct dependencies
+# (oauthlib/requests_oauthlib) defensively, since neither has an upstream
+# PyInstaller hook of its own.
+hiddenimports += collect_submodules('google_auth_oauthlib')
+hiddenimports += collect_submodules('oauthlib')
+hiddenimports += collect_submodules('requests_oauthlib')
 
 # Playwright's driver (Node runtime + JS bundle, item/playwright_setup.py)
 # is plain data, not Python source, so Analysis() won't pick it up on its

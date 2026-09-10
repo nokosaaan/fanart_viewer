@@ -94,7 +94,7 @@ def _pixiv_request_context():
     """
     phpsessid = _get_phpsessid()
     if not phpsessid:
-        raise RuntimeError('PIXIV_PHPSESSIDが設定されていません')
+        raise RuntimeError('Pixiv認証情報が設定されていません(ヘッダーメニューの「Pixiv 認証情報」から設定してください)')
 
     from playwright.sync_api import sync_playwright
 
