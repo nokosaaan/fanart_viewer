@@ -3557,6 +3557,18 @@ class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
             return Response([])
         return Response(danbooru_lookup.autocomplete_tags(q))
 
+    @action(detail=False, methods=['get'], url_path='alias_search')
+    def alias_search(self, request):
+        """?q=... — Danbooru wiki pages whose other_names match `q` (see
+        danbooru_lookup.search_aliases), for when the manual-entry UI's
+        plain tag-name autocomplete comes up empty because the query is a
+        katakana/Japanese name rather than the tag's own romanized form.
+        """
+        q = (request.GET.get('q') or '').strip()
+        if not q:
+            return Response([])
+        return Response(danbooru_lookup.search_aliases(q))
+
     @action(detail=False, methods=['post'], url_path='manual')
     def manual(self, request):
         """Body: {"character_name": "...", "danbooru_tag": "..."|null}.

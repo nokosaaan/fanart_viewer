@@ -86,6 +86,35 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
     return () => { cancelled = true; clearTimeout(timer) }
   }, [manualFor, manualValue])
 
+  // Separate from manualSuggestions above: autocomplete_tags only ever
+  // matches a tag's OWN romanized name (Danbooru's site-search box does
+  // the same), so typing a katakana/Japanese name into it returns nothing
+  // — this instead searches Danbooru wiki pages' other_names field (see
+  // danbooru_lookup.search_aliases), the exact place Danbooru itself
+  // records a character's cross-script aliases, for exactly that case.
+  const [aliasSuggestions, setAliasSuggestions] = useState([])
+  const [aliasSuggestLoading, setAliasSuggestLoading] = useState(false)
+
+  useEffect(() => {
+    if (!manualFor) { setAliasSuggestions([]); return }
+    const q = manualValue.trim()
+    if (!q) { setAliasSuggestions([]); setAliasSuggestLoading(false); return }
+    let cancelled = false
+    setAliasSuggestLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/character-links/alias_search/?q=${encodeURIComponent(q)}`)
+        const j = await r.json().catch(() => [])
+        if (!cancelled) setAliasSuggestions(Array.isArray(j) ? j : [])
+      } catch (_) {
+        if (!cancelled) setAliasSuggestions([])
+      } finally {
+        if (!cancelled) setAliasSuggestLoading(false)
+      }
+    }, DEBOUNCE_MS)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [manualFor, manualValue])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -261,7 +290,7 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
                         autoFocus
                       />
                       <button className="btn" onClick={() => submitManual(l.character_name, manualValue.trim())} style={{ fontSize: 11 }}>保存</button>
-                      <button className="btn" onClick={() => { setManualFor(null); setManualValue(''); setManualSuggestions([]) }} style={{ fontSize: 11 }}>キャンセル</button>
+                      <button className="btn" onClick={() => { setManualFor(null); setManualValue(''); setManualSuggestions([]); setAliasSuggestions([]) }} style={{ fontSize: 11 }}>キャンセル</button>
                     </div>
                     {manualSuggestLoading && (
                       <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>候補を検索中…</div>
@@ -277,6 +306,29 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
                           >
                             <span style={{ color: CATEGORY_COLORS[s.category] || '#e2e8f0', flex: 1 }}>{s.label}</span>
                             {s.post_count != null && <span style={{ fontSize: 11, color: '#64748b' }}>{s.post_count}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {!manualSuggestLoading && manualSuggestions.length === 0 && !aliasSuggestLoading && aliasSuggestions.length > 0 && (
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 8, marginBottom: 2 }}>
+                        カタカナ/日本語名では見つかりませんでした。Danbooruの別表記(other_names)から見つかった候補:
+                      </div>
+                    )}
+                    {!aliasSuggestLoading && aliasSuggestions.length > 0 && (
+                      <div style={{ marginTop: 6, background: '#0f172a', border: '1px solid #334155', borderRadius: 6, maxHeight: 220, overflowY: 'auto' }}>
+                        {aliasSuggestions.map(s => (
+                          <button
+                            key={s.tag}
+                            className="dblink-suggestion"
+                            onClick={() => submitManual(l.character_name, s.tag)}
+                            title={`このタグをリンクとして保存: ${s.tag}`}
+                            style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}
+                          >
+                            <span style={{ color: '#e2e8f0' }}>{s.tag}</span>
+                            {s.other_names.length > 0 && (
+                              <span style={{ fontSize: 11, color: '#64748b' }}>別表記: {s.other_names.join('、')}</span>
+                            )}
                           </button>
                         ))}
                       </div>

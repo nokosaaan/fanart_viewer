@@ -447,6 +447,49 @@ def find_tag_via_other_names(japanese_name: str, expected_titles) -> str | None:
     return None  # zero or ambiguous (2+) — a human should decide, not this function
 
 
+def search_aliases(query: str, limit: int = 20) -> list[dict]:
+    """Best-effort: Danbooru wiki pages whose other_names include `query`
+    (substring match) — for a human who doesn't know how a katakana/
+    Japanese character name is actually spelled/romanized on Danbooru.
+    autocomplete_tags's search[type]=tag_query only matches a tag's OWN
+    romanized name, so typing a Japanese name into it returns nothing;
+    this instead searches other_names_match, the exact field Danbooru's
+    own wiki pages use to record cross-script aliases (see also
+    find_registered_character_via_alias / find_tag_via_other_names, which
+    use this same endpoint but need an expected title to disambiguate
+    before trusting a single result automatically — this one is a plain
+    browse list for a human to look through instead, so no title/
+    disambiguation is needed).
+
+    Returns [{'tag', 'other_names'}, ...] in whatever order Danbooru
+    itself returns them — [] for a blank query or any request failure,
+    never raises (this drives a live-typing UI).
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+    try:
+        resp = requests.get(
+            _WIKI_PAGES_ENDPOINT,
+            params={"search[other_names_match]": f"*{query}*", "limit": limit},
+            headers={"User-Agent": "fanart-viewer/1.0 (personal archival tool)"},
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.warning("danbooru_lookup.search_aliases: HTTP %s for query=%s", resp.status_code, query)
+            return []
+        pages = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("danbooru_lookup.search_aliases: request failed for query=%s: %s", query, e)
+        return []
+    if not isinstance(pages, list):
+        return []
+    return [
+        {"tag": p.get("title"), "other_names": p.get("other_names") or []}
+        for p in pages if isinstance(p, dict) and p.get("title")
+    ]
+
+
 _AUTOCOMPLETE_ENDPOINT = "https://danbooru.donmai.us/autocomplete.json"
 
 
