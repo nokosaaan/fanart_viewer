@@ -331,6 +331,14 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       const j = await resp.json().catch(()=>({}))
       setLoading(false)
       if(!resp.ok){ alert('Save failed: ' + (j.detail || JSON.stringify(j))); return }
+      // Backend auto-creates a CharacterGroup the moment a save first
+      // introduces both a brand-new title and a brand-new character
+      // together (see views._maybe_autocreate_character_group) — surfaced
+      // here so it isn't a silent side effect the user only discovers
+      // later in the character-group manager.
+      if(j.auto_created_character_group){
+        alert(`新しいタイトル「${j.auto_created_character_group.name}」のキャラクターグループを自動作成しました。`)
+      }
       if(onSaved) onSaved(j.item)
     }catch(e){
       setLoading(false)

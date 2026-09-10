@@ -1498,6 +1498,73 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     }
 
 
+def _known_titles_and_characters_excluding(item_pk):
+    """All titles/characters used by every OTHER Item — one combined scan
+    (mirrors ItemViewSet.all_titles/all_characters, but both fields at once
+    and excluding one item) so _maybe_autocreate_character_group can tell
+    whether a title/character this save introduces is genuinely new to the
+    whole app, not just new to the one Item being edited."""
+    titles, characters = set(), set()
+    for other in Item.objects.exclude(pk=item_pk).only('titles', 'characters').iterator():
+        for t in (other.titles or []):
+            if t and isinstance(t, str):
+                titles.add(t.strip())
+        for c in (other.characters or []):
+            if c and isinstance(c, str):
+                characters.add(c.strip())
+    return titles, characters
+
+
+def _maybe_autocreate_character_group(item, orig_titles, orig_characters):
+    """Editing an item to give it BOTH a title and character(s) that have
+    never appeared anywhere else in the app is exactly the moment a new
+    series first gets archived — the same moment a human would otherwise
+    have to remember to go create a matching CharacterGroup by hand (see
+    CharacterGroup's own docstring: it's what scopes character-name
+    suggestions/matching to the right title, and what
+    train_character_classifier's title-roster resolution keys off). Auto-
+    creates one instead: named after the new title, seeded with every
+    character on this item (not just the newly-typed ones — for a
+    brand-new title, everyone appearing on this first item legitimately
+    belongs to it, even a name that happens to already exist elsewhere for
+    an unrelated franchise) and pre-linked to that title (CharacterGroup.
+    titles) so it shows up for this title immediately, without a human
+    needing to separately open the character-group manager and link it.
+
+    Deliberately narrow: only fires when THIS save introduces a title that
+    has never been used by any other Item AND at least one character that
+    has never been used by any other Item, in the same call — reusing an
+    existing title (even to add a brand-new character to it) is a
+    judgment call about whether that character belongs in an existing
+    group or a new one, which is left to a human via
+    CharacterGroupManager.jsx rather than guessed at here. Never touches
+    an existing CharacterGroup — get_or_create only creates; if a group
+    with this exact name coincidentally already exists (e.g. two different
+    items introducing the "same" new title back to back), its existing
+    characters/titles are extended, never overwritten.
+
+    Returns the CharacterGroup it created/extended, or None if the "new
+    title + new character" condition wasn't met.
+    """
+    new_titles = [t for t in (item.titles or []) if t and t not in orig_titles]
+    new_characters = [c for c in (item.characters or []) if c and c not in orig_characters]
+    if not new_titles or not new_characters:
+        return None
+
+    known_titles, known_characters = _known_titles_and_characters_excluding(item.pk)
+    brand_new_titles = [t for t in new_titles if t not in known_titles]
+    brand_new_characters = [c for c in new_characters if c not in known_characters]
+    if not brand_new_titles or not brand_new_characters:
+        return None
+
+    name = brand_new_titles[0]
+    group, _created = CharacterGroup.objects.get_or_create(name=name, defaults={'characters': [], 'titles': []})
+    group.characters = _merge_unique(group.characters, item.characters or [])
+    group.titles = _merge_unique(group.titles, brand_new_titles)
+    group.save(update_fields=['characters', 'titles'])
+    return group
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('-id')
@@ -2834,6 +2901,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
         updates = {}
+        # Snapshot BEFORE any field below gets applied — _maybe_autocreate_character_group
+        # (called after save()) needs to know what was new to THIS item, not
+        # just what ended up on it.
+        orig_titles = list(item.titles or [])
+        orig_characters = list(item.characters or [])
 
         if 'characters' in data:
             chars = data.get('characters')
@@ -2883,8 +2955,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to save Item updates')
             return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        auto_group = None
+        if 'titles' in updates and 'characters' in updates:
+            auto_group = _maybe_autocreate_character_group(item, orig_titles, orig_characters)
+
         serializer = ItemSerializer(item, context={'request': request})
-        return Response({'status': 'updated', 'updated': updates, 'item': serializer.data})
+        response = {'status': 'updated', 'updated': updates, 'item': serializer.data}
+        if auto_group is not None:
+            response['auto_created_character_group'] = {'id': auto_group.id, 'name': auto_group.name}
+        return Response(response)
 
     @action(detail=False, methods=['post'], url_path='create_manual')
     def create_manual(self, request):
