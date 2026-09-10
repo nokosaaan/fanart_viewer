@@ -73,17 +73,54 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-# Database (Postgres by env)
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
-        'USER': os.environ.get('POSTGRES_USER', 'fanart'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
-        'HOST': os.environ.get('DATABASE_HOST', 'db'),
-        'PORT': os.environ.get('DATABASE_PORT', '5432'),
+# Database — Postgres by default (docker-compose dev/prod, unchanged), or
+# SQLite when DB_ENGINE=sqlite3 is set — kept as the same opt-in toggle the
+# standalone exe build uses, so a backup taken in one SQLite mode can be
+# restored in the other and .env can flip back to Postgres if needed.
+# Default stays 'postgresql' so nothing changes unless this is opted into.
+if os.environ.get('DB_ENGINE', 'postgresql') == 'sqlite3':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            # Same `data/` directory tagger.py's _data_dir() already uses
+            # for model files, and already a volume-mounted directory in
+            # docker-compose.prod.yml so it survives container recreation.
+            'NAME': os.environ.get('SQLITE_PATH', str(BASE_DIR / 'data' / 'db.sqlite3')),
+            # Unlike the exe build (poller runs in-process, single writer),
+            # docker-compose.prod.yml runs `web` (gunicorn) and `poller` as
+            # separate OS processes against the same file — raise Python's
+            # sqlite3 busy-wait so a lock held by one of them makes the
+            # other retry for a while instead of immediately raising
+            # "database is locked".
+            'OPTIONS': {'timeout': 20},
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'fanart'),
+            'USER': os.environ.get('POSTGRES_USER', 'fanart'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'password'),
+            'HOST': os.environ.get('DATABASE_HOST', 'db'),
+            'PORT': os.environ.get('DATABASE_PORT', '5432'),
+        }
+    }
+
+if DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3':
+    # WAL lets one writer and any number of readers proceed concurrently
+    # (the default rollback-journal mode blocks all readers during a write)
+    # — the multi-process concern above applies to reads just as much as
+    # writes, since `web` and `poller` are never the same process here.
+    from django.db.backends.signals import connection_created
+
+    def _set_sqlite_pragmas(sender, connection, **kwargs):
+        if connection.vendor == 'sqlite':
+            with connection.cursor() as cursor:
+                cursor.execute('PRAGMA journal_mode=WAL;')
+                cursor.execute('PRAGMA busy_timeout=20000;')
+
+    connection_created.connect(_set_sqlite_pragmas)
 
 AUTH_PASSWORD_VALIDATORS = []
 

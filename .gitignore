@@ -9,6 +9,8 @@
 # /scripts/*
 /backend/data/tagger
 /backend/data/*.json
+/backend/data/*.sqlite3
+/backend/data/.migrate.lock
 # /backend/backend/data/*.json
 /backend/.env/
 /backend/.env.example
@@ -18,7 +20,10 @@
 /backend/security/__pycache__/*.pyc
 /backend/backend/__pycache__/*.pyc
 /frontend/dist/*
+/frontend/.dist_old_root_owned_unused
+/frontend/node_modules/
 /backend/staticfiles/
+/exe/*
 /log/*
 /dump*
 claudeflared

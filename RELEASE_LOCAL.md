@@ -107,6 +107,40 @@ print(f'{count} 件のキュー行を削除し、pollerのカーソルをリセ�
 
 Google Driveバックアップを使う場合、追加で`.env`の`GOOGLE_DRIVE_CLIENT_ID`/`GOOGLE_DRIVE_CLIENT_SECRET`/`GOOGLE_DRIVE_REFRESH_TOKEN`を設定（バックアップ節を参照）。
 
+#### SQLiteへの移行（任意 — スタンドアロンexe版とのバックアップ互換性のため）
+
+デフォルトはPostgreSQL（`db`サービス）。exe版はSQLite固定で動いており、**PostgresのダンプとSQLiteのスナップショットは相互にrestoreできない**ため、exe版で取ったバックアップをこちらに持ち込みたい（またはその逆）場合は、こちらもSQLiteに切り替える必要がある。
+
+Django側の非互換はJSONFieldの`contains`ルックアップ2箇所だけで、いずれもPython側フィルタリングに書き換え済み（`_suggest_from_similar_tags`/`_expand_character_alias`、`item/views.py`）。それ以外はPostgres固有の依存なし。
+
+⚠️ **本番の`web`(gunicorn)と`poller`は別プロセスとして同時にDBへ書き込む**（exe版はpollerが同一プロセス内のスレッドなので、そもそもこの状況が起きない）。そのため:
+- SQLite接続時に`PRAGMA journal_mode=WAL`と`PRAGMA busy_timeout=20000`を自動設定（`backend/backend/settings.py`の`connection_created`シグナル）— ロック競合時は即エラーではなく最大20秒リトライしてから諦める。
+- `web`と`poller`の起動時`migrate`同士が同時に走ってDDLで衝突しないよう、`/app/data/.migrate.lock`で`flock`して直列化（`entrypoint.sh`/`poller_entrypoint.sh`）。
+- gunicornのワーカー数をデフォルト2→**1**に変更（個人利用なので実質的なデメリットはなく、SQLiteへの書き込み元プロセスを1つ減らせる）。Postgres運用のまま増やしたい場合は`.env`の`GUNICORN_WORKERS`で上書き可能。
+
+**移行手順**（本番データが対象。事前にいつも通りのバックアップ・スナップショットを取ってから行うこと）:
+
+```bash
+# 1. 現在(Postgres)のデータをまるごとSQLiteファイルへコピー(バックグラウンドではなくフォアグラウンドで、完了を待つ)
+#    先頭の行数分だけ進捗が出る。件数が多い場合は --chunk-size を小さくするとメモリ使用量を抑えられる。
+docker compose -f docker-compose.prod.yml exec web python manage.py migrate_to_sqlite /app/data/db.sqlite3
+
+# 2. .env に追記
+#    DB_ENGINE=sqlite3
+
+# 3. 再起動（dbサービスはprofile化されているのでこの時点で自然に起動しなくなる）
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`migrate_to_sqlite`はコピー後に各モデルの件数をPostgres側と突き合わせて検証し、1件でも合わなければエラーで止まる（`db.sqlite3`はその場に残るので調査可能 — この場合`DB_ENGINE`は書き換えないこと）。
+
+Postgresに戻したい場合は`.env`の`DB_ENGINE`を外す(または`postgresql`にする)、`db`サービスをprofile付きで起動し直す:
+```bash
+docker compose -f docker-compose.prod.yml --profile postgres up -d
+```
+（この場合、SQLite移行後にPostgres側へ加えた変更は反映されない — Postgres側のデータは移行した時点のスナップショットのまま。）
+
 #### フロントエンドをビルド
 
 ```bash
