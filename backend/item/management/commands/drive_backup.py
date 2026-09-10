@@ -53,9 +53,10 @@ class Command(BaseCommand):
             if not file_id:
                 raise CommandError('--file-id is required for restore')
             overwrite = options.get('overwrite', False)
-            self.stdout.write(f"Restoring from {file_id} (overwrite={overwrite})...")
+            mode = 'overwrite' if overwrite else 'strict'
+            self.stdout.write(f"Restoring from {file_id} (mode={mode})...")
             try:
-                restore_backup(file_id, overwrite=overwrite)
+                restore_backup(file_id, mode=mode)
             except ExistingDataError as e:
                 self.stdout.write(self.style.WARNING('Database already has data:'))
                 self.stdout.write(f'  current: {e.current}')
