@@ -16,6 +16,7 @@ pulling data onto a freshly set-up host, not overwriting a live one.
 """
 
 import gzip
+import json
 import os
 import re
 import subprocess
@@ -51,13 +52,15 @@ class DriveBackupError(Exception):
 
 class ExistingDataError(DriveBackupError):
     """Raised by restore_backup() when the DB already has data and the
-    caller didn't pass overwrite=True. Carries row counts for both sides
-    so the caller can show the user a comparison before deciding."""
+    caller passed mode='strict' (the default). Carries row counts for
+    both sides so the caller can show the user a comparison before
+    choosing 'overwrite' (wipe first) or 'merge' (append, skipping
+    items that already exist -- see _restore_backup_sqlite)."""
 
     def __init__(self, current: dict, backup: dict):
         self.current = current
         self.backup = backup
-        super().__init__('データベースに既存データがあります。内容を比較の上、上書きするか選択してください。')
+        super().__init__('データベースに既存データがあります。内容を比較の上、上書きするか追記するか選択してください。')
 
 
 def _db_params():
@@ -313,18 +316,34 @@ def get_backup_folder_url() -> str:
     return f'https://drive.google.com/drive/folders/{folder_id}'
 
 
-def restore_backup(file_id: str, overwrite: bool = False) -> None:
+def restore_backup(file_id: str, mode: str = 'strict') -> None:
     """Download the given Drive backup and load it into the database --
     dispatches the same way create_backup does. A SQLite backup can only
     be restored into a SQLite deployment (and a Postgres one only into
     Postgres); there's no cross-engine restore path (see create_backup's
-    docstring for why)."""
+    docstring for why).
+
+    `mode`:
+      'strict'    (default) -- raise ExistingDataError if the DB already
+                  has data; otherwise just insert (identical to restoring
+                  into a fresh, empty DB).
+      'overwrite' -- delete all existing rows first, then insert the
+                  backup's rows as-is (same ids as the backup).
+      'merge'     -- keep existing data, append the backup's rows with
+                  FRESH ids (never reusing the backup's own row ids, to
+                  avoid colliding with whatever this DB already assigned
+                  those same id numbers to), skipping any Item that
+                  already exists locally under the same (external_id,
+                  source) pair -- see _restore_backup_sqlite. SQLite only;
+                  Postgres restore doesn't support this mode (see
+                  _restore_backup_postgres).
+    """
     if _is_sqlite():
-        return _restore_backup_sqlite(file_id, overwrite=overwrite)
-    return _restore_backup_postgres(file_id, overwrite=overwrite)
+        return _restore_backup_sqlite(file_id, mode=mode)
+    return _restore_backup_postgres(file_id, mode=mode)
 
 
-def _restore_backup_sqlite(file_id: str, overwrite: bool = False) -> None:
+def _restore_backup_sqlite(file_id: str, mode: str = 'strict') -> None:
     """Download a SQLite snapshot backup and copy this app's own tables
     from it into the live DB via SQLite's ATTACH DATABASE (attaching the
     downloaded file as a second, temporary database on the SAME
@@ -332,15 +351,16 @@ def _restore_backup_sqlite(file_id: str, overwrite: bool = False) -> None:
     timeout/locking behavior rather than racing it with an unrelated
     fresh connection).
 
-    Same semantics as _restore_backup_postgres: raises ExistingDataError
-    (with row counts from both sides) if the DB already has data and
-    `overwrite` is False; with overwrite=True, existing rows are deleted
-    first, in FK-safe order, before copying the backup's rows in.
+    See restore_backup's docstring for what each `mode` does. 'strict'
+    and 'overwrite' both copy rows via a single SQL `INSERT ... SELECT *`
+    (identical ids to the backup -- safe only because either the DB is
+    confirmed empty first, or it was just wiped). 'merge' is row-by-row
+    through the ORM instead (_merge_backup_sqlite), since it has to
+    assign fresh ids and remap foreign keys as it goes.
     """
     import shutil
     import sqlite3
 
-    from django.conf import settings as dj_settings
     from django.db import connection, transaction
 
     from .models import Item, CharacterGroup, PreviewImage
@@ -381,7 +401,7 @@ def _restore_backup_sqlite(file_id: str, overwrite: bool = False) -> None:
         finally:
             backup_conn.close()
 
-        if has_existing and not overwrite:
+        if has_existing and mode == 'strict':
             raise ExistingDataError(
                 current={
                     'item_charactergroup': CharacterGroup.objects.count(),
@@ -394,38 +414,252 @@ def _restore_backup_sqlite(file_id: str, overwrite: bool = False) -> None:
         with connection.cursor() as attach_cursor:
             attach_cursor.execute('ATTACH DATABASE %s AS backup_src', [plain_path])
         try:
-            with transaction.atomic():
-                with connection.cursor() as cursor:
-                    if has_existing and overwrite:
-                        # item_previewimage FKs to item_item -- delete it first.
-                        cursor.execute('DELETE FROM item_previewimage')
-                        cursor.execute('DELETE FROM item_item')
-                        cursor.execute('DELETE FROM item_charactergroup')
-                    cursor.execute('INSERT INTO item_charactergroup SELECT * FROM backup_src.item_charactergroup')
-                    cursor.execute('INSERT INTO item_item SELECT * FROM backup_src.item_item')
-                    cursor.execute('INSERT INTO item_previewimage SELECT * FROM backup_src.item_previewimage')
-        except sqlite3.OperationalError as e:
-            raise DriveBackupError(f'復元失敗: {e}') from e
+            if mode == 'merge':
+                with transaction.atomic():
+                    result = _merge_backup_sqlite(connection)
+            else:
+                try:
+                    with transaction.atomic():
+                        with connection.cursor() as cursor:
+                            if has_existing and mode == 'overwrite':
+                                # item_previewimage FKs to item_item -- delete it first.
+                                cursor.execute('DELETE FROM item_previewimage')
+                                cursor.execute('DELETE FROM item_item')
+                                cursor.execute('DELETE FROM item_charactergroup')
+                            cursor.execute('INSERT INTO item_charactergroup SELECT * FROM backup_src.item_charactergroup')
+                            cursor.execute('INSERT INTO item_item SELECT * FROM backup_src.item_item')
+                            cursor.execute('INSERT INTO item_previewimage SELECT * FROM backup_src.item_previewimage')
+                except sqlite3.OperationalError as e:
+                    raise DriveBackupError(f'復元失敗: {e}') from e
+                result = None
         finally:
             with connection.cursor() as detach_cursor:
                 detach_cursor.execute('DETACH DATABASE backup_src')
+        return result
     finally:
         for p in (download_path, plain_path):
             if os.path.exists(p):
                 os.unlink(p)
 
 
-def _restore_backup_postgres(file_id: str, overwrite: bool = False) -> None:
+def _concrete_columns(model, exclude_pk=True):
+    """Column names for a model's own concrete fields, in the model's own
+    field order -- used to read/write rows generically (by name) instead
+    of relying on a raw `SELECT *` column order, which is fragile across
+    schema/migration changes between when a backup was made and when
+    it's restored."""
+    return [
+        f.column for f in model._meta.concrete_fields
+        if not (exclude_pk and f.primary_key)
+    ]
+
+
+def _quoted(cols):
+    """Double-quote column names for use in raw SQL -- PreviewImage.order
+    maps to a column literally named `order`, a SQL reserved word that
+    breaks an unquoted SELECT/comma list (confirmed live:
+    `sqlite3.OperationalError: near "order": syntax error`)."""
+    return ', '.join(f'"{c}"' for c in cols)
+
+
+def _as_aware_utc(raw_value):
+    """Normalize a DateTimeField's raw fetched value into a tz-aware UTC
+    datetime. Python's sqlite3 module auto-converts a "datetime"-declared
+    column straight into a `datetime.datetime` object on fetch (via its
+    registered converter, matched by declared column type regardless of
+    which ATTACHed database the row came from) -- but confirmed live that
+    it comes back NAIVE either way (whether sqlite3 hands back a
+    datetime object directly, or -- if that conversion ever isn't active
+    -- plain text needing datetime.fromisoformat/parse_datetime first).
+    Django's sqlite backend always stores UTC-normalized datetimes when
+    USE_TZ=True (regardless of the configured TIME_ZONE), so reattaching
+    plain UTC tzinfo to a naive result is the correct inverse, not a
+    guess. Passing a still-naive value straight to the ORM instead would
+    go through DateTimeField.get_prep_value's own naive-datetime
+    handling, which assumes the CURRENT default timezone rather than UTC
+    and would silently shift the value by that offset on any server not
+    itself configured for UTC -- confirmed live via Django's own
+    RuntimeWarning ("received a naive datetime ... while time zone
+    support is active") the first time this was tried without this
+    conversion.
+    """
+    if raw_value is None:
+        return None
+    from datetime import datetime as dt_class
+    from datetime import timezone as dt_timezone
+
+    from django.utils.dateparse import parse_datetime
+
+    dt = raw_value if isinstance(raw_value, dt_class) else parse_datetime(raw_value)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=dt_timezone.utc)
+    return dt
+
+
+def _merge_backup_sqlite(connection) -> dict:
+    """Append an ATTACHed backup's rows into the live DB WITHOUT deleting
+    anything already there -- for combining archives built up
+    independently on two different devices/installs, rather than
+    replacing one with the other (see restore_backup's mode='merge').
+
+    Must run with `backup_src` already ATTACHed and inside the caller's
+    own transaction.atomic() block (see _restore_backup_sqlite).
+
+    Row ids are never copied as-is from the backup -- both DBs assign
+    their own ids independently, so the SAME id number in each almost
+    certainly refers to two unrelated rows. Every inserted row gets a
+    fresh id from this DB's own autoincrement sequence, and every
+    foreign key (PreviewImage.item, CharacterGroup.parent) is remapped
+    from the backup's old id to whichever id the corresponding row
+    actually ended up with here.
+
+    Dedup rules (skip re-adding something that's already effectively
+    present, rather than ever risk losing local data):
+      - CharacterGroup: matched by `name` (the model's own unique
+        constraint) -- an existing local group with the same name is
+        left untouched; only groups with a genuinely new name are
+        inserted.
+      - Item: matched by (external_id, source) -- the same convention
+        already used elsewhere in this app (see poll_twitter_updates.py/
+        poll_pixiv_bookmarks.py's own known_ids) to mean "the same real
+        post". A manually-registered item (source='manual', external_id
+        a millisecond timestamp) has a small chance of coincidentally
+        colliding with another manual item from the other device, but
+        this mirrors how manual items are already deduplicated
+        everywhere else in the app.
+      - PreviewImage: always follows its own Item -- skipped whenever
+        that Item was itself skipped as a duplicate (its images are
+        presumably already present locally too), inserted with the
+        remapped item id otherwise.
+
+    Returns a small summary dict (counts of what was actually added vs.
+    skipped) for the caller to report back to the user.
+    """
+    from .models import CharacterGroup, Item, PreviewImage
+
+    with connection.cursor() as cursor:
+        # --- CharacterGroup: dedup by name, remap self-referential parent ---
+        cg_cols = _concrete_columns(CharacterGroup)  # e.g. ['name','characters','titles','parent_id','created_at']
+        cursor.execute(f'SELECT "id", {_quoted(cg_cols)} FROM backup_src.item_charactergroup')
+        backup_groups = cursor.fetchall()
+
+        group_id_map = {}  # old (backup) id -> new (local) id
+        pending_parent = {}  # new local id -> old (backup) parent id, only for freshly-inserted groups
+        groups_added = 0
+        for row in backup_groups:
+            old_id = row[0]
+            kwargs = dict(zip(cg_cols, row[1:]))
+            old_parent_id = kwargs.pop('parent_id', None)
+            for json_col in ('characters', 'titles'):
+                if kwargs.get(json_col) is not None:
+                    kwargs[json_col] = json.loads(kwargs[json_col])
+
+            existing = CharacterGroup.objects.filter(name=kwargs['name']).first()
+            if existing is not None:
+                group_id_map[old_id] = existing.id
+                continue
+
+            # created_at has auto_now_add=True, so .create() always stamps
+            # "now" regardless of what's passed -- restore the backup's
+            # original timestamp afterwards via .update(), which (unlike
+            # .create()/.save()) does NOT re-apply auto_now_add.
+            original_created_at = _as_aware_utc(kwargs.pop('created_at', None))
+            new_group = CharacterGroup.objects.create(parent=None, **kwargs)
+            if original_created_at is not None:
+                CharacterGroup.objects.filter(pk=new_group.pk).update(created_at=original_created_at)
+            group_id_map[old_id] = new_group.id
+            groups_added += 1
+            if old_parent_id is not None:
+                pending_parent[new_group.id] = old_parent_id
+
+        for new_id, old_parent_id in pending_parent.items():
+            mapped_parent_id = group_id_map.get(old_parent_id)
+            if mapped_parent_id is not None:
+                CharacterGroup.objects.filter(id=new_id).update(parent_id=mapped_parent_id)
+
+        # --- Item: dedup by (external_id, source) ---
+        item_cols = _concrete_columns(Item)
+        item_json_cols = {f.column for f in Item._meta.concrete_fields if f.get_internal_type() == 'JSONField'}
+        cursor.execute(f'SELECT "id", {_quoted(item_cols)} FROM backup_src.item_item')
+        backup_items = cursor.fetchall()
+
+        item_id_map = {}  # old (backup) id -> new (local) id; absent = skipped as a duplicate
+        items_added = 0
+        items_skipped = 0
+        for row in backup_items:
+            old_id = row[0]
+            kwargs = dict(zip(item_cols, row[1:]))
+            for json_col in item_json_cols:
+                if kwargs.get(json_col) is not None:
+                    kwargs[json_col] = json.loads(kwargs[json_col])
+
+            existing = Item.objects.filter(external_id=kwargs['external_id'], source=kwargs['source']).first()
+            if existing is not None:
+                items_skipped += 1
+                continue
+
+            # description_checked_at is a plain (non-auto) DateTimeField --
+            # no auto_now_add issue, but still needs the same aware-UTC
+            # conversion as created_at below (see _as_aware_utc).
+            if kwargs.get('description_checked_at') is not None:
+                kwargs['description_checked_at'] = _as_aware_utc(kwargs['description_checked_at'])
+
+            # Same auto_now_add caveat as CharacterGroup.created_at above.
+            original_created_at = _as_aware_utc(kwargs.pop('created_at', None))
+            new_item = Item.objects.create(**kwargs)
+            if original_created_at is not None:
+                Item.objects.filter(pk=new_item.pk).update(created_at=original_created_at)
+            item_id_map[old_id] = new_item.id
+            items_added += 1
+
+        # --- PreviewImage: always follows its Item ---
+        pi_cols = _concrete_columns(PreviewImage)  # ['item_id', 'order', 'data', 'content_type']
+        cursor.execute(f'SELECT {_quoted(pi_cols)} FROM backup_src.item_previewimage')
+        backup_previews = cursor.fetchall()
+
+        previews_added = 0
+        for row in backup_previews:
+            kwargs = dict(zip(pi_cols, row))
+            old_item_id = kwargs.pop('item_id')
+            new_item_id = item_id_map.get(old_item_id)
+            if new_item_id is None:
+                continue  # this image's Item was skipped as a duplicate
+            PreviewImage.objects.create(item_id=new_item_id, **kwargs)
+            previews_added += 1
+
+    return {
+        'groups_added': groups_added,
+        'items_added': items_added,
+        'items_skipped': items_skipped,
+        'previews_added': previews_added,
+    }
+
+
+def _restore_backup_postgres(file_id: str, mode: str = 'strict') -> None:
     """Download the given Drive backup and load it into the database.
 
-    If the database already has data and `overwrite` is False, raises
-    ExistingDataError with row counts for both the current DB and the
-    backup instead of touching anything — the caller is expected to show
-    the user that comparison and re-call with overwrite=True to proceed.
-    When overwrite=True, existing rows in the app's own tables are cleared
-    first (TRUNCATE ... CASCADE) so the backup's rows can be loaded without
-    primary-key collisions.
+    If the database already has data and `mode` is 'strict' (the
+    default), raises ExistingDataError with row counts for both the
+    current DB and the backup instead of touching anything -- the caller
+    is expected to show the user that comparison and re-call with
+    mode='overwrite' to proceed. When mode='overwrite', existing rows in
+    the app's own tables are cleared first (TRUNCATE ... CASCADE) so the
+    backup's rows can be loaded without primary-key collisions.
+
+    mode='merge' (append without deleting, dedup by matching key, see
+    _merge_backup_sqlite) is NOT implemented here -- a psql dump restore
+    loads via COPY/INSERT statements that carry the backup's own row ids
+    verbatim, which merge mode can't allow (see restore_backup's
+    docstring for why). The exe-packaged distribution is SQLite-only
+    already (this Postgres path only serves the docker deployment), so
+    there's no user-facing path that would ever need this combination in
+    practice -- surfacing a clear error is enough.
     """
+    if mode == 'merge':
+        raise DriveBackupError('Postgresデプロイでは追記(マージ)復元はサポートしていません。上書きのみ対応しています。')
+
     from .models import Item, CharacterGroup, PreviewImage
 
     has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
@@ -445,7 +679,7 @@ def _restore_backup_postgres(file_id: str, overwrite: bool = False) -> None:
         with open(dump_path, 'rb') as fh:
             is_gz = fh.read(2) == b'\x1f\x8b'  # gzip magic number; trust bytes over the filename
 
-        if has_existing and not overwrite:
+        if has_existing and mode == 'strict':
             raise ExistingDataError(
                 current={
                     'item_charactergroup': CharacterGroup.objects.count(),
@@ -465,7 +699,7 @@ def _restore_backup_postgres(file_id: str, overwrite: bool = False) -> None:
             '-v', 'ON_ERROR_STOP=1',
         ]
 
-        if has_existing and overwrite:
+        if has_existing and mode == 'overwrite':
             # item_previewimage FKs to item_item, so CASCADE covers it too.
             truncate = subprocess.run(
                 psql_cmd + ['-c', 'TRUNCATE item_previewimage, item_item, item_charactergroup RESTART IDENTITY CASCADE;'],

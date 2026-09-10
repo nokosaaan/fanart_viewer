@@ -118,14 +118,14 @@ export default function BackupManager({ onClose }) {
     }
   }
 
-  async function doRestore(file, overwrite) {
+  async function doRestore(file, mode) {
     setRestoringId(file.id)
     setError('')
     setNotice('')
     try {
       const r = await fetch('/api/backup/restore/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ file_id: file.id, overwrite }),
+        body: JSON.stringify({ file_id: file.id, mode }),
       })
       const j = await r.json().catch(() => ({}))
       if (r.status === 409 && j.needs_confirmation) {
@@ -134,7 +134,16 @@ export default function BackupManager({ onClose }) {
       }
       if (!r.ok) throw new Error(j.detail || `復元失敗 (${r.status})`)
       setConfirmState(null)
-      setNotice('復元が完了しました。ページを再読み込みしてください。')
+      if (mode === 'merge' && j.merge_result) {
+        const mr = j.merge_result
+        setNotice(
+          `追記が完了しました: アイテム${mr.items_added}件追加` +
+          (mr.items_skipped ? `(重複${mr.items_skipped}件はスキップ)` : '') +
+          `、プレビュー画像${mr.previews_added}件、キャラクターグループ${mr.groups_added}件追加。ページを再読み込みしてください。`
+        )
+      } else {
+        setNotice('復元が完了しました。ページを再読み込みしてください。')
+      }
     } catch (e) {
       setError(e.message)
     } finally {
@@ -143,12 +152,17 @@ export default function BackupManager({ onClose }) {
   }
 
   function restoreBackup(file) {
-    doRestore(file, false)
+    doRestore(file, 'strict')
   }
 
   function confirmOverwrite() {
     if (!confirmState) return
-    doRestore(confirmState.file, true)
+    doRestore(confirmState.file, 'overwrite')
+  }
+
+  function confirmMerge() {
+    if (!confirmState) return
+    doRestore(confirmState.file, 'merge')
   }
 
   function cancelOverwrite() {
@@ -206,8 +220,10 @@ export default function BackupManager({ onClose }) {
           {confirmState ? (
             <div>
               <div style={{ marginBottom: 12 }}>
-                データベースに既存データがあります。「{confirmState.file.name}」の内容と比較してください。
-                上書きすると<strong style={{ color: '#f87171' }}>現在のデータは失われ</strong>、バックアップの内容に置き換わります。
+                データベースに既存データがあります。「{confirmState.file.name}」の内容と比較してください。<br />
+                <strong style={{ color: '#f87171' }}>上書き</strong>すると現在のデータは失われ、バックアップの内容に置き換わります。<br />
+                <strong style={{ color: '#4ade80' }}>追記</strong>すると現在のデータは残したまま、バックアップ側の新しいアイテムだけを追加します
+                (同じ投稿(external_id+source一致)はスキップされ、重複しては追加されません — 別デバイスで育てたアーカイブを合体させたい場合に使います)。
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16, fontSize: 13 }}>
                 <thead>
@@ -230,6 +246,14 @@ export default function BackupManager({ onClose }) {
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button className="btn" onClick={cancelOverwrite} disabled={restoringId === confirmState.file.id}>
                   キャンセル
+                </button>
+                <button
+                  className="btn"
+                  style={{ background: '#16a34a', borderColor: '#16a34a' }}
+                  onClick={confirmMerge}
+                  disabled={restoringId === confirmState.file.id}
+                >
+                  {restoringId === confirmState.file.id ? '処理中…' : '追記して復元'}
                 </button>
                 <button
                   className="btn"

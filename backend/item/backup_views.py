@@ -46,12 +46,14 @@ def backup_restore_view(request):
     except Exception:
         data = {}
     file_id = data.get('file_id', '')
-    overwrite = bool(data.get('overwrite', False))
+    mode = data.get('mode') or ('overwrite' if bool(data.get('overwrite', False)) else 'strict')
+    if mode not in ('strict', 'overwrite', 'merge'):
+        return JsonResponse({'detail': f"mode must be one of 'strict', 'overwrite', 'merge' (got {mode!r})"}, status=400)
     if not file_id:
         return JsonResponse({'detail': 'file_idが必要です'}, status=400)
 
     try:
-        restore_backup(file_id, overwrite=overwrite)
+        result = restore_backup(file_id, mode=mode)
     except ExistingDataError as e:
         return JsonResponse({
             'needs_confirmation': True,
@@ -60,4 +62,4 @@ def backup_restore_view(request):
         }, status=409)
     except DriveBackupError as e:
         return JsonResponse({'detail': str(e)}, status=409)
-    return JsonResponse({'ok': True})
+    return JsonResponse({'ok': True, 'merge_result': result})
