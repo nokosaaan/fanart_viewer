@@ -1,6 +1,6 @@
 import React, {useState} from 'react'
 
-export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, readOnly}){
+export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, readOnly}){
   const [open, setOpen] = useState(false)
 
   function onToggleCP(e){
@@ -75,6 +75,13 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
                 onClick={() => setTitleMissingOnly(v => !v)}
               >
                 {titleMissingOnly ? 'Title: MISSING' : 'Title: ANY'}
+              </button>
+              <button
+                className={`cp-chip ${previewMissingOnly ? 'enabled' : ''}`}
+                onClick={() => setPreviewMissingOnly(v => !v)}
+                title="プレビュー画像が無いアイテムだけ表示 — 未取得のアイテムをまとめて見つけたいときに"
+              >
+                {previewMissingOnly ? 'Preview: MISSING' : 'Preview: ANY'}
               </button>
               <button
                 className={`cp-chip ${includeCP ? 'enabled' : ''}`}

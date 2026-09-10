@@ -228,6 +228,7 @@ function AppMain({ role, onLogout }){
   }
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
+  const [previewMissingOnly, setPreviewMissingOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
   const PAGE_SIZE = 50
   const [nextPageUrl, setNextPageUrl] = useState(null)
@@ -447,21 +448,25 @@ function AppMain({ role, onLogout }){
         if(((it.situation||'').toUpperCase()) !== situationFilter) return false
       }
       if(titleMissingOnly && hasAnyTitle(it)) return false
+      // has_preview comes straight off ItemSerializer (see backend/item/
+      // serializers.py) -- no extra request needed, this is just a filter
+      // over data already loaded with the item.
+      if(previewMissingOnly && (it.has_preview === true || it.has_preview === 'true')) return false
       if(filters.length===0 && q==='') return true
       const hay = [ ...(it.titles||[]), ...(it.characters||[]), ...(it.tags||[]), it.artist, it.link ].join(' ').toLowerCase()
       const matchesQuery = q==='' || hay.includes(q)
       const matchesFilters = filters.every(f => hay.includes(f.toLowerCase()))
       return matchesQuery && matchesFilters
     })
-  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, readOnly])
-  
+  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, previewMissingOnly, readOnly])
+
 
   // pagination over filtered results
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   useEffect(()=>{
     // reset to first page if filters change
     setPageIndex(0)
-  }, [query, filters, includeCP, includeR18, situationFilter, titleMissingOnly])
+  }, [query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, previewMissingOnly])
 
   const paginatedItems = useMemo(()=>{
     const start = pageIndex * PAGE_SIZE
@@ -665,6 +670,8 @@ function AppMain({ role, onLogout }){
         setSituationFilter={setSituationFilter}
         titleMissingOnly={titleMissingOnly}
         setTitleMissingOnly={setTitleMissingOnly}
+        previewMissingOnly={previewMissingOnly}
+        setPreviewMissingOnly={setPreviewMissingOnly}
         readOnly={readOnly}
       />
       <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} />
