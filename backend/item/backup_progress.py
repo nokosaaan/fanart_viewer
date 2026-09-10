@@ -65,7 +65,18 @@ def _run():
 def start():
     """Raises RuntimeError if a backup is already running — never runs two
     concurrently (they'd both be reading a live-changing DB independently
-    and racing to create separate Drive files for no reason)."""
+    and racing to create separate Drive files for no reason).
+
+    Also refuses to start while a restore is running (see restore_progress.py)
+    -- restore can delete/overwrite the very tables a backup would be
+    reading mid-dump, and a backup started right as a restore finishes
+    would capture a half-imported DB. This is the only cross-check between
+    the two modules; restore_progress.start() has the mirror-image check.
+    """
+    from . import restore_progress
+
+    if restore_progress.get_status()['running']:
+        raise RuntimeError('復元処理が進行中のため、完了するまでバックアップを開始できません')
     with _lock:
         if _state['running']:
             raise RuntimeError('既にバックアップが実行中です')

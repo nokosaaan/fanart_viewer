@@ -88,6 +88,14 @@ export default function BackupManager({ onClose }) {
   // holds the file plus both sides' row counts so the user can compare
   // before choosing to overwrite.
   const [confirmState, setConfirmState] = useState(null)
+  // Which confirm-dialog button the user actually clicked ('merge' |
+  // 'overwrite' | null) -- separate from restoringId, which is also true
+  // throughout the initial strict-mode CHECK that produced this dialog in
+  // the first place. Using restoringId alone for the buttons' busy label
+  // made both the 追記 and 上書き buttons render as already "処理中…"/
+  // "復元中…" the instant the dialog appeared, before the user had clicked
+  // either one.
+  const [confirmAction, setConfirmAction] = useState(null)
   // Backup used to be a single blocking POST with no progress at all —
   // now the server runs it on a background thread (see backup_progress.py)
   // and this polls its status instead, so a long backup (a big DB, a slow
@@ -281,14 +289,17 @@ export default function BackupManager({ onClose }) {
           const file = readPendingFile()
           if (file && j.needs_confirmation) {
             setConfirmState({ file, current: j.needs_confirmation.current, backup: j.needs_confirmation.backup })
+            setConfirmAction(null)
           } else if (file && j.error) {
             setError(j.error)
             setRestoringId(null)
+            setConfirmAction(null)
             writePendingFile(null)
           } else if (file && j.result !== null) {
             // result is {} for strict/overwrite, or the merge summary dict
             setConfirmState(null)
             setRestoringId(null)
+            setConfirmAction(null)
             writePendingFile(null)
             if (j.result && Object.keys(j.result).length > 0) {
               const mr = j.result
@@ -347,6 +358,7 @@ export default function BackupManager({ onClose }) {
     } catch (e) {
       setError(e.message)
       setRestoringId(null)
+      setConfirmAction(null)
       writePendingFile(null)
     }
   }
@@ -357,17 +369,20 @@ export default function BackupManager({ onClose }) {
 
   function confirmOverwrite() {
     if (!confirmState) return
+    setConfirmAction('overwrite')
     doRestore(confirmState.file, 'overwrite')
   }
 
   function confirmMerge() {
     if (!confirmState) return
+    setConfirmAction('merge')
     doRestore(confirmState.file, 'merge')
   }
 
   function cancelOverwrite() {
     setConfirmState(null)
     setRestoringId(null)
+    setConfirmAction(null)
     writePendingFile(null)
   }
 
@@ -455,33 +470,46 @@ export default function BackupManager({ onClose }) {
                 </tbody>
               </table>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                <button className="btn" onClick={cancelOverwrite} disabled={restoringId === confirmState.file.id}>
+                <button className="btn" onClick={cancelOverwrite} disabled={!!confirmAction}>
                   キャンセル
                 </button>
                 <button
                   className="btn"
                   style={{ background: '#16a34a', borderColor: '#16a34a' }}
                   onClick={confirmMerge}
-                  disabled={restoringId === confirmState.file.id}
+                  disabled={!!confirmAction}
                 >
-                  {restoringId === confirmState.file.id ? '処理中…' : '追記して復元'}
+                  {confirmAction === 'merge' ? '処理中…' : '追記して復元'}
                 </button>
                 <button
                   className="btn"
                   style={{ background: '#ef4444', borderColor: '#ef4444' }}
                   onClick={confirmOverwrite}
-                  disabled={restoringId === confirmState.file.id}
+                  disabled={!!confirmAction}
                 >
-                  {restoringId === confirmState.file.id ? '復元中…' : '上書きして復元'}
+                  {confirmAction === 'overwrite' ? '復元中…' : '上書きして復元'}
                 </button>
               </div>
             </div>
           ) : (
           <>
           <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={createBackup} disabled={creating || backupStatus?.running}>
+            <button
+              className="btn"
+              onClick={createBackup}
+              disabled={creating || backupStatus?.running || restoreStatus?.running}
+            >
               {creating ? '開始しています…' : backupStatus?.running ? 'バックアップ中…' : '今すぐバックアップ'}
             </button>
+            {/* Restore mutates the same tables a backup dump reads — the
+                server refuses to run both at once (see backup_progress.py/
+                restore_progress.py's cross-check); surfacing why here
+                up-front, rather than only after a click produces a 409,
+                is what actually makes the conflict legible instead of the
+                button just silently doing nothing useful. */}
+            {!backupStatus?.running && restoreStatus?.running && (
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>(復元処理が完了するまでバックアップはできません)</span>
+            )}
             {backupStatus?.running && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ fontSize: 12, color: '#94a3b8' }}>{PHASE_LABELS[backupStatus.phase] || '処理中…'}</span>
@@ -512,6 +540,7 @@ export default function BackupManager({ onClose }) {
 
           <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 8 }}>
             バックアップ一覧（新しい順）
+            {backupStatus?.running && <> (バックアップ実行中は復元できません)</>}
           </div>
 
           {loading ? (
@@ -538,7 +567,7 @@ export default function BackupManager({ onClose }) {
                   <button
                     className="btn"
                     style={{ fontSize: 12 }}
-                    disabled={restoringId != null}
+                    disabled={restoringId != null || backupStatus?.running}
                     onClick={() => restoreBackup(f)}
                   >
                     {restoringId === f.id ? '復元中…' : '復元'}

@@ -73,7 +73,16 @@ def _run(file_id, mode):
 
 def start(file_id: str, mode: str = 'strict'):
     """Raises RuntimeError if a restore is already running — never two at
-    once (they'd both be writing to the same DB)."""
+    once (they'd both be writing to the same DB).
+
+    Also refuses to start while a backup is running (see backup_progress.py's
+    mirror-image check) -- a restore truncating/inserting into the exact
+    tables a backup is mid-dump reading would otherwise race it.
+    """
+    from . import backup_progress
+
+    if backup_progress.get_status()['running']:
+        raise RuntimeError('バックアップ処理が進行中のため、完了するまで復元を開始できません')
     with _lock:
         if _state['running']:
             raise RuntimeError('既に復元が実行中です')
