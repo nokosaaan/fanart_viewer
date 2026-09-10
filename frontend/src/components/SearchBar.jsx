@@ -44,6 +44,7 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
       </div>
       <div className="controls">
         <input
+          data-tour="search-input"
           value={query}
           onChange={e=>{ setQuery(e.target.value); setOpen(true)}}
           placeholder="Search titles, characters, tags..."
@@ -71,12 +72,14 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
             </div>
             <div>
               <button
+                data-tour="filter-title-missing"
                 className={`cp-chip ${titleMissingOnly ? 'enabled' : ''}`}
                 onClick={() => setTitleMissingOnly(v => !v)}
               >
                 {titleMissingOnly ? 'Title: MISSING' : 'Title: ANY'}
               </button>
               <button
+                data-tour="filter-preview-missing"
                 className={`cp-chip ${previewMissingOnly ? 'enabled' : ''}`}
                 onClick={() => setPreviewMissingOnly(v => !v)}
                 title="プレビュー画像が無いアイテムだけ表示 — 未取得のアイテムをまとめて見つけたいときに"

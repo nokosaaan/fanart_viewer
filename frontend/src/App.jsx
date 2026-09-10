@@ -19,10 +19,12 @@ import PixivCredsManager from './components/PixivCredsManager'
 import PoipikuCredsManager from './components/PoipikuCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import Pagination from './components/Pagination'
+import Tour from './components/Tour'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { notify } from './lib/crossWindowSync'
 import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
 import { ReloadIcon, FetchQueueIcon, EditQueueIcon, RegionQueueIcon, SwipeIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
+import { buildTourStepsA, buildTourStepsB } from './lib/tourSteps'
 
 // Platform badge/icon + text for a header-menu label — see HeaderMenu.jsx's
 // MenuEntry, which renders `label` as-is (plain string or JSX both work).
@@ -90,6 +92,53 @@ function AppMain({ role, onLogout }){
   const [charLinkOpen, setCharLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [trainClassifierOpen, setTrainClassifierOpen] = useState(false)
+  // Onboarding tour (see Tour.jsx / lib/tourSteps.js) — needs the header
+  // menu forced open across several steps (most tour targets are menu
+  // items), which plain internal HeaderMenu state can't support from out
+  // here, hence lifting this one piece of state up.
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const [tourActive, setTourActive] = useState(null) // null | 'A' | 'B'
+  // 'welcome' | 'part2' | null — a plain confirm-style gate shown BEFORE
+  // starting a tour automatically, so someone who wants none of this can
+  // say so once and never be asked again (re-triggering later is still
+  // always available via the header menu's own 💡 entry).
+  const [tourPrompt, setTourPrompt] = useState(null)
+
+  function startTour(group){
+    setHeaderMenuOpen(true)
+    setTourActive(group)
+  }
+  function closeTour(){
+    setTourActive(null)
+    setHeaderMenuOpen(false)
+  }
+
+  // First-run gate: ask once, remember the answer either way (declining
+  // is itself a real answer, not "ask me again next launch").
+  useEffect(() => {
+    if (readOnly) return
+    try {
+      if (!localStorage.getItem('fv_tour_intro_shown')) {
+        localStorage.setItem('fv_tour_intro_shown', '1')
+        setTourPrompt('welcome')
+      }
+    } catch (_) {}
+  }, [readOnly])
+
+  // Once the archive has grown past a handful of items, the Act4+ tour
+  // (search/AI/backup) becomes relevant in a way it just isn't for an
+  // empty or near-empty library on day one — offered once, same
+  // ask-once-remember-the-answer rule as the welcome gate above.
+  useEffect(() => {
+    if (readOnly || tourPrompt || tourActive) return
+    if (!Array.isArray(items) || items.length < 10) return
+    try {
+      if (!localStorage.getItem('fv_tour_part2_shown')) {
+        localStorage.setItem('fv_tour_part2_shown', '1')
+        setTourPrompt('part2')
+      }
+    } catch (_) {}
+  }, [items, readOnly, tourPrompt, tourActive])
   // Mailbox-style queue: fetching an item's image candidates (ScrollList)
   // appends here instead of popping an inline modal, so accidentally
   // clicking outside a modal backdrop can no longer discard results that
@@ -586,14 +635,25 @@ function AppMain({ role, onLogout }){
         <h1>Fanart Viewer</h1>
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
-          <HeaderMenu items={[
-            { label: <MenuIconLabel iconNode={<SwipeIcon />} text="Preview Timeline" />, onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen },
+          <HeaderMenu
+            open={headerMenuOpen}
+            onOpenChange={setHeaderMenuOpen}
+            items={[
+            { label: <MenuIconLabel iconNode={<SwipeIcon />} text="Preview Timeline" />, onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen, tourId: 'menu-preview-timeline' },
             // exe版はブラウザではなくpywebviewの専用ウィンドウなので、F5/Ctrl+Rの
             // ネイティブなショートカットに頼らず明示的な再読み込み手段を用意 —
             // サーバー側で状態が変わった(認証情報を保存した、他のウィンドウで
             // データを更新した等)後に最新の状態を確実に反映させるため。
             { label: <MenuIconLabel iconNode={<ReloadIcon />} text="再読み込み" />, onClick: () => window.location.reload() },
             ...(readOnly ? [] : [
+              { divider: true },
+              {
+                label: <MenuIconLabel iconNode="💡" text="使い方ガイド" />,
+                submenu: [
+                  { label: 'はじめの使い方を見る', onClick: () => startTour('A') },
+                  { label: '応用編を見る(検索・AI・バックアップ)', onClick: () => startTour('B') },
+                ],
+              },
               { divider: true },
               {
                 label: (
@@ -605,32 +665,37 @@ function AppMain({ role, onLogout }){
                 ),
                 onClick: () => setFetchQueueOpen(true),
                 badge: fetchQueue.length > 0 ? fetchQueue.length : null,
+                tourId: 'menu-fetch-queue',
               },
-              { label: <MenuIconLabel iconNode={<EditQueueIcon />} text="編集キュー" />, onClick: () => { setEditQueueMounted(true); setEditQueueOpen(true) } },
-              { label: <MenuIconLabel iconNode={<RegionQueueIcon />} text="領域ラベル付けキュー" />, onClick: () => { setRegionQueueMounted(true); setRegionQueueOpen(true) } },
-              { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true) },
+              { label: <MenuIconLabel iconNode={<EditQueueIcon />} text="編集キュー" />, onClick: () => { setEditQueueMounted(true); setEditQueueOpen(true) }, tourId: 'menu-edit-queue' },
+              { label: <MenuIconLabel iconNode={<RegionQueueIcon />} text="領域ラベル付けキュー" />, onClick: () => { setRegionQueueMounted(true); setRegionQueueOpen(true) }, tourId: 'menu-region-queue' },
+              { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true), tourId: 'menu-manual-add' },
               { divider: true },
               {
                 label: 'キャラクター',
+                tourId: 'menu-group-character',
                 submenu: [
-                  { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
-                  { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true) },
-                  { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
+                  { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true), tourId: 'menu-character-groups' },
+                  { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true), tourId: 'menu-character-alias-groups' },
+                  { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true), tourId: 'menu-character-danbooru-link' },
                 ],
               },
               {
                 label: <MenuIconLabel icon="/icons/twitter.svg" text="Twitter" />,
+                tourId: 'menu-group-twitter',
                 submenu: [
-                  { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true) },
-                  { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
+                  { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true), tourId: 'menu-twitter-fetch' },
+                  { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true), tourId: 'menu-twitter-creds' },
                 ],
               },
               {
                 label: <MenuIconLabel icon="/icons/pixiv.svg" text="Pixiv" />,
+                tourId: 'menu-group-pixiv',
                 submenu: [
-                  { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
+                  { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true), tourId: 'menu-pixiv-creds' },
                   {
                     label: '削除済み作品をpixiv-searchで検索',
+                    tourId: 'menu-pixiv-search',
                     onClick: () => {
                       const input = window.prompt('作品IDまたはpixiv.netのURLを入力してください')
                       if (!input || !input.trim()) return
@@ -642,9 +707,9 @@ function AppMain({ role, onLogout }){
                   },
                 ],
               },
-              { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true) },
-              { label: <MenuIconLabel iconNode={<BackupIcon />} text="バックアップ" />, onClick: () => setBackupOpen(true) },
-              { label: <MenuIconLabel iconNode={<BrainGearIcon />} text="分類器の学習" />, onClick: () => setTrainClassifierOpen(true) },
+              { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true), tourId: 'menu-poipiku-creds' },
+              { label: <MenuIconLabel iconNode={<BackupIcon />} text="バックアップ" />, onClick: () => setBackupOpen(true), tourId: 'menu-backup' },
+              { label: <MenuIconLabel iconNode={<BrainGearIcon />} text="分類器の学習" />, onClick: () => setTrainClassifierOpen(true), tourId: 'menu-train-classifier' },
             ]),
             ...(role !== 'none' ? [
               { divider: true },
@@ -737,6 +802,36 @@ function AppMain({ role, onLogout }){
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
+      {tourPrompt && (
+        <div className="cgm-panel-backdrop" onClick={() => setTourPrompt(null)}>
+          <div className="cgm-panel" style={{ width: 420 }} onClick={e => e.stopPropagation()}>
+            <div className="cgm-panel-body" style={{ padding: 20 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}>
+                {tourPrompt === 'welcome' ? 'ようこそ、Fanart Viewerへ' : 'アイテムが増えてきました'}
+              </div>
+              <div style={{ fontSize: 13, color: '#475569', marginBottom: 18, lineHeight: 1.6 }}>
+                {tourPrompt === 'welcome'
+                  ? '基本的な使い方(認証・取得・リンク切れ対策)を簡単に案内しましょうか？'
+                  : '検索・AI提案・バックアップなど、さらに便利な使い方を案内しましょうか？'}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className="btn" style={{ background: '#e5e7eb', color: '#111' }} onClick={() => setTourPrompt(null)}>
+                  スキップ
+                </button>
+                <button className="btn" onClick={() => { const g = tourPrompt === 'welcome' ? 'A' : 'B'; setTourPrompt(null); startTour(g) }}>
+                  見る
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {tourActive && (
+        <Tour
+          steps={tourActive === 'A' ? buildTourStepsA() : buildTourStepsB()}
+          onClose={closeTour}
+        />
+      )}
       {manualAddOpen && <ManualAddItem onClose={()=>setManualAddOpen(false)} onCreated={handleItemCreated} />}
       {pendingNewItem && (
         <EditFields

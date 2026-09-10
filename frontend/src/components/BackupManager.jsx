@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import ProgressBar from './ProgressBar'
+import GoogleCloudSetupHelp from './GoogleCloudSetupHelp'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -77,6 +78,7 @@ export default function BackupManager({ onClose }) {
   const [authenticating, setAuthenticating] = useState(false)
   const [authError, setAuthError] = useState('')
   const [authNotice, setAuthNotice] = useState('')
+  const [showGoogleCloudHelp, setShowGoogleCloudHelp] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -321,7 +323,16 @@ export default function BackupManager({ onClose }) {
               そのクライアントIDとシークレットを入力して認証してください。
               「認証する」を押すとブラウザが開き、Googleのログイン・許可画面が表示されます
               (すでに登録済みの場合は空欄のまま再認証できます)。
+              {' '}
+              <button
+                className="btn"
+                style={{ fontSize: 11, padding: '2px 8px', background: 'transparent', color: '#60a5fa' }}
+                onClick={() => setShowGoogleCloudHelp(true)}
+              >
+                作成手順を見る
+              </button>
             </div>
+            {showGoogleCloudHelp && <GoogleCloudSetupHelp onClose={() => setShowGoogleCloudHelp(false)} />}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
               <input
                 type="text" autoComplete="off" placeholder="Client ID"
