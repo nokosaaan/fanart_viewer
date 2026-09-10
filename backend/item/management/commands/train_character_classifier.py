@@ -622,7 +622,13 @@ class MetricLearningClassifier:
     """
 
     def __init__(self, embedding_dim=256, hidden_dim=512, margin=0.5, scale=30.0,
-                 epochs=60, batch_size=64, lr=1e-3, weight_decay=1e-4, random_state=42):
+                 epochs=60, batch_size=64, lr=1e-3, weight_decay=1e-4, random_state=42,
+                 progress_callback=None):
+        # progress_callback(str): called every few epochs during fit() —
+        # this is the only classifier choice with its own internal training
+        # loop (the others fit in one shot), so it's also the only one that
+        # can go silent for a real stretch of wall-clock time without this.
+        self.progress_callback = progress_callback
         self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         self.margin = margin
@@ -669,8 +675,11 @@ class MetricLearningClassifier:
 
         rng = np.random.RandomState(self.random_state)
         backbone.train()
-        for _epoch in range(self.epochs):
+        t0 = time.time()
+        for epoch in range(self.epochs):
             perm = rng.permutation(n)
+            epoch_loss_total = 0.0
+            epoch_batches = 0
             for start in range(0, n, self.batch_size):
                 idx = perm[start:start + self.batch_size]
                 if len(idx) < 2:
@@ -693,7 +702,18 @@ class MetricLearningClassifier:
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                epoch_loss_total += float(loss.detach())
+                epoch_batches += 1
             scheduler.step()
+            if self.progress_callback and (epoch % 5 == 0 or epoch == self.epochs - 1):
+                avg_loss = epoch_loss_total / epoch_batches if epoch_batches else float('nan')
+                elapsed = time.time() - t0
+                rate = (epoch + 1) / elapsed if elapsed > 0 else 0
+                remaining = (self.epochs - epoch - 1) / rate if rate > 0 else 0
+                self.progress_callback(
+                    f'epoch {epoch + 1}/{self.epochs}, loss={avg_loss:.3f} '
+                    f'({elapsed:.0f}s経過, 残り約{remaining:.0f}s)'
+                )
 
         backbone.eval()
         self._backbone = backbone
@@ -728,6 +748,15 @@ class Command(BaseCommand):
         'using the existing tagger as a frozen feature extractor. Training-only — does not '
         'wire the result into the suggestion pipeline.'
     )
+
+    def _banner(self, text):
+        """A visually distinct '=== ... ===' line marking a phase transition
+        — added because the CUI's per-item progress lines alone don't tell
+        you WHICH operation is currently running (tagger feature extraction
+        vs. person detection vs. classifier-based pseudo-labeling vs.
+        classifier fitting all used to look like the same silence followed
+        by numbers). Call this once at the start of every phase below."""
+        self.stdout.write(self.style.MIGRATE_HEADING(f'\n=== {text} ===\n'))
 
     def add_arguments(self, parser):
         parser.add_argument('--min-images', type=int, default=15,
@@ -823,7 +852,14 @@ class Command(BaseCommand):
             if classifier_choice == 'nearest_centroid':
                 return NearestCentroidClassifier()
             if classifier_choice == 'metric_learning':
-                return MetricLearningClassifier(random_state=options['random_state'])
+                # metric_learning trains its own 60-epoch loop internally
+                # (unlike the other classifiers, which fit near-instantly) —
+                # give it a way to report per-epoch progress instead of
+                # going silent for however long that takes.
+                return MetricLearningClassifier(
+                    random_state=options['random_state'],
+                    progress_callback=lambda msg: self.stdout.write(f'  [分類器を学習中] {msg}'),
+                )
             return LogisticRegression(max_iter=2000, class_weight='balanced')
 
         min_images = options['min_images']
@@ -917,6 +953,7 @@ class Command(BaseCommand):
         )
 
         def fit_and_report(X_fit, y_fit, label):
+            self._banner(f'分類器の学習({classifier_choice}) — {label}, {len(X_fit)}サンプル')
             clf = make_classifier()
             clf.fit(X_fit, y_fit)
             train_acc = clf.score(X_fit, y_fit)
@@ -1063,18 +1100,27 @@ class Command(BaseCommand):
             self.stdout.write(f'Resuming from {region_cache_path}: {already_cached} region(s) already '
                                'extracted in a previous run.')
 
+        self._banner('特徴抽出(tagger推論) — 手動ラベル領域')
+
         linked_groups = {
             tuple(sorted(set(g.characters))): sorted(set(g.characters))
             for g in CharacterAliasGroup.objects.filter(linked=True)
         }
 
         items = Item.objects.exclude(character_regions=[]).only('id', 'character_regions')
+        total_items = items.count()
         rows = []
         skipped_mismatch = 0
         skipped_multi_label = 0
         linked_alias_rows = 0
         newly_extracted = 0
-        for item in items.iterator():
+        t0 = time.time()
+        for checked, item in enumerate(items.iterator(), start=1):
+            if checked % 50 == 0 or checked == total_items:
+                self.stdout.write(
+                    f'  [tagger推論中] item {checked}/{total_items} '
+                    f'({newly_extracted}枚新規抽出, {time.time() - t0:.0f}s経過)'
+                )
             regions = item.character_regions or []
             if not regions:
                 continue
@@ -1212,18 +1258,21 @@ class Command(BaseCommand):
             self.stdout.write('\nNo new multi-character items to check (cache up to date).')
             return multi_cache.usable_rows()
 
-        self.stdout.write(f'\n{len(candidates)} new multi-character item(s) to check for a clean '
-                           'person-detection match...')
+        self._banner(f'人物検出(tagger) → 特徴抽出(tagger推論) — 複数キャラクター候補 {len(candidates)}件')
+        self.stdout.write('各アイテムごとに (1)人物検出で候補人数と一致するボックス数か確認 → '
+                           '(2)一致すれば各ボックスをtaggerに通して特徴抽出、の2段階\n')
         t0 = time.time()
         newly_usable = 0
+        newly_unusable_boxcount = 0
         for i, (item_id, chars, image_bytes) in enumerate(candidates):
             try:
                 boxes = tagger._detect_person_boxes(image_bytes)
             except Exception as e:
-                self.stderr.write(f'item {item_id}: person detection failed ({e}), skipping (will retry later)')
+                self.stderr.write(f'item {item_id}: [人物検出] failed ({e}), skipping (will retry later)')
                 continue
             if len(boxes) != len(chars):
                 multi_cache.add_unusable(item_id)  # a stable fact — never worth re-checking
+                newly_unusable_boxcount += 1
                 continue
 
             crop_features = []
@@ -1233,7 +1282,7 @@ class Command(BaseCommand):
                     crop_bytes = tagger._crop_with_padding(image_bytes, box)
                     feature, names = self._compute_feature(crop_bytes, tagger_backend, options['feature_source'])
                 except Exception as e:
-                    self.stderr.write(f'item {item_id}: crop feature extraction failed ({e}), '
+                    self.stderr.write(f'item {item_id}: [特徴抽出] crop feature extraction failed ({e}), '
                                        'skipping item (will retry later)')
                     ok = False
                     break
@@ -1246,8 +1295,11 @@ class Command(BaseCommand):
                 multi_cache.add(item_id, chars, crop_features)
                 newly_usable += 1
             if (i + 1) % 25 == 0 or i + 1 == len(candidates):
-                self.stdout.write(f'  checked {i + 1}/{len(candidates)} items, {newly_usable} newly usable '
-                                   f'({time.time() - t0:.0f}s elapsed)')
+                self.stdout.write(
+                    f'  [人物検出+tagger推論中] {i + 1}/{len(candidates)} items — '
+                    f'{newly_usable}件が抽出まで完了 / {newly_unusable_boxcount}件は人数不一致でスキップ '
+                    f'({time.time() - t0:.0f}s経過)'
+                )
 
         rows = multi_cache.usable_rows()
         self.stdout.write(self.style.SUCCESS(
@@ -1270,11 +1322,20 @@ class Command(BaseCommand):
         """
         from scipy.optimize import linear_sum_assignment
 
+        self._banner(f'疑似ラベル付け(学習済み分類器で認識) — 候補 {len(multi_rows)}件')
+        self.stdout.write('tagger推論はここでは行わず、上で既に抽出済みの特徴ベクトルを分類器(teacher)に通して '
+                           '各クロップがどのキャラらしいか予測するだけ — 通常は高速\n')
+        t0 = time.time()
         class_index = {c: i for i, c in enumerate(teacher.classes_)}
         accepted = []
         skipped_unknown_class = 0
 
-        for item_id, chars, crop_features in multi_rows:
+        for checked, (item_id, chars, crop_features) in enumerate(multi_rows, start=1):
+            if checked % 100 == 0 or checked == len(multi_rows):
+                self.stdout.write(
+                    f'  [分類器で認識中] {checked}/{len(multi_rows)} items — '
+                    f'{len(accepted)}件採用 ({time.time() - t0:.0f}s経過)'
+                )
             if not all(c in class_index for c in chars):
                 skipped_unknown_class += 1
                 continue
@@ -1384,9 +1445,9 @@ class Command(BaseCommand):
                                'skipping straight to fit.')
             return general_tag_names
 
-        self.stdout.write(f'\nExtracting features for {len(to_extract)} images '
-                           f'({already_done} already cached, {total} total; '
-                           f'backend={tagger_backend}, feature_source={feature_source})...')
+        self._banner(f'特徴抽出(tagger推論) — 単一キャラクター画像 {len(to_extract)}枚 '
+                      f'({already_done}枚キャッシュ済み / 全{total}枚, backend={tagger_backend}, '
+                      f'feature_source={feature_source})')
         t0 = time.time()
         done = 0
         for char, item_id, img_order, image_bytes in to_extract:
@@ -1408,7 +1469,13 @@ class Command(BaseCommand):
             feature_cache.add(item_id, img_order, char, feature)
             done += 1
             if done % 50 == 0 or done == len(to_extract):
-                self.stdout.write(f'  {done}/{len(to_extract)} ({time.time() - t0:.0f}s elapsed)')
+                elapsed = time.time() - t0
+                rate = done / elapsed if elapsed > 0 else 0
+                remaining = (len(to_extract) - done) / rate if rate > 0 else 0
+                self.stdout.write(
+                    f'  [tagger推論中] {done}/{len(to_extract)} '
+                    f'({elapsed:.0f}s経過, 残り約{remaining:.0f}s)'
+                )
 
         if feature_cache.count() < 2:
             self.stderr.write(self.style.ERROR('Not enough successfully-extracted features.'))

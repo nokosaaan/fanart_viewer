@@ -338,6 +338,15 @@ docker compose -f docker-compose.prod.yml exec web python manage.py train_charac
 - **領域ラベル付けキューの人手ラベル分（`--include-multi-character`使用時のmanual_rows）も同じ仕組みでキャッシュされる**（`character_features_region_<backend>.sqlite3`、`--region-feature-cache`で上書き可）。ラベル自体（キャラ名・CharacterAliasGroupのリンク状態）はキャッシュせず毎回DBから最新を読むので、後からエイリアスグループをリンク/解除しても、クロップの再抽出なしに反映される — キャッシュされるのはタガーへの forward pass の結果（クロップの特徴量）だけ
 - **本番のONNX分類器のように、SQLite化より前に`.joblib`形式のキャッシュを既に作っていた場合**でも、既定パス（`--feature-cache`/`--multi-feature-cache`を指定しない場合）にその`.joblib`ファイルが残っていれば、SQLiteキャッシュが空の初回だけ自動で中身を取り込む（`Imported N row(s) from the legacy cache ...`とログに出る）。取り込み後は再抽出不要で、未抽出分だけ普通に追加される。canaryのように新規にSQLiteで作る場合はこの取り込み自体が発生しないだけで、動作は同じ
 
+#### 進捗の見方
+
+CUIでの実行中、`=== ... ===`という見出し行が出るたびに、今どの段階を処理しているかが変わる。処理内容によって重さも意味も違うので区別できるようにしてある:
+
+- `特徴抽出(tagger推論) — 単一キャラクター画像` / `— 手動ラベル領域`: 画像をtaggerモデルに通して特徴ベクトルを取り出す処理（`--include-multi-character`未使用時は基本ここだけ）。件数が多いと最も時間がかかる。`[tagger推論中] N/M (…s経過, 残り約…s)`で進む
+- `人物検出(tagger) → 特徴抽出(tagger推論) — 複数キャラクター候補`（`--include-multi-character`使用時）: 1アイテムにつき「人数と検出ボックス数が一致するか」→「一致すれば各ボックスをtaggerに通す」の2段階。`[人物検出+tagger推論中]`で進む
+- `疑似ラベル付け(学習済み分類器で認識)`（同上）: taggerへの推論は行わず、直前の分類器（`fit_and_report`で学習済みのteacher）にどのキャラらしいか予測させるだけの段階。通常taggerの推論より高速。`[分類器で認識中]`で進む
+- `分類器の学習(<classifier名>) — <ラベル>`: 特徴抽出が終わったデータで実際に分類器を学習する段階。`--classifier metric_learning`のみ内部で複数エポック回すので`[分類器を学習中] epoch N/M, loss=...`が出る。それ以外（logistic_regression/mlp/nearest_centroid）は一瞬で終わるので個別の進捗行はなく、直後に精度が出る
+
 #### 3. 学習後は必ずwebコンテナを再起動する
 
 `train_character_classifier`は`docker compose ... exec web`で**既に動いているwebコンテナの中に別プロセスとして**入り込んで実行される。保存先(`/app/data/tagger/character_classifier_<backend>.joblib`)はbind mount（`./backend/data:/app/data`）なのでファイル自体はホスト側に永続化されるが、実際にリクエストを処理しているgunicornワーカー側は`tagger.py`の`_classifier_state`にモデルをプロセス起動後の初回利用時にメモリキャッシュしているため、学習をやり直してファイルを差し替えても**再起動しない限り古いモデル（または無し）のまま**になる。
