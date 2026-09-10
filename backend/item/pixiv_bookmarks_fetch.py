@@ -35,14 +35,20 @@ this, but its Pixiv support goes through the separate mobile-app OAuth
 API instead of PHPSESSID-based ajax calls, so it wasn't directly
 reusable here.
 
-Resolving "my own user id" specifically (resolve_own_user_id, below)
-uses a different, longer-established convention instead: pixiv.net embeds
-the logged-in user's info as JSON in a `<meta id="meta-global-data">` tag
-on every page -- this is not a dedicated API endpoint, just what's already
-present in the HTML of any page load.
+Resolving "my own user id" specifically (resolve_own_user_id, below) used
+to rely on a `<meta id="meta-global-data">` tag pixiv.net embedded on
+every page -- confirmed LIVE (2026-09-10, a real saved bookmarks page
+from an actual account) that this tag no longer exists anywhere in the
+page at all (pixiv's frontend moved to a server-rendered Next.js page).
+The replacement source is the page's own `<script id="__NEXT_DATA__">`
+tag: a JSON blob whose `props.pageProps.serverSerializedPreloadedState`
+field is itself a JSON-encoded STRING (double-encoded -- the whole
+Redux/preloaded-state tree serialized once, then embedded as a string
+value inside the outer JSON) containing `userData.self.id` -- verified
+against that same real saved page (self.id there matched the account's
+own numeric id from the page's URL).
 """
 import contextlib
-import html
 import json
 import logging
 import re
@@ -54,22 +60,14 @@ _UA = (
     '(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
 )
 _PAGE_SIZE = 48
-# Order-independent: don't assume name= comes before id= comes before
-# content= within the tag.
-_META_TAG_RE = re.compile(r'<meta\b[^>]*>')
-_META_ID_RE = re.compile(r'id=["\']meta-global-data["\']')
-_META_CONTENT_RE = re.compile(r'content=["\']((?:[^"\']|(?<=\\)["\'])*)["\']')
+_NEXT_DATA_RE = re.compile(
+    r'<script\s+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', re.DOTALL
+)
 
 
-def _find_global_data_json(html_text: str) -> str | None:
-    for tag_match in _META_TAG_RE.finditer(html_text):
-        tag = tag_match.group(0)
-        if not _META_ID_RE.search(tag):
-            continue
-        content_match = _META_CONTENT_RE.search(tag)
-        if content_match:
-            return content_match.group(1)
-    return None
+def _find_next_data_json(html_text: str) -> str | None:
+    match = _NEXT_DATA_RE.search(html_text)
+    return match.group(1) if match else None
 
 
 class PixivAuthError(RuntimeError):
@@ -121,8 +119,8 @@ def _pixiv_request_context():
 def resolve_own_user_id() -> str:
     """The logged-in account's numeric user id -- needed since the
     bookmarks endpoint is per-user, not "my own" implicitly. See this
-    module's docstring for where this comes from (a meta tag on any
-    pixiv.net page load, not a dedicated API call).
+    module's docstring for where this comes from (the page's own
+    __NEXT_DATA__ script tag, not a dedicated API call).
 
     Raises:
         PixivAuthError: not logged in / session invalid
@@ -139,32 +137,31 @@ def resolve_own_user_id() -> str:
             raise PixivAPIError(f'HTTP {resp.status}')
         body_text = resp.text()
 
-    raw_json = _find_global_data_json(body_text)
-    if raw_json is None:
-        # Diagnostic breadcrumb for next time, without logging the page
-        # body itself (could contain the session's own cookies/tokens
-        # reflected into the page): whether the id="meta-global-data"
-        # marker exists ANYWHERE in the response at all tells apart "the
-        # attribute order/quoting differs from what the regex expects"
-        # (marker present) from "pixiv.net dropped this mechanism
-        # entirely" (marker absent) -- see this module's docstring.
-        marker_present = 'meta-global-data' in body_text
-        logger.warning(
-            'pixiv_bookmarks_fetch: meta-global-data tag not found (marker text present in response: %s)',
-            marker_present,
-        )
+    raw_next_data = _find_next_data_json(body_text)
+    if raw_next_data is None:
+        logger.warning('pixiv_bookmarks_fetch: __NEXT_DATA__ script tag not found in response')
         raise PixivAPIError('ページ内にユーザー情報が見つかりませんでした(ページ構造が変わった可能性)')
 
     try:
-        data = json.loads(html.unescape(raw_json))
+        next_data = json.loads(raw_next_data)
+    except ValueError as e:
+        raise PixivAPIError(f'ページ情報の解析に失敗しました: {e}') from e
+
+    preloaded_raw = (next_data.get('props') or {}).get('pageProps', {}).get('serverSerializedPreloadedState')
+    if not preloaded_raw:
+        logger.warning('pixiv_bookmarks_fetch: serverSerializedPreloadedState not found in __NEXT_DATA__')
+        raise PixivAPIError('ページ内にユーザー情報が見つかりませんでした(ページ構造が変わった可能性)')
+
+    try:
+        preloaded = json.loads(preloaded_raw)
     except ValueError as e:
         raise PixivAPIError(f'ユーザー情報の解析に失敗しました: {e}') from e
 
-    user_data = data.get('userData')
-    if not user_data or not user_data.get('id'):
+    self_data = (preloaded.get('userData') or {}).get('self') or {}
+    if not self_data.get('id'):
         raise PixivAuthError('Pixivセッションが無効です(PHPSESSIDの期限切れの可能性)')
 
-    return str(user_data['id'])
+    return str(self_data['id'])
 
 
 def fetch_account_bookmarks(
