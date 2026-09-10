@@ -22,13 +22,22 @@ import Pagination from './components/Pagination'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { notify } from './lib/crossWindowSync'
 import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
+import { ReloadIcon, FetchQueueIcon, EditQueueIcon, RegionQueueIcon, SwipeIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
 
-// Platform badge + text for a header-menu label — see HeaderMenu.jsx's
+// Platform badge/icon + text for a header-menu label — see HeaderMenu.jsx's
 // MenuEntry, which renders `label` as-is (plain string or JSX both work).
-function MenuIconLabel({ icon, text }) {
+// `icon`: an image src (platform badges — twitter.svg etc). `iconNode`: an
+// arbitrary node instead (MenuIcons.jsx's inline SVGs, or a plain emoji
+// string) for entries with no dedicated image asset.
+function MenuIconLabel({ icon, iconNode, text }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-      <img src={icon} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />
+      {icon && <img src={icon} alt="" style={{ width: 16, height: 16, borderRadius: 3 }} />}
+      {iconNode && (
+        <span style={{ width: 18, height: 18, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 14, lineHeight: 1 }}>
+          {iconNode}
+        </span>
+      )}
       {text}
     </span>
   )
@@ -573,24 +582,28 @@ function AppMain({ role, onLogout }){
         <div style={{display:'flex', alignItems:'center', gap:8}}>
           {readOnly && <span style={{fontSize:12, color:'#94a3b8', border:'1px solid #334155', borderRadius:4, padding:'2px 8px'}}>view only</span>}
           <HeaderMenu items={[
-            { label: 'Preview Timeline', onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen },
+            { label: <MenuIconLabel iconNode={<SwipeIcon />} text="Preview Timeline" />, onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen },
             // exe版はブラウザではなくpywebviewの専用ウィンドウなので、F5/Ctrl+Rの
             // ネイティブなショートカットに頼らず明示的な再読み込み手段を用意 —
             // サーバー側で状態が変わった(認証情報を保存した、他のウィンドウで
             // データを更新した等)後に最新の状態を確実に反映させるため。
-            { label: '再読み込み', onClick: () => window.location.reload() },
+            { label: <MenuIconLabel iconNode={<ReloadIcon />} text="再読み込み" />, onClick: () => window.location.reload() },
             ...(readOnly ? [] : [
               { divider: true },
               {
-                label: bulkFetchRunning
-                  ? `取得キュー (取得中 ${bulkFetchProgress ? bulkFetchProgress.done : 0}/${bulkFetchProgress ? bulkFetchProgress.total : '?'})`
-                  : '取得キュー',
+                label: (
+                  <MenuIconLabel iconNode={<FetchQueueIcon />} text={
+                    bulkFetchRunning
+                      ? `取得キュー (取得中 ${bulkFetchProgress ? bulkFetchProgress.done : 0}/${bulkFetchProgress ? bulkFetchProgress.total : '?'})`
+                      : '取得キュー'
+                  } />
+                ),
                 onClick: () => setFetchQueueOpen(true),
                 badge: fetchQueue.length > 0 ? fetchQueue.length : null,
               },
-              { label: '編集キュー', onClick: () => { setEditQueueMounted(true); setEditQueueOpen(true) } },
-              { label: '領域ラベル付けキュー', onClick: () => { setRegionQueueMounted(true); setRegionQueueOpen(true) } },
-              { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
+              { label: <MenuIconLabel iconNode={<EditQueueIcon />} text="編集キュー" />, onClick: () => { setEditQueueMounted(true); setEditQueueOpen(true) } },
+              { label: <MenuIconLabel iconNode={<RegionQueueIcon />} text="領域ラベル付けキュー" />, onClick: () => { setRegionQueueMounted(true); setRegionQueueOpen(true) } },
+              { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true) },
               { divider: true },
               {
                 label: 'キャラクター',
@@ -625,8 +638,8 @@ function AppMain({ role, onLogout }){
                 ],
               },
               { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true) },
-              { label: 'バックアップ', onClick: () => setBackupOpen(true) },
-              { label: '分類器の学習', onClick: () => setTrainClassifierOpen(true) },
+              { label: <MenuIconLabel iconNode={<BackupIcon />} text="バックアップ" />, onClick: () => setBackupOpen(true) },
+              { label: <MenuIconLabel iconNode={<BrainGearIcon />} text="分類器の学習" />, onClick: () => setTrainClassifierOpen(true) },
             ]),
             ...(role !== 'none' ? [
               { divider: true },
