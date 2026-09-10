@@ -17,19 +17,26 @@ version: '3.8'
 # switch to a single SQLite file instead (backward-compatible with backups
 # from the standalone exe build, which uses SQLite exclusively — see
 # RELEASE_LOCAL.md's "SQLiteへの移行" section for the one-time migration
-# steps). SQLite mode does NOT start the `db` service at all; to go back to
-# Postgres, remove/unset DB_ENGINE and run with the `postgres` profile:
-#   docker compose -f docker-compose.prod.yml --profile postgres up -d
+# steps).
+#
+# IMPORTANT: `db` (below) only starts when the `postgres` Compose profile is
+# active, which is controlled by .env's COMPOSE_PROFILES — NOT by DB_ENGINE
+# (Compose profiles are a CLI/`.env`-level concept and can't read another
+# variable's value to decide themselves). .env.example ships
+# `COMPOSE_PROFILES=postgres` as the default specifically so a stock
+# Postgres setup keeps working with a plain `docker compose up -d` — DO NOT
+# remove that line unless DB_ENGINE=sqlite3 is also set (removing/emptying
+# COMPOSE_PROFILES without switching DB_ENGINE first stops `db` from
+# starting while `web`/`poller` still try to reach it, e.g.
+# "could not translate host name 'db'"). To force `db` on ad hoc regardless
+# of .env: docker compose -f docker-compose.prod.yml --profile postgres up -d
 
 services:
-  # Only started when DB_ENGINE isn't sqlite3 — see backend/backend/settings.py's
-  # DB_ENGINE toggle (default 'postgresql', matching the standalone exe build's
-  # own opt-in flag so a SQLite backup taken there is restorable here too).
-  # Behind the `postgres` profile so it doesn't start at all in SQLite mode:
-  #   docker compose -f docker-compose.prod.yml --profile postgres up -d
-  # `web`/`poller` deliberately do NOT `depends_on: db` (removed) so this
-  # profile gating actually takes effect instead of being force-started as
-  # a dependency regardless of profile.
+  # Only started when the `postgres` Compose profile is active — see the
+  # COMPOSE_PROFILES note above. `web`/`poller` deliberately do NOT
+  # `depends_on: db` (removed) so this profile gating actually takes effect
+  # instead of Compose force-starting `db` as a dependency regardless of
+  # profile.
   db:
     image: postgres:15
     restart: always

@@ -118,26 +118,41 @@ Django側の非互換はJSONFieldの`contains`ルックアップ2箇所だけで
 - `web`と`poller`の起動時`migrate`同士が同時に走ってDDLで衝突しないよう、`/app/data/.migrate.lock`で`flock`して直列化（`entrypoint.sh`/`poller_entrypoint.sh`）。
 - gunicornのワーカー数をデフォルト2→**1**に変更（個人利用なので実質的なデメリットはなく、SQLiteへの書き込み元プロセスを1つ減らせる）。Postgres運用のまま増やしたい場合は`.env`の`GUNICORN_WORKERS`で上書き可能。
 
+⚠️ **`db`サービスは`postgres` Composeプロファイル(`.env`の`COMPOSE_PROFILES`)が有効な時だけ起動する**（SQLiteモードで無駄なPostgresコンテナを常駐させないため）。これは`DB_ENGINE`とは別の変数で、Composeプロファイルは他の変数の値を見て自動判定してはくれない。**この節のガイド以前から運用しているPostgres環境は、`.env`にまだ`COMPOSE_PROFILES=postgres`が無い**ので、このセクション以降の手順を試す前に、まず以下を`.env`に追記してから通常通り起動し直すこと（追記しないと`db`が起動せず`web`/`poller`が`could not translate host name "db"`で落ちる）:
+
+```bash
+echo "COMPOSE_PROFILES=postgres" >> .env
+docker compose -f docker-compose.prod.yml up -d
+```
+
+（`.env.example`は最初からこの行を含んでいるので、新規セットアップでは意識不要。既存の`.env`をお使いの場合のみの対応。）
+
 **移行手順**（本番データが対象。事前にいつも通りのバックアップ・スナップショットを取ってから行うこと）:
 
 ```bash
+# 0. 前提: .env に COMPOSE_PROFILES=postgres がある状態(上記)で db が起動していること
+docker compose -f docker-compose.prod.yml ps db   # Up になっていることを確認
+
 # 1. 現在(Postgres)のデータをまるごとSQLiteファイルへコピー(バックグラウンドではなくフォアグラウンドで、完了を待つ)
 #    先頭の行数分だけ進捗が出る。件数が多い場合は --chunk-size を小さくするとメモリ使用量を抑えられる。
 docker compose -f docker-compose.prod.yml exec web python manage.py migrate_to_sqlite /app/data/db.sqlite3
 
-# 2. .env に追記
-#    DB_ENGINE=sqlite3
+# 2. .env を編集
+#    DB_ENGINE=sqlite3          ← 追記/変更
+#    COMPOSE_PROFILES=postgres  ← この行を削除、または空にする(COMPOSE_PROFILES=)
 
-# 3. 再起動（dbサービスはprofile化されているのでこの時点で自然に起動しなくなる）
+# 3. 再起動
 docker compose -f docker-compose.prod.yml down
 docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps   # db が(profileを外した分)出てこなければ正しく切り替わっている
 ```
 
-`migrate_to_sqlite`はコピー後に各モデルの件数をPostgres側と突き合わせて検証し、1件でも合わなければエラーで止まる（`db.sqlite3`はその場に残るので調査可能 — この場合`DB_ENGINE`は書き換えないこと）。
+`migrate_to_sqlite`はコピー後に各モデルの件数をPostgres側と突き合わせて検証し、1件でも合わなければエラーで止まる（`db.sqlite3`はその場に残るので調査可能 — この場合`DB_ENGINE`/`COMPOSE_PROFILES`は書き換えないこと）。
 
-Postgresに戻したい場合は`.env`の`DB_ENGINE`を外す(または`postgresql`にする)、`db`サービスをprofile付きで起動し直す:
+Postgresに戻したい場合は`.env`の`DB_ENGINE`を外す(または`postgresql`にする)、**`COMPOSE_PROFILES=postgres`も戻す**（この2つは常にセットで切り替える — 片方だけ変えると上記のような接続エラーになる）:
 ```bash
-docker compose -f docker-compose.prod.yml --profile postgres up -d
+# .env: DB_ENGINE=postgresql (または削除), COMPOSE_PROFILES=postgres
+docker compose -f docker-compose.prod.yml up -d
 ```
 （この場合、SQLite移行後にPostgres側へ加えた変更は反映されない — Postgres側のデータは移行した時点のスナップショットのまま。）
 
