@@ -61,6 +61,8 @@ function AppMain({ role, onLogout }){
     setPreviewOpen(false)
     setPreviewInitialItemId(null)
   }
+  const [editQueueOpen, setEditQueueOpen] = useState(false)
+  const [regionQueueOpen, setRegionQueueOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
@@ -94,6 +96,25 @@ function AppMain({ role, onLogout }){
   // other end of this.
   function openStandaloneWindow(panel){
     window.open(`?panel=${panel}`, `fv-${panel}`, 'width=1100,height=760')
+  }
+  // Popping a queue out into its own window loses this window's in-memory
+  // state (window.open with a `panel=...` query string is a fresh document
+  // load, not a shared JS realm) — the popped window used to have no idea
+  // which page you'd been reviewing and fell all the way back to scanning
+  // the entire DB. Handing off a snapshot of exactly what this window was
+  // showing (allItems/pageSize/initialPage) via localStorage — read back once
+  // by the `panel=...` branch below and immediately removed — keeps the new
+  // window scoped to the same page instead. localStorage can in principle
+  // throw (quota, private-browsing) for a very large library; if so, still
+  // open the window rather than blocking the pop-out — it just falls back to
+  // the server-wide queue on that end, same as if nothing had been handed off.
+  function popOutQueue(panel, allItems, pageSize, initialPage){
+    try{
+      localStorage.setItem(`fv-queue-handoff-${panel}`, JSON.stringify({ allItems, pageSize, initialPage }))
+    }catch(e){
+      console.error('Failed to hand off queue page to standalone window', e)
+    }
+    openStandaloneWindow(panel)
   }
   function enqueueFetchResult({ itemId, images }){
     setFetchQueue(prev => [...prev, { id: `${itemId}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, itemId, images, fetchedAt: Date.now() }])
@@ -553,8 +574,8 @@ function AppMain({ role, onLogout }){
                 onClick: () => setFetchQueueOpen(true),
                 badge: fetchQueue.length > 0 ? fetchQueue.length : null,
               },
-              { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
-              { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
+              { label: '編集キュー', onClick: () => setEditQueueOpen(true) },
+              { label: '領域ラベル付けキュー', onClick: () => setRegionQueueOpen(true) },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
               { divider: true },
               {
@@ -656,6 +677,24 @@ function AppMain({ role, onLogout }){
           onCancelBulkFetch={cancelBulkFetch}
         />
       )}
+      {editQueueOpen && (
+        <EditQueueManager
+          onClose={()=>setEditQueueOpen(false)}
+          allItems={filtered}
+          pageSize={PAGE_SIZE}
+          initialPage={pageIndex}
+          onPopOut={() => { popOutQueue('editQueue', filtered, PAGE_SIZE, pageIndex); setEditQueueOpen(false) }}
+        />
+      )}
+      {regionQueueOpen && (
+        <RegionLabelQueueManager
+          onClose={()=>setRegionQueueOpen(false)}
+          allItems={filtered}
+          pageSize={PAGE_SIZE}
+          initialPage={pageIndex}
+          onPopOut={() => { popOutQueue('regionQueue', filtered, PAGE_SIZE, pageIndex); setRegionQueueOpen(false) }}
+        />
+      )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
       {charAliasGroupOpen && <CharacterAliasGroupManager onClose={()=>setCharAliasGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
@@ -717,15 +756,35 @@ export default function App() {
     return <LoginScreen onLogin={handleLogin} isAdmin={isAdminLogin} />
   }
 
-  // Same-origin popped-out queue window (see openStandaloneWindow in
-  // AppMain) — cookies/localStorage are shared automatically, so auth above
-  // this point already applies unchanged; only the rendered content differs.
+  // Same-origin popped-out queue window (see openStandaloneWindow/popOutQueue
+  // in AppMain) — cookies/localStorage are shared automatically, so auth
+  // above this point already applies unchanged; only the rendered content
+  // differs. Reads back whatever page snapshot popOutQueue handed off right
+  // before opening this window (and removes it immediately — it's a one-shot
+  // handoff, not something later re-reads should see stale data from); if
+  // none is present (e.g. this URL was opened directly, with no opener), the
+  // queue managers themselves fall back to querying the server unscoped.
   const standalonePanel = new URLSearchParams(window.location.search).get('panel')
-  if (standalonePanel === 'editQueue') {
-    return <EditQueueManager standalone onClose={() => window.close()} />
-  }
-  if (standalonePanel === 'regionQueue') {
-    return <RegionLabelQueueManager standalone onClose={() => window.close()} />
+  if (standalonePanel === 'editQueue' || standalonePanel === 'regionQueue') {
+    let handoff = null
+    try {
+      const raw = localStorage.getItem(`fv-queue-handoff-${standalonePanel}`)
+      if (raw) {
+        handoff = JSON.parse(raw)
+        localStorage.removeItem(`fv-queue-handoff-${standalonePanel}`)
+      }
+    } catch (e) {
+      console.error('Failed to read queue page handoff', e)
+    }
+    const commonProps = {
+      standalone: true,
+      onClose: () => window.close(),
+      allItems: handoff ? handoff.allItems : null,
+      pageSize: (handoff && handoff.pageSize) || 50,
+      initialPage: (handoff && handoff.initialPage) || 0,
+    }
+    if (standalonePanel === 'editQueue') return <EditQueueManager {...commonProps} />
+    return <RegionLabelQueueManager {...commonProps} />
   }
 
   return <AppMain role={role} onLogout={handleLogout} />

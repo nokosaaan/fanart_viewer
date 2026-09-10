@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import RegionAnnotator from './RegionAnnotator'
 import CharacterPicker from './CharacterPicker'
 import { notify } from '../lib/crossWindowSync'
+import Pagination from './Pagination'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -53,12 +54,18 @@ function isMismatched(it) {
 // which character in a multi-character (CP/MULTIPLE/etc.) image — the
 // ground-truth counterpart to train_character_classifier.py's automatic
 // bootstrap pseudo-labeling (see RegionAnnotator.jsx). Same
-// overlay-vs-standalone-window / currentPageItems-vs-server-query split as
+// overlay-vs-standalone-window / allItems-vs-server-query split as
 // EditQueueManager.jsx — see that component's own comments for the full
 // reasoning (id-cursor pagination to avoid skipping items as the queue
-// shrinks, standalone falls back to querying the server since it has no
-// page to scope to).
-export default function RegionLabelQueueManager({ onClose, standalone = false, currentPageItems = null }) {
+// shrinks, standalone gets its own allItems snapshot via a localStorage
+// handoff and only falls back to querying the server if none was handed
+// off, the in-panel pager for moving between already-loaded pages, etc).
+export default function RegionLabelQueueManager({ onClose, standalone = false, allItems = null, pageSize = 50, initialPage = 0, onPopOut = null }) {
+  const [queuePageIndex, setQueuePageIndex] = useState(initialPage || 0)
+  const queuePageCount = Array.isArray(allItems) ? Math.max(1, Math.ceil(allItems.length / pageSize)) : 1
+  const scopedItems = useMemo(() => (
+    Array.isArray(allItems) ? allItems.slice(queuePageIndex * pageSize, (queuePageIndex + 1) * pageSize) : null
+  ), [allItems, queuePageIndex, pageSize])
   // 'unlabeled' = 一度も領域ラベルを保存していないアイテム, 'mismatch' =
   // 一度は保存したが、領域ラベルとitem.characters(編集キューでの結果)が
   // 完全一致していないアイテム — 一度保存した後は二度と「未ラベル」には
@@ -95,8 +102,8 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
   const load = useCallback(async () => {
     setSelectedId(null)
 
-    if (currentPageItems) {
-      const list = currentPageItems.filter(mode === 'mismatch' ? isMismatched : isEligible)
+    if (Array.isArray(scopedItems)) {
+      const list = scopedItems.filter(mode === 'mismatch' ? isMismatched : isEligible)
       setItems(list)
       setCount(list.length)
       setHasMore(false)
@@ -119,7 +126,7 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
     } finally {
       setLoading(false)
     }
-  }, [currentPageItems, mode, endpoint])
+  }, [scopedItems, mode, endpoint])
 
   useEffect(() => { load() }, [load])
 
@@ -253,8 +260,30 @@ export default function RegionLabelQueueManager({ onClose, standalone = false, c
     <>
       <div className="cgm-panel-header">
         <strong>領域ラベル付けキュー — 複数キャラ画像 ({count}件)</strong>
-        <button className="cgm-panel-close" onClick={handleClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          {onPopOut && (
+            <button className="btn" style={{fontSize:12}} onClick={() => { if (confirmDiscardIfDirty()) onPopOut() }} title="今表示中のページのキューを保ったまま、別ウィンドウで開きます">
+              別ウィンドウで開く
+            </button>
+          )}
+          <button className="cgm-panel-close" onClick={handleClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+        </div>
       </div>
+
+      {Array.isArray(allItems) && queuePageCount > 1 && (
+        <div className="cgm-panel-search">
+          <Pagination
+            page={queuePageIndex}
+            totalPages={queuePageCount}
+            onGoToPage={(p) => { if (confirmDiscardIfDirty()) setQueuePageIndex(p) }}
+            onPrev={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.max(0, p - 1)) }}
+            onNext={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.min(queuePageCount - 1, p + 1)) }}
+            prevDisabled={queuePageIndex === 0}
+            nextDisabled={queuePageIndex >= queuePageCount - 1}
+            resultsLabel={`対象ページ ${queuePageIndex + 1}/${queuePageCount}(一覧側の全${allItems.length}件のうち、このページの対象分のみ表示中)`}
+          />
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 6, padding: '8px 12px 0' }}>
         <button

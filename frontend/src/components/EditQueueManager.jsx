@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { ItemEditForm } from './EditFields'
 import { notify } from '../lib/crossWindowSync'
+import Pagination from './Pagination'
 
 function getCookie(name){
   const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -40,16 +41,30 @@ function summarizeMissing(it){
 // overlay in the main window. Fills the viewport instead of floating as a
 // centered panel; onSaved broadcasts via BroadcastChannel (crossWindowSync)
 // so the main window's item list stays live-synced either way.
-// `currentPageItems`: the main list's currently-displayed page (App.jsx's
-// paginatedItems). Whenever provided, the queue is filtered from it
-// client-side and strictly scoped to just that — mirroring
-// FetchQueueManager's page-scoped bulk-fetch button — instead of the
-// server's own independent `incomplete` pagination, which is what caused
-// items to get silently skipped (see `load` below). Only standalone mode (a
-// popped-out window with no access to the main window's pagination state)
-// falls back to querying the server directly, since it has no page to scope to.
-export default function EditQueueManager({ onClose, standalone = false, currentPageItems = null }){
+// `allItems`: the main list's full currently-loaded/filtered item array
+// (App.jsx's `filtered`), together with `pageSize`/`initialPage` describing
+// which of its client-side pages the main window was showing when this
+// queue was opened. Whenever provided, the queue is scoped to one page of
+// `allItems` at a time (see `queuePageIndex` below) instead of the server's
+// own independent `incomplete` pagination, which used to cause items to get
+// silently skipped (a page/offset cursor shrinking out from under itself as
+// items get edited and drop out of the filter — see `loadMore` below) and,
+// worse, defaulted to scanning every item in the whole DB regardless of
+// which page you'd actually been reviewing. A small pager (reusing
+// Pagination.jsx) lets you move to another already-loaded page's queue
+// without leaving this panel or losing your place. Standalone mode (a
+// popped-out window) receives its own `allItems` snapshot via a
+// localStorage handoff at open time (see App.jsx's popOutQueue/openStandaloneWindow) instead of
+// sharing memory with the main window; only when no snapshot was handed off
+// at all (e.g. `?panel=editQueue` opened directly, with no opener) does it
+// fall back to querying the server across the whole DB.
+export default function EditQueueManager({ onClose, standalone = false, allItems = null, pageSize = 50, initialPage = 0, onPopOut = null }){
   const [activeFields, setActiveFields] = useState(() => new Set(MISSING_FIELDS.map(f => f.key)))
+  const [queuePageIndex, setQueuePageIndex] = useState(initialPage || 0)
+  const queuePageCount = Array.isArray(allItems) ? Math.max(1, Math.ceil(allItems.length / pageSize)) : 1
+  const scopedItems = useMemo(() => (
+    Array.isArray(allItems) ? allItems.slice(queuePageIndex * pageSize, (queuePageIndex + 1) * pageSize) : null
+  ), [allItems, queuePageIndex, pageSize])
   const [items, setItems] = useState([])
   const [count, setCount] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -179,14 +194,15 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
   const load = useCallback(async () => {
     setSelectedId(null)
 
-    // Current-page mode: currentPageItems is already fully loaded data (no
-    // request needed), so just filter it client-side by the same
-    // missing-field criteria the server-side `incomplete` action uses. This
-    // is the ONLY mode when currentPageItems is available (i.e. always,
-    // except in standalone) — there is no "load more" here since the queue
-    // is exactly whatever's on the current page, nothing else.
-    if(currentPageItems){
-      const list = currentPageItems.filter(it => Array.from(activeFields).some(f => isFieldMissing(it, f)))
+    // Page-scoped mode: scopedItems is already fully loaded data (no request
+    // needed), so just filter it client-side by the same missing-field
+    // criteria the server-side `incomplete` action uses. This is the ONLY
+    // mode when allItems is available (i.e. whenever the caller handed one
+    // over) — there is no "load more" here since the queue is exactly
+    // whichever page of allItems is currently selected (see the pager in
+    // `content` below), nothing else.
+    if(Array.isArray(scopedItems)){
+      const list = scopedItems.filter(it => Array.from(activeFields).some(f => isFieldMissing(it, f)))
       setItems(list)
       setCount(list.length)
       setHasMore(false)
@@ -210,7 +226,7 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
     }finally{
       setLoading(false)
     }
-  }, [activeFields, runSuggestFor, currentPageItems])
+  }, [activeFields, runSuggestFor, scopedItems])
 
   useEffect(()=>{ load() }, [load])
 
@@ -337,8 +353,30 @@ export default function EditQueueManager({ onClose, standalone = false, currentP
     <>
       <div className="cgm-panel-header">
         <strong>編集キュー — 未設定アイテム ({count}件)</strong>
-        <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          {onPopOut && (
+            <button className="btn" style={{fontSize:12}} onClick={onPopOut} title="今表示中のページのキューを保ったまま、別ウィンドウで開きます">
+              別ウィンドウで開く
+            </button>
+          )}
+          <button className="cgm-panel-close" onClick={onClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
+        </div>
       </div>
+
+      {Array.isArray(allItems) && queuePageCount > 1 && (
+        <div className="cgm-panel-search">
+          <Pagination
+            page={queuePageIndex}
+            totalPages={queuePageCount}
+            onGoToPage={setQueuePageIndex}
+            onPrev={() => setQueuePageIndex(p => Math.max(0, p - 1))}
+            onNext={() => setQueuePageIndex(p => Math.min(queuePageCount - 1, p + 1))}
+            prevDisabled={queuePageIndex === 0}
+            nextDisabled={queuePageIndex >= queuePageCount - 1}
+            resultsLabel={`対象ページ ${queuePageIndex + 1}/${queuePageCount}(一覧側の全${allItems.length}件のうち、このページの未設定分のみ表示中)`}
+          />
+        </div>
+      )}
 
       <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:14}}>
           <span style={{fontSize:12, color:'#6b7280'}}>未設定とみなす項目:</span>

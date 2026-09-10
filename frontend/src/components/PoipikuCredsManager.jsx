@@ -103,7 +103,7 @@ export default function PoipikuCredsManager({ onClose }) {
             保存した値はサーバー側で暗号化して保存され、この画面を含めどこにも読み出し表示はされません(書き込み専用)。
           </div>
 
-          <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', borderRadius: 6 }}>
+          <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', color: '#e2e8f0', borderRadius: 6 }}>
             {loading ? '状態を確認中…' : status ? (
               <>現在の設定: <strong>{status.configured ? '設定済み' : '未設定'}</strong>
                 {status.configured && <> ({SOURCE_LABELS[status.source] || status.source})</>}
@@ -115,7 +115,7 @@ export default function PoipikuCredsManager({ onClose }) {
           </div>
 
           {pollStatus && (
-            <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', borderRadius: 6 }}>
+            <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', color: '#e2e8f0', borderRadius: 6 }}>
               <div style={{ marginBottom: 4 }}>
                 お気に入り自動取得: 最終成功 {formatDate(pollStatus.last_success_at)}
                 {' '}— 未処理キュー {pollStatus.pending_count}件
