@@ -4,6 +4,7 @@ from .views import items_from_db
 from .backup_views import backup_create_view, backup_list_view, backup_restore_view
 from .twitter_creds_views import twitter_creds_status_view, twitter_creds_set_view
 from .pixiv_creds_views import pixiv_creds_status_view, pixiv_creds_set_view
+from .poipiku_creds_views import poipiku_creds_status_view, poipiku_creds_set_view
 from .twitter_poll_views import twitter_poll_status_view
 from .pixiv_poll_views import pixiv_poll_status_view
 from .poller_settings_views import poller_settings_status_view, poller_settings_set_view
@@ -26,6 +27,8 @@ urlpatterns = [
     path('twitter_creds/set/', twitter_creds_set_view),
     path('pixiv_creds/status/', pixiv_creds_status_view),
     path('pixiv_creds/set/', pixiv_creds_set_view),
+    path('poipiku_creds/status/', poipiku_creds_status_view),
+    path('poipiku_creds/set/', poipiku_creds_set_view),
     path('twitter_poll/status/', twitter_poll_status_view),
     path('pixiv_poll/status/', pixiv_poll_status_view),
     path('poller_settings/status/', poller_settings_status_view),

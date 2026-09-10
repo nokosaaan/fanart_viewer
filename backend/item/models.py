@@ -160,6 +160,20 @@ class PixivCredential(models.Model):
         return f"PixivCredential(updated_at={self.updated_at})"
 
 
+class PoipikuCredential(models.Model):
+    """Single-row store for Poipiku login cookies (see item.poipiku_creds).
+    Mirrors TwitterCredential/PixivCredential: Fernet-encrypted, decryption
+    key lives only in POIPIKU_CREDS_ENC_KEY outside the DB. Never exposed
+    via any API response — see item.poipiku_creds_views (write-only).
+    """
+    encrypted_lk = models.BinaryField(null=True, blank=True)
+    encrypted_jsessionid = models.BinaryField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"PoipikuCredential(updated_at={self.updated_at})"
+
+
 class DriveCredential(models.Model):
     """Single-row store for the Google Drive OAuth client + refresh token
     (see item.drive_creds) used by item.drive_backup. Same encrypted

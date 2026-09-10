@@ -101,8 +101,10 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
     except ImportError as exc:
         raise RuntimeError(f'Missing dependency: {exc}')
 
-    poipiku_lk         = os.environ.get('POIPIKU_LK')
-    poipiku_jsessionid = os.environ.get('POIPIKU_JSESSIONID')
+    from .poipiku_creds import get_credentials as _get_poipiku_credentials
+    _creds = _get_poipiku_credentials()
+    poipiku_lk         = _creds['lk']
+    poipiku_jsessionid = _creds['jsessionid']
 
     session = _requests.Session()
     session.headers.update(_HEADERS)

@@ -15,6 +15,7 @@ import EditFields from './components/EditFields'
 import TwitterFetchManager from './components/TwitterFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import PixivCredsManager from './components/PixivCredsManager'
+import PoipikuCredsManager from './components/PoipikuCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { notify } from './lib/crossWindowSync'
@@ -73,6 +74,7 @@ function AppMain({ role, onLogout }){
   const [twitterFetchOpen, setTwitterFetchOpen] = useState(false)
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   const [pixivCredsOpen, setPixivCredsOpen] = useState(false)
+  const [poipikuCredsOpen, setPoipikuCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
   // cookies/localStorage — and thus auth — carry over automatically) instead
   // of an overlay in this one, so the two can sit side by side. See
@@ -544,6 +546,7 @@ function AppMain({ role, onLogout }){
               { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true) },
               { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
               { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
+              { label: 'Poipiku 認証情報', onClick: () => setPoipikuCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),
             ...(role !== 'none' ? [
@@ -644,6 +647,7 @@ function AppMain({ role, onLogout }){
       {twitterFetchOpen && <TwitterFetchManager onClose={()=>setTwitterFetchOpen(false)} onEnqueueFetch={enqueueFetchResult} />}
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
       {pixivCredsOpen && <PixivCredsManager onClose={()=>setPixivCredsOpen(false)} />}
+      {poipikuCredsOpen && <PoipikuCredsManager onClose={()=>setPoipikuCredsOpen(false)} />}
     </div>
   )
 }
