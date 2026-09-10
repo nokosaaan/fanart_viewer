@@ -249,6 +249,15 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .cgm-add-suggestion{ background:none; border:none; text-align:left; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:13px; width:100% }
 .cgm-add-suggestion:hover{ background:#eff6ff }
 .cgm-add-new{ color:#2563eb; font-weight:500 }
+
+/* Danbooru tag-search suggestion list (CharacterDanbooruLinkManager's
+   manual-entry box) — sits on a dark well (#0f172a) rather than the light
+   .cgm-panel background, so its hover uses the app's own "next surface
+   level" dark-theme pattern instead of .cgm-add-suggestion's light-theme
+   hover color. */
+.dblink-suggestion{ display:flex; align-items:center; gap:8px; width:100%; background:none; border:none; border-bottom:1px solid #1e293b; text-align:left; padding:6px 10px; font-size:13px; cursor:pointer }
+.dblink-suggestion:last-child{ border-bottom:none }
+.dblink-suggestion:hover{ background:#1e293b }
 .cgm-add-cancel{ background:none; border:none; color:#9ca3af; font-size:12px; cursor:pointer; text-align:left; padding:2px 8px }
 /* Move popup */
 .cgm-move-overlay{ position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.2) }

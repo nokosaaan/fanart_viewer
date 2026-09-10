@@ -34,6 +34,13 @@ const RESOLVED_VIA_LABELS = {
   '': '未解決',
 }
 
+// Danbooru's own tag-category color convention (general/artist/copyright/
+// character/meta) — approximated for this app's dark UI so a suggestion's
+// color carries the same at-a-glance meaning it does on danbooru.donmai.us
+// itself (e.g. green = character, the category this list cares about most).
+const CATEGORY_COLORS = { 0: '#60a5fa', 1: '#f87171', 3: '#c084fc', 4: '#4ade80', 5: '#facc15' }
+const DEBOUNCE_MS = 250
+
 // Frontend counterpart to item.management.commands.link_danbooru_characters
 // and the one-off interactive review artifact used to bulk-review its
 // first run (see item.views.CharacterDanbooruLinkViewSet) — makes the same
@@ -49,6 +56,35 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
   const [manualFor, setManualFor] = useState(null) // character_name showing the manual-tag input
   const [manualValue, setManualValue] = useState('')
   const [error, setError] = useState('')
+  // Live Danbooru tag-search suggestions for whichever row's manual-entry
+  // box is open (see danbooru_lookup.autocomplete_tags) — the same
+  // search-as-you-type experience Danbooru's own site search gives, so a
+  // tag gets picked from a real candidate list (with category/post_count as
+  // a plausibility signal) instead of typed from memory and only found out
+  // to be wrong (or the wrong variant, e.g. "iroha (blue archive)" vs
+  // "iroha (rune factory)") after clicking Save.
+  const [manualSuggestions, setManualSuggestions] = useState([])
+  const [manualSuggestLoading, setManualSuggestLoading] = useState(false)
+
+  useEffect(() => {
+    if (!manualFor) { setManualSuggestions([]); return }
+    const q = manualValue.trim()
+    if (!q) { setManualSuggestions([]); setManualSuggestLoading(false); return }
+    let cancelled = false
+    setManualSuggestLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/character-links/autocomplete/?q=${encodeURIComponent(q)}`)
+        const j = await r.json().catch(() => [])
+        if (!cancelled) setManualSuggestions(Array.isArray(j) ? j : [])
+      } catch (_) {
+        if (!cancelled) setManualSuggestions([])
+      } finally {
+        if (!cancelled) setManualSuggestLoading(false)
+      }
+    }, DEBOUNCE_MS)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [manualFor, manualValue])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -214,17 +250,37 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
                 </div>
 
                 {isManual && (
-                  <div style={{ padding: '0 10px 8px', display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input
-                      value={manualValue}
-                      onChange={e => setManualValue(e.target.value)}
-                      placeholder="Danbooruのタグ名 (例: hakurei_reimu)"
-                      style={{ fontSize: 12, padding: '4px 8px', flex: 1, background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4 }}
-                      onKeyDown={e => { if (e.key === 'Enter' && manualValue.trim()) submitManual(l.character_name, manualValue.trim()) }}
-                      autoFocus
-                    />
-                    <button className="btn" onClick={() => submitManual(l.character_name, manualValue.trim())} style={{ fontSize: 11 }}>保存</button>
-                    <button className="btn" onClick={() => { setManualFor(null); setManualValue('') }} style={{ fontSize: 11 }}>キャンセル</button>
+                  <div style={{ padding: '0 10px 8px' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input
+                        value={manualValue}
+                        onChange={e => setManualValue(e.target.value)}
+                        placeholder="キャラ名で検索(Danbooruの候補から選べます)"
+                        style={{ fontSize: 12, padding: '4px 8px', flex: 1, background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4 }}
+                        onKeyDown={e => { if (e.key === 'Enter' && manualValue.trim()) submitManual(l.character_name, manualValue.trim()) }}
+                        autoFocus
+                      />
+                      <button className="btn" onClick={() => submitManual(l.character_name, manualValue.trim())} style={{ fontSize: 11 }}>保存</button>
+                      <button className="btn" onClick={() => { setManualFor(null); setManualValue(''); setManualSuggestions([]) }} style={{ fontSize: 11 }}>キャンセル</button>
+                    </div>
+                    {manualSuggestLoading && (
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>候補を検索中…</div>
+                    )}
+                    {!manualSuggestLoading && manualSuggestions.length > 0 && (
+                      <div style={{ marginTop: 6, background: '#0f172a', border: '1px solid #334155', borderRadius: 6, maxHeight: 220, overflowY: 'auto' }}>
+                        {manualSuggestions.map(s => (
+                          <button
+                            key={s.value}
+                            className="dblink-suggestion"
+                            onClick={() => submitManual(l.character_name, s.value)}
+                            title={`このタグをリンクとして保存: ${s.value}`}
+                          >
+                            <span style={{ color: CATEGORY_COLORS[s.category] || '#e2e8f0', flex: 1 }}>{s.label}</span>
+                            {s.post_count != null && <span style={{ fontSize: 11, color: '#64748b' }}>{s.post_count}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

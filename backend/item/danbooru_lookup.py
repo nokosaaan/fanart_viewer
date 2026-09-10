@@ -447,6 +447,50 @@ def find_tag_via_other_names(japanese_name: str, expected_titles) -> str | None:
     return None  # zero or ambiguous (2+) — a human should decide, not this function
 
 
+_AUTOCOMPLETE_ENDPOINT = "https://danbooru.donmai.us/autocomplete.json"
+
+
+def autocomplete_tags(query: str, limit: int = 15) -> list[dict]:
+    """Danbooru's own tag-search-as-you-type suggestions (the exact same
+    search[type]=tag_query autocomplete endpoint backing the search box at
+    the top of danbooru.donmai.us) — used by the character-link manual-entry
+    UI so a human picks a real candidate tag from a live list (with its
+    category and post_count as a plausibility signal) instead of typing one
+    from memory and finding out it doesn't exist only after clicking Save.
+
+    Returns [{'value', 'label', 'category', 'post_count'}, ...] in whatever
+    order Danbooru itself ranks them (relevance/post_count) — [] for a blank
+    query or any request failure, never raises (this drives a live-typing
+    UI; a transient failure should just show no suggestions, not an error).
+    Deliberately uncached, unlike this module's other lookups — the whole
+    point is fresh, query-specific results as the user types, not a
+    per-character fact worth memoizing.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+    try:
+        resp = requests.get(
+            _AUTOCOMPLETE_ENDPOINT,
+            params={"search[query]": query, "search[type]": "tag_query", "limit": limit},
+            headers={"User-Agent": "fanart-viewer/1.0 (personal archival tool)"},
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.warning("danbooru_lookup.autocomplete_tags: HTTP %s for query=%s", resp.status_code, query)
+            return []
+        results = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("danbooru_lookup.autocomplete_tags: request failed for query=%s: %s", query, e)
+        return []
+    if not isinstance(results, list):
+        return []
+    return [
+        {"value": r.get("value"), "label": r.get("label"), "category": r.get("category"), "post_count": r.get("post_count")}
+        for r in results if isinstance(r, dict) and r.get("value")
+    ]
+
+
 def _normalize_for_alias_match(name: str) -> str:
     """Same normalization as views._normalize_char_name (whitespace
     collapse, lowercase, underscore->space) — duplicated here (rather than

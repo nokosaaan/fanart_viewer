@@ -3382,6 +3382,17 @@ class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
             'demotions': demotions,
         })
 
+    @action(detail=False, methods=['get'], url_path='autocomplete')
+    def autocomplete(self, request):
+        """?q=... — live Danbooru tag-search suggestions (see
+        danbooru_lookup.autocomplete_tags) for the manual-entry UI, so a
+        human picks a real candidate tag instead of typing one from memory.
+        """
+        q = (request.GET.get('q') or '').strip()
+        if not q:
+            return Response([])
+        return Response(danbooru_lookup.autocomplete_tags(q))
+
     @action(detail=False, methods=['post'], url_path='manual')
     def manual(self, request):
         """Body: {"character_name": "...", "danbooru_tag": "..."|null}.
