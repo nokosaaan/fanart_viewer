@@ -7,6 +7,7 @@ import CharacterGroupManager from './components/CharacterGroupManager'
 import CharacterAliasGroupManager from './components/CharacterAliasGroupManager'
 import CharacterDanbooruLinkManager from './components/CharacterDanbooruLinkManager'
 import BackupManager from './components/BackupManager'
+import TrainClassifierManager from './components/TrainClassifierManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import EditQueueManager from './components/EditQueueManager'
 import RegionLabelQueueManager from './components/RegionLabelQueueManager'
@@ -79,6 +80,7 @@ function AppMain({ role, onLogout }){
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
+  const [trainClassifierOpen, setTrainClassifierOpen] = useState(false)
   // Mailbox-style queue: fetching an item's image candidates (ScrollList)
   // appends here instead of popping an inline modal, so accidentally
   // clicking outside a modal backdrop can no longer discard results that
@@ -624,6 +626,7 @@ function AppMain({ role, onLogout }){
               },
               { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
+              { label: '分類器の学習', onClick: () => setTrainClassifierOpen(true) },
             ]),
             ...(role !== 'none' ? [
               { divider: true },
@@ -713,6 +716,7 @@ function AppMain({ role, onLogout }){
       {charAliasGroupOpen && <CharacterAliasGroupManager onClose={()=>setCharAliasGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
+      {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
       {manualAddOpen && <ManualAddItem onClose={()=>setManualAddOpen(false)} onCreated={handleItemCreated} />}
       {pendingNewItem && (
         <EditFields
