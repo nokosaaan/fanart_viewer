@@ -1,7 +1,7 @@
 from rest_framework.routers import DefaultRouter
 from .views import ItemViewSet, CharacterGroupViewSet, CharacterDanbooruLinkViewSet, CharacterAliasGroupViewSet
 from .views import items_from_db
-from .backup_views import backup_create_view, backup_list_view, backup_restore_view
+from .backup_views import backup_create_view, backup_list_view, backup_restore_view, backup_status_view
 from .twitter_creds_views import twitter_creds_status_view, twitter_creds_set_view
 from .pixiv_creds_views import pixiv_creds_status_view, pixiv_creds_set_view
 from .poipiku_creds_views import poipiku_creds_status_view, poipiku_creds_set_view
@@ -23,6 +23,7 @@ urlpatterns = [
     path('', include(router.urls)),
     path('items_from_db/', items_from_db),
     path('backup/create/', backup_create_view),
+    path('backup/status/', backup_status_view),
     path('backup/list/', backup_list_view),
     path('backup/restore/', backup_restore_view),
     path('twitter_creds/status/', twitter_creds_status_view),

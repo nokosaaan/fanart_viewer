@@ -132,7 +132,37 @@ def _is_sqlite() -> bool:
     return 'sqlite3' in dj_settings.DATABASES['default']['ENGINE']
 
 
-def create_backup() -> dict:
+def _noop_progress(phase, percent):
+    pass
+
+
+def _upload_with_progress(service, file_path, filename, folder_id, mimetype, progress_cb):
+    """MediaFileUpload's resumable protocol normally gets driven end-to-end
+    by a single .execute() call, which blocks with no visibility into how
+    much of the (often many-minutes) upload has actually happened. Driving
+    it one chunk at a time via next_chunk() instead exposes exactly that —
+    status.progress() is a 0.0-1.0 fraction of the file uploaded so far —
+    at the one point in either backup path (SQLite or Postgres) big enough
+    for percent-based progress to actually mean something (the DB dump
+    /snapshot step itself is comparatively fast; the upload is what a slow
+    home/Pi connection makes take a while).
+    """
+    media = MediaFileUpload(file_path, mimetype=mimetype, resumable=True, chunksize=_UPLOAD_CHUNK_SIZE)
+    request = service.files().create(
+        body={'name': filename, 'parents': [folder_id]},
+        media_body=media,
+        fields='id,name,createdTime,size',
+    )
+    response = None
+    while response is None:
+        status, response = request.next_chunk(num_retries=_NUM_RETRIES)
+        if status is not None:
+            progress_cb('uploading', status.progress() * 100)
+    progress_cb('uploading', 100)
+    return response
+
+
+def create_backup(progress_cb=None) -> dict:
     """Dispatches to the SQLite-native or Postgres (pg_dump) backup path
     based on which engine is actually configured (see backend.settings'
     DB_ENGINE toggle) -- these are deliberately NOT interchangeable (a
@@ -140,13 +170,22 @@ def create_backup() -> dict:
     versa); see _create_backup_sqlite/_restore_backup_sqlite's own
     docstrings for why unifying them isn't worth what it'd cost the
     already-live Postgres deployment's backup size/speed.
+
+    `progress_cb(phase: str, percent: float | None)` — called as the
+    backup moves through its phases ('sqlite_backup'/'dumping' ->
+    'compressing' -> 'uploading'); `percent` is 0-100 where the phase
+    supports it, None where it's genuinely indeterminate (e.g. pg_dump
+    itself has no machine-readable progress output). Defaults to a no-op
+    so the management-command caller (which has no status view to feed)
+    doesn't have to pass one.
     """
+    progress_cb = progress_cb or _noop_progress
     if _is_sqlite():
-        return _create_backup_sqlite()
-    return _create_backup_postgres()
+        return _create_backup_sqlite(progress_cb)
+    return _create_backup_postgres(progress_cb)
 
 
-def _create_backup_sqlite() -> dict:
+def _create_backup_sqlite(progress_cb) -> dict:
     """Snapshot the SQLite DB file via sqlite3's own online backup API
     (Connection.backup() -- safe to run while the app is live, unlike
     copying the file directly, since it produces a consistent snapshot
@@ -158,7 +197,6 @@ def _create_backup_sqlite() -> dict:
     own launcher.py sets DB_ENGINE=sqlite3); a SQLite backup can only be
     restored into another SQLite deployment (see restore_backup).
     """
-    import shutil
     import sqlite3
     from django.conf import settings as dj_settings
 
@@ -178,29 +216,43 @@ def _create_backup_sqlite() -> dict:
         src_conn = sqlite3.connect(src_path)
         dst_conn = sqlite3.connect(snapshot_path)
         try:
-            src_conn.backup(dst_conn)
+            # sqlite3.Connection.backup's own `progress(status, remaining,
+            # total)` callback, called after each batch of pages copied —
+            # `pages=100` (rather than the default -1 = "whole DB in one
+            # batch") is what makes it actually fire more than once for a
+            # backup fast enough to otherwise finish before it's ever
+            # called at all.
+            def on_pages_copied(status, remaining, total):
+                if total:
+                    progress_cb('sqlite_backup', (total - remaining) / total * 100)
+
+            src_conn.backup(dst_conn, pages=100, progress=on_pages_copied)
         finally:
             dst_conn.close()
             src_conn.close()
+        progress_cb('sqlite_backup', 100)
 
+        snapshot_size = os.path.getsize(snapshot_path)
+        copied = 0
         with open(snapshot_path, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
+            while True:
+                chunk = f_in.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                f_out.write(chunk)
+                copied += len(chunk)
+                if snapshot_size:
+                    progress_cb('compressing', copied / snapshot_size * 100)
+        progress_cb('compressing', 100)
 
-        media = MediaFileUpload(
-            gz_path, mimetype='application/gzip', resumable=True, chunksize=_UPLOAD_CHUNK_SIZE,
-        )
-        return service.files().create(
-            body={'name': filename, 'parents': [folder_id]},
-            media_body=media,
-            fields='id,name,createdTime,size',
-        ).execute(num_retries=_NUM_RETRIES)
+        return _upload_with_progress(service, gz_path, filename, folder_id, 'application/gzip', progress_cb)
     finally:
         for p in (snapshot_path, gz_path):
             if os.path.exists(p):
                 os.unlink(p)
 
 
-def _create_backup_postgres() -> dict:
+def _create_backup_postgres(progress_cb) -> dict:
     """Run `pg_dump --data-only`, gzip it, and upload the result to Google Drive.
 
     Piping pg_dump directly into gzip (rather than writing the plain dump to
@@ -220,6 +272,11 @@ def _create_backup_postgres() -> dict:
     fd, dump_path = tempfile.mkstemp(suffix='.sql.gz')
     os.close(fd)
     try:
+        # pg_dump has no machine-readable progress output of its own, so
+        # this phase's percent stays indeterminate (None) — only the
+        # (comparatively slow, on a Pi's home connection) upload below
+        # gets a real percentage.
+        progress_cb('dumping', None)
         env = {**os.environ, 'PGPASSWORD': params['password']}
         with open(dump_path, 'wb') as out_f:
             pg_proc = subprocess.Popen(
@@ -253,15 +310,7 @@ def _create_backup_postgres() -> dict:
         if gzip_proc.returncode != 0:
             raise DriveBackupError(f'gzip失敗: {gzip_err.decode(errors="replace").strip()[:500]}')
 
-        media = MediaFileUpload(
-            dump_path, mimetype='application/gzip', resumable=True, chunksize=_UPLOAD_CHUNK_SIZE,
-        )
-        uploaded = service.files().create(
-            body={'name': filename, 'parents': [folder_id]},
-            media_body=media,
-            fields='id,name,createdTime,size',
-        ).execute(num_retries=_NUM_RETRIES)
-        return uploaded
+        return _upload_with_progress(service, dump_path, filename, folder_id, 'application/gzip', progress_cb)
     finally:
         os.unlink(dump_path)
 

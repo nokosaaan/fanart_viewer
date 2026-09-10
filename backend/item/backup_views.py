@@ -3,20 +3,34 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from security.token_utils import require_admin as _admin_only
-from .drive_backup import create_backup, list_backups, restore_backup, get_backup_folder_url, DriveBackupError, ExistingDataError
+from . import backup_progress
+from .drive_backup import list_backups, restore_backup, get_backup_folder_url, DriveBackupError, ExistingDataError
 
 
 @csrf_exempt
 @require_http_methods(['POST'])
 def backup_create_view(request):
+    """Starts a backup on a background thread and returns immediately —
+    BackupManager.jsx polls backup_status_view for progress instead of
+    this request blocking until the whole thing finishes (see
+    backup_progress.py for why)."""
     denied = _admin_only(request)
     if denied:
         return denied
     try:
-        meta = create_backup()
-    except DriveBackupError as e:
-        return JsonResponse({'detail': str(e)}, status=500)
-    return JsonResponse(meta)
+        backup_progress.start()
+    except RuntimeError as e:
+        return JsonResponse({'detail': str(e)}, status=409)
+    return JsonResponse(backup_progress.get_status())
+
+
+@csrf_exempt
+@require_http_methods(['GET'])
+def backup_status_view(request):
+    denied = _admin_only(request)
+    if denied:
+        return denied
+    return JsonResponse(backup_progress.get_status())
 
 
 @csrf_exempt

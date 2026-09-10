@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import ProgressBar from './ProgressBar'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -26,6 +27,14 @@ const TABLE_LABELS = {
   item_previewimage: 'プレビュー画像',
 }
 
+const PHASE_LABELS = {
+  starting: '準備中…',
+  sqlite_backup: 'DBスナップショット中…',
+  dumping: 'ダンプ中…',
+  compressing: '圧縮中…',
+  uploading: 'Google Driveへアップロード中…',
+}
+
 // Google Drive backup/restore panel. Opened from the app header (admin only).
 export default function BackupManager({ onClose }) {
   const [files, setFiles] = useState([])
@@ -39,6 +48,13 @@ export default function BackupManager({ onClose }) {
   // holds the file plus both sides' row counts so the user can compare
   // before choosing to overwrite.
   const [confirmState, setConfirmState] = useState(null)
+  // Backup used to be a single blocking POST with no progress at all —
+  // now the server runs it on a background thread (see backup_progress.py)
+  // and this polls its status instead, so a long backup (a big DB, a slow
+  // home upload connection) shows real phase/percent instead of a static
+  // spinner for however long it takes.
+  const [backupStatus, setBackupStatus] = useState(null)
+  const pollRef = useRef(null)
 
   // Google Drive OAuth client — the exe build has no .env a user could
   // edit, so this replaces scripts/google_drive_auth.py's out-of-band
@@ -78,6 +94,40 @@ export default function BackupManager({ onClose }) {
 
   useEffect(() => { load() }, [load])
 
+  const pollBackupStatus = useCallback(async () => {
+    try {
+      const r = await fetch('/api/backup/status/', { credentials: 'same-origin' })
+      if (!r.ok) return null
+      const j = await r.json()
+      setBackupStatus(j)
+      if (!j.running && pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+        load()  // pick up the newly-created file in the list once it's done
+      }
+      return j
+    } catch (_) {
+      return null
+    }
+  }, [load])
+
+  function startPolling() {
+    if (pollRef.current) return
+    pollRef.current = setInterval(pollBackupStatus, 1000)
+  }
+
+  // Reopening the panel while a backup started earlier is still running
+  // (e.g. closed the panel, came back later) should resume showing its
+  // progress instead of looking like nothing is happening — the backup
+  // itself keeps running server-side regardless of whether this panel is
+  // open (see backup_progress.py), so this is purely about not losing
+  // track of it from here.
+  useEffect(() => {
+    pollBackupStatus().then(j => { if (j && j.running) startPolling() })
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function authenticateDrive() {
     setAuthenticating(true)
     setAuthError('')
@@ -109,14 +159,29 @@ export default function BackupManager({ onClose }) {
       const r = await fetch('/api/backup/create/', { method: 'POST', headers: HEADERS, credentials: 'same-origin' })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `バックアップ失敗 (${r.status})`)
-      setNotice(`バックアップ完了: ${j.name}`)
-      load()
+      setBackupStatus(j)
+      startPolling()
     } catch (e) {
       setError(e.message)
     } finally {
       setCreating(false)
     }
   }
+
+  // Watches backupStatus (kept live by the polling above) for the moment a
+  // run that WAS in progress finishes, so the success/failure notice shows
+  // up exactly once — not on every poll tick while it's still running, and
+  // not missed if this panel was reopened mid-run rather than having
+  // started it itself.
+  const prevRunningRef = useRef(false)
+  useEffect(() => {
+    const wasRunning = prevRunningRef.current
+    prevRunningRef.current = !!backupStatus?.running
+    if (wasRunning && backupStatus && !backupStatus.running) {
+      if (backupStatus.error) setError(backupStatus.error)
+      else if (backupStatus.result) setNotice(`バックアップ完了: ${backupStatus.result.name}`)
+    }
+  }, [backupStatus])
 
   async function doRestore(file, mode) {
     setRestoringId(file.id)
@@ -267,10 +332,20 @@ export default function BackupManager({ onClose }) {
             </div>
           ) : (
           <>
-          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16 }}>
-            <button className="btn" onClick={createBackup} disabled={creating}>
-              {creating ? 'バックアップ中…' : '今すぐバックアップ'}
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <button className="btn" onClick={createBackup} disabled={creating || backupStatus?.running}>
+              {creating ? '開始しています…' : backupStatus?.running ? 'バックアップ中…' : '今すぐバックアップ'}
             </button>
+            {backupStatus?.running && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>{PHASE_LABELS[backupStatus.phase] || '処理中…'}</span>
+                {backupStatus.percent != null ? (
+                  <ProgressBar done={backupStatus.percent} total={100} />
+                ) : (
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>(進捗率は不明 — 完了までお待ちください)</span>
+                )}
+              </div>
+            )}
             {folderUrl && (
               <a href={folderUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>
                 Google Driveフォルダを開く ↗
