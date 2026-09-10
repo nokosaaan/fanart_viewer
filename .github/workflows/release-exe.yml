@@ -1,0 +1,111 @@
+# Builds the Windows standalone exe (see README.md's "Windows スタンド
+# アロンビルド" section and exe/build.ps1) on an actual Windows runner --
+# PyInstaller can't cross-compile, so this can only ever produce a real,
+# distributable fanart_viewer.exe by running on windows-latest, not the
+# ubuntu-latest ci.yml already uses for its own (much lighter) checks.
+#
+# Two ways to run:
+#   - Push a tag matching v*.*.* (e.g. v1.0.0) -- builds, zips, and
+#     publishes it as a GitHub Release attached to that tag. This is the
+#     actual "cut a release" path.
+#   - Manually (Actions tab -> this workflow -> "Run workflow") -- builds
+#     and zips the exact same way, but uploads it as a plain workflow
+#     artifact instead of publishing a Release, so the pipeline itself can
+#     be tested without a real version tag and without cluttering the
+#     Releases list with test builds.
+name: Build & release Windows exe
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version_label:
+        description: 'Version label for this manual build (used in the artifact/zip name only -- no Release is published for a manual run)'
+        required: false
+        default: 'dev'
+
+permissions:
+  contents: write # only actually needed for the tag-triggered release step below
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version label
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "label=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "label=${{ inputs.version_label }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            exe/requirements.txt
+
+      - name: Install backend + packaging dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend\requirements.txt
+          pip install -r exe\requirements.txt
+          # See README.md's own setup steps for why --no-deps is required
+          # here (a couple of dghs-imgutils's OWN declared dependencies
+          # have no Windows wheel and aren't actually imported by
+          # item.tagger's use of it).
+          pip install --no-deps dghs-imgutils pyrfc6266
+
+      - name: Build with PyInstaller
+        working-directory: exe
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Zip the onedir build
+        id: zip
+        shell: pwsh
+        working-directory: exe/dist
+        run: |
+          $zipName = "fanart_viewer-$($env:VERSION_LABEL)-windows.zip"
+          Compress-Archive -Path fanart_viewer -DestinationPath $zipName
+          echo "path=exe/dist/$zipName" >> $env:GITHUB_OUTPUT
+          echo "name=$zipName" >> $env:GITHUB_OUTPUT
+        env:
+          VERSION_LABEL: ${{ steps.version.outputs.label }}
+
+      - name: Upload build artifact (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.name }}
+          path: ${{ steps.zip.outputs.path }}
+
+      - name: Publish GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.zip.outputs.path }}
+          generate_release_notes: true
