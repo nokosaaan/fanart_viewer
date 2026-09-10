@@ -5,25 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fanart Viewer — ダウンロード</title>
   <meta name="description" content="Fanart Viewer: 自分専用のイラスト保管庫。Windows向けスタンドアロン版のダウンロードページ。">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233b82f6'/%3E%3Ctext x='12' y='17' font-size='14' font-family='sans-serif' font-weight='700' fill='white' text-anchor='middle'%3EF%3C/text%3E%3C/svg%3E">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='%23000'/%3E%3Ctext x='12' y='17' font-size='14' font-family='sans-serif' font-weight='700' fill='%23c8ad86' text-anchor='middle'%3EF%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://api.fontshare.com">
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=switzer@400,500&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <div class="bg-glow" aria-hidden="true"></div>
-
-  <header class="site-header">
-    <div class="wrap site-header-inner">
-      <a class="brand" href="#top">
-        <span class="brand-mark">F</span>
-        <span class="brand-name">Fanart Viewer</span>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="wordmark" href="#top">
+        <span class="wordmark-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+          <span></span><span class="on"></span><span></span>
+          <span></span><span></span><span></span>
+        </span>
+        Fanart Viewer
       </a>
-      <nav class="site-nav">
+      <nav class="nav-links">
         <a href="#features">特徴</a>
-        <a href="#download">ダウンロード</a>
         <a href="#releases">バージョン履歴</a>
         <a href="https://github.com/nokosaaan/fanart_viewer" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
@@ -32,56 +32,51 @@
 
   <main>
     <section id="top" class="hero">
-      <div class="wrap hero-inner">
-        <div class="eyebrow reveal">Windows スタンドアロン版</div>
-        <h1 class="reveal reveal-delay-1">自分専用のイラスト保管庫を、<br>手元に。</h1>
-        <p class="hero-sub reveal reveal-delay-2">
-          Twitter/X・Pixivからの取得、AIによるキャラクター自動提案、Google Driveへのバックアップまで。
-          インストール不要、フォルダを展開するだけで動く1本のアプリです。
-        </p>
+      <div class="wrap">
+        <div class="hero-mark" aria-hidden="true">
+          <span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span>
+          <span class="on"></span><span></span><span></span><span></span><span></span>
+          <span class="on"></span><span></span><span></span><span></span><span></span>
+          <span class="on"></span><span class="on"></span><span class="on"></span><span></span><span></span>
+          <span class="on"></span><span></span><span></span><span></span><span></span>
+          <span class="on"></span><span></span><span></span><span></span><span></span>
+          <span class="on"></span><span></span><span></span><span></span><span></span>
+        </div>
 
-        <div class="hero-cta reveal reveal-delay-3" id="download">
-          <a id="primary-download" class="btn-primary" href="https://github.com/nokosaaan/fanart_viewer/releases/latest" target="_blank" rel="noopener noreferrer">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <h1>集めた作品を、<br>ひとつの場所へ、<br>静かに。</h1>
+
+        <div class="hero-cta" id="download">
+          <a id="primary-download" class="btn-outline" href="https://github.com/nokosaaan/fanart_viewer/releases/latest" target="_blank" rel="noopener noreferrer">
             <span id="primary-download-label">最新版をダウンロード</span>
           </a>
           <div class="hero-cta-meta" id="primary-download-meta">読み込み中…</div>
         </div>
 
-        <div class="hero-note reveal reveal-delay-3">
-          Windows 10 (2004以降) / 11 対応・WebView2が必要(多くのPCには既に入っています)
-        </div>
+        <a class="ghost-link" href="#releases">対応環境・バージョン履歴を見る →</a>
       </div>
     </section>
 
-    <section id="features" class="features">
+    <section id="features" class="section">
       <div class="wrap">
-        <div class="features-grid">
-          <div class="feature-card reveal">
-            <div class="feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.36L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.36L3 16"/><path d="M3 21v-5h5"/></svg>
-            </div>
+        <h2 class="section-header">できること</h2>
+        <div class="card-grid">
+          <div class="card">
+            <span class="card-tag">自動化</span>
             <h3>放っておいても集まる</h3>
             <p>Twitter/X・Pixivのブックマークやいいねを、設定した間隔で自動巡回。ブラウザでログインするだけで認証も完了します。</p>
           </div>
-          <div class="feature-card reveal reveal-delay-1">
-            <div class="feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3a3 3 0 00-3 3 3 3 0 00-1.86 5.36A3 3 0 006 17h1"/><path d="M15 3a3 3 0 013 3 3 3 0 011.86 5.36A3 3 0 0118 17h-1"/><path d="M9 3v14M15 3v14"/></svg>
-            </div>
-            <h3>使うほど賢くなるAI提案</h3>
+          <div class="card">
+            <span class="card-tag">AI提案</span>
+            <h3>使うほど賢くなる</h3>
             <p>登録したデータをもとに、自分専用の分類器を学習。タイトル・キャラクターをスコア付きで提案してくれるようになります。</p>
           </div>
-          <div class="feature-card reveal reveal-delay-2">
-            <div class="feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="7" ry="2.5"/><path d="M5 5v5c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V5"/><path d="M12 14v7"/><path d="M9 18l3 3 3-3"/></svg>
-            </div>
-            <h3>Google Driveへ安心バックアップ</h3>
+          <div class="card">
+            <span class="card-tag">バックアップ</span>
+            <h3>Google Driveへ安心保存</h3>
             <p>ワンクリックでバックアップ・復元。進捗もリアルタイムで確認できます。</p>
           </div>
-          <div class="feature-card reveal reveal-delay-3">
-            <div class="feature-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-            </div>
+          <div class="card">
+            <span class="card-tag">閲覧</span>
             <h3>ギャラリーで一望</h3>
             <p>Preview Timelineで、集めた作品をギャラリー感覚で閲覧。気になった1枚はそのまま画像だけを保存できます。</p>
           </div>
@@ -89,10 +84,10 @@
       </div>
     </section>
 
-    <section id="releases" class="releases">
+    <section id="releases" class="section">
       <div class="wrap">
-        <h2 class="section-title reveal">バージョン履歴</h2>
-        <p class="section-sub reveal">すべてのビルドはWindows実機上でGitHub Actionsによって自動生成されています。</p>
+        <h2 class="section-header">バージョン履歴</h2>
+        <p class="section-sub">すべてのビルドはWindows実機上でGitHub Actionsによって自動生成されています。動作にはWindows 10 (2004以降) / 11、およびWebView2が必要です(多くのPCには既に入っています)。</p>
         <div id="release-list" class="release-list">
           <div class="release-skeleton"></div>
           <div class="release-skeleton"></div>
@@ -100,16 +95,16 @@
         </div>
         <div id="release-error" class="release-error" hidden>
           バージョン一覧の取得に失敗しました。
-          <a href="https://github.com/nokosaaan/fanart_viewer/releases" target="_blank" rel="noopener noreferrer">GitHubのReleasesページ</a>から直接ご覧ください。
+          <a href="https://github.com/nokosaaan/fanart_viewer/releases" target="_blank" rel="noopener noreferrer">GitHubのReleasesページ →</a>
         </div>
       </div>
     </section>
   </main>
 
-  <footer class="site-footer">
-    <div class="wrap site-footer-inner">
+  <footer class="footer">
+    <div class="wrap footer-inner">
       <span>Fanart Viewer</span>
-      <a href="https://github.com/nokosaaan/fanart_viewer" target="_blank" rel="noopener noreferrer">github.com/nokosaaan/fanart_viewer</a>
+      <a href="https://github.com/nokosaaan/fanart_viewer" target="_blank" rel="noopener noreferrer">github.com/nokosaaan/fanart_viewer →</a>
     </div>
   </footer>
 

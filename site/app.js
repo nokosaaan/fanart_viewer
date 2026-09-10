@@ -18,9 +18,9 @@ function renderNotes(markdown) {
   const withBold = withLinks.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   const lines = withBold.split('\n').map(line => {
     const heading = line.match(/^#{1,3}\s+(.*)/)
-    if (heading) return `<div style="font-weight:600;margin-top:8px">${heading[1]}</div>`
+    if (heading) return `<div style="font-weight:500;margin-top:8px">${heading[1]}</div>`
     const bullet = line.match(/^\*\s+(.*)/)
-    if (bullet) return `• ${bullet[1]}`
+    if (bullet) return `– ${bullet[1]}`
     return line
   })
   return lines.join('\n')
@@ -42,21 +42,18 @@ function findZipAsset(release) {
 }
 
 function renderReleaseCard(release, isLatest) {
-  const zip = findZipAsset(release)
   const badge = isLatest ? '<span class="release-badge">最新</span>'
     : release.prerelease ? '<span class="release-badge">プレリリース</span>' : ''
 
-  const assetsHtml = (release.assets || []).length > 0
-    ? `<div class="release-assets">${release.assets.map(a => `
-        <a class="release-asset-btn" href="${a.browser_download_url}">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          ${escapeHtml(a.name)}
-          <span class="release-asset-size">${formatBytes(a.size)}</span>
+  const linksHtml = (release.assets || []).length > 0
+    ? `<div class="release-links">${release.assets.map(a => `
+        <a class="release-asset-link" href="${a.browser_download_url}">
+          ${escapeHtml(a.name)} <span class="release-asset-size">(${formatBytes(a.size)})</span> →
         </a>`).join('')}</div>`
     : `<div class="release-empty">このバージョンのビルドはまだアップロードされていません。</div>`
 
   const notesHtml = release.body && release.body.trim()
-    ? `<details class="release-notes"><summary>変更内容を見る</summary><div class="release-notes-body">${renderNotes(release.body)}</div></details>`
+    ? `<details class="release-notes"><summary>変更内容を見る →</summary><div class="release-notes-body">${renderNotes(release.body)}</div></details>`
     : ''
 
   return `
@@ -66,7 +63,7 @@ function renderReleaseCard(release, isLatest) {
         ${badge}
         <span class="release-date">${formatDate(release.published_at || release.created_at)}</span>
       </div>
-      ${assetsHtml}
+      ${linksHtml}
       ${notesHtml}
     </div>`
 }
@@ -103,8 +100,6 @@ async function loadReleases() {
       primaryLabel.textContent = `${latest.tag_name} のページを開く`
       primaryMeta.textContent = 'ビルドはまだアップロードされていません'
     }
-
-    setupReveal()
   } catch (e) {
     listEl.hidden = true
     errorEl.hidden = false
@@ -112,22 +107,4 @@ async function loadReleases() {
   }
 }
 
-function setupReveal() {
-  const targets = document.querySelectorAll('.reveal:not(.in-view)')
-  if (!('IntersectionObserver' in window)) {
-    targets.forEach(el => el.classList.add('in-view'))
-    return
-  }
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('in-view')
-        observer.unobserve(entry.target)
-      }
-    })
-  }, { threshold: 0.15 })
-  targets.forEach(el => observer.observe(el))
-}
-
-setupReveal()
 loadReleases()
