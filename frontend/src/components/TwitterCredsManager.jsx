@@ -34,6 +34,7 @@ export default function TwitterCredsManager({ onClose }) {
   const [pollerItemsPerTick, setPollerItemsPerTick] = useState(1)
   const [pollerIntervalValue, setPollerIntervalValue] = useState(6)
   const [pollerIntervalUnit, setPollerIntervalUnit] = useState('minutes')
+  const [pollerBackfillPages, setPollerBackfillPages] = useState(3)
   const [pollerSaving, setPollerSaving] = useState(false)
   const [pollerNotice, setPollerNotice] = useState('')
   const [pollerError, setPollerError] = useState('')
@@ -67,6 +68,7 @@ export default function TwitterCredsManager({ onClose }) {
         setPollerItemsPerTick(j3.items_per_tick)
         setPollerIntervalValue(j3.interval_value)
         setPollerIntervalUnit(j3.interval_unit)
+        setPollerBackfillPages(j3.backfill_pages_per_tick)
       }
     } catch (_) {}
   }, [])
@@ -83,6 +85,7 @@ export default function TwitterCredsManager({ onClose }) {
         body: JSON.stringify({
           enabled: next.enabled, items_per_tick: next.itemsPerTick,
           interval_value: next.intervalValue, interval_unit: next.intervalUnit,
+          backfill_pages_per_tick: next.backfillPages,
         }),
       })
       const j = await r.json().catch(() => ({}))
@@ -91,6 +94,7 @@ export default function TwitterCredsManager({ onClose }) {
       setPollerItemsPerTick(j.items_per_tick)
       setPollerIntervalValue(j.interval_value)
       setPollerIntervalUnit(j.interval_unit)
+      setPollerBackfillPages(j.backfill_pages_per_tick)
       setPollerNotice('保存しました。')
     } catch (e) {
       setPollerError(e.message)
@@ -185,6 +189,7 @@ export default function TwitterCredsManager({ onClose }) {
                     savePollerSettings({
                       enabled, itemsPerTick: pollerItemsPerTick,
                       intervalValue: pollerIntervalValue, intervalUnit: pollerIntervalUnit,
+                      backfillPages: pollerBackfillPages,
                     })
                   }}
                 />
@@ -226,12 +231,24 @@ export default function TwitterCredsManager({ onClose }) {
               <span style={{ fontSize: 13 }}>ごとに取得</span>
             </div>
 
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <span style={{ fontSize: 13 }}>初回の遡り取得(バックフィル)は1回あたり</span>
+              <input
+                type="number" min="1" value={pollerBackfillPages}
+                onChange={e => setPollerBackfillPages(parseInt(e.target.value, 10) || 1)}
+                style={{ width: 60, background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
+                  borderRadius: 6, padding: '6px 8px', fontSize: 13 }}
+              />
+              <span style={{ fontSize: 13 }}>ページずつ(未処理の古いブックマーク/RT/いいねに追いつくまでの速さ。値を上げるほど早く最古まで到達しますが、1回あたりのリクエスト数が増えます)</span>
+            </div>
+
             <button
               className="btn" style={{ fontSize: 13 }}
               disabled={pollerSaving}
               onClick={() => savePollerSettings({
                 enabled: pollerEnabled, itemsPerTick: pollerItemsPerTick,
                 intervalValue: pollerIntervalValue, intervalUnit: pollerIntervalUnit,
+                backfillPages: pollerBackfillPages,
               })}
             >
               {pollerSaving ? '保存中…' : '頻度・件数を保存'}

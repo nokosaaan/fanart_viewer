@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 TICK_SECONDS_DEFAULT = 360
 MAX_PAGES_STEADY = 1
-MAX_PAGES_BACKFILL = 3  # only used the very first time there's no history at all yet
 NOTIFY_REPEAT_AFTER_HOURS = 24
 
 
@@ -77,7 +76,7 @@ class Command(BaseCommand):
 
         state, _ = PixivPollState.objects.get_or_create(pk=1)
         try:
-            self._discover(state)
+            self._discover(state, poller_settings.backfill_pages_per_tick)
         except (PixivAuthError, PixivAPIError) as e:
             self._record_failure(state, str(e))
         except Exception as e:
@@ -88,7 +87,7 @@ class Command(BaseCommand):
 
         self._drain(poller_settings.items_per_tick)
 
-    def _discover(self, state: PixivPollState):
+    def _discover(self, state: PixivPollState, backfill_pages_per_tick: int):
         user_id = resolve_own_user_id()  # raises PixivAuthError/PixivAPIError -- let _tick's caller handle it
 
         # A bare Item with no saved preview yet, or a failed queue row, is
@@ -109,7 +108,7 @@ class Command(BaseCommand):
             .values_list('external_id', flat=True)
         )
 
-        max_pages = MAX_PAGES_BACKFILL if not known_ids else MAX_PAGES_STEADY
+        max_pages = backfill_pages_per_tick if not known_ids else MAX_PAGES_STEADY
 
         candidates, resume_offset = fetch_account_bookmarks(
             user_id, known_ids, max_pages=max_pages, start_offset=state.resume_offset,

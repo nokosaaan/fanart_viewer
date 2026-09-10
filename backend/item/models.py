@@ -134,6 +134,13 @@ class PollerSettings(models.Model):
     items_per_tick = models.IntegerField(default=1)
     interval_value = models.IntegerField(default=6)
     interval_unit = models.CharField(max_length=10, choices=UNIT_CHOICES, default='minutes')
+    # How many discovery pages poll_twitter_updates/poll_pixiv_bookmarks
+    # fetch per tick during the initial backfill (before any history is
+    # known yet) -- previously hardcoded to MAX_PAGES_BACKFILL=3 in both
+    # commands. Higher values reach the oldest bookmark/tweet sooner at
+    # the cost of more requests per tick; has no effect once backfill is
+    # done (steady-state discovery always uses just 1 page).
+    backfill_pages_per_tick = models.IntegerField(default=3)
     updated_at = models.DateTimeField(auto_now=True)
 
     @property

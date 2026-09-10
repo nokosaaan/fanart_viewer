@@ -20,6 +20,7 @@ def _serialize(row: PollerSettings) -> dict:
         'interval_value': row.interval_value,
         'interval_unit': row.interval_unit,
         'interval_seconds': row.interval_seconds,
+        'backfill_pages_per_tick': row.backfill_pages_per_tick,
         'updated_at': row.updated_at.isoformat(),
     }
 
@@ -63,11 +64,22 @@ def poller_settings_set_view(request):
     if interval_unit not in _UNITS:
         return JsonResponse({'detail': f'interval_unit must be one of {sorted(_UNITS)}'}, status=400)
 
+    try:
+        backfill_pages_per_tick = int(data.get('backfill_pages_per_tick', 3))
+    except (TypeError, ValueError):
+        return JsonResponse({'detail': 'backfill_pages_per_tick must be an integer'}, status=400)
+    if backfill_pages_per_tick < 1:
+        return JsonResponse({'detail': 'backfill_pages_per_tick must be at least 1'}, status=400)
+
     row, _ = PollerSettings.objects.get_or_create(pk=1)
     row.enabled = bool(data.get('enabled', False))
     row.items_per_tick = items_per_tick
     row.interval_value = interval_value
     row.interval_unit = interval_unit
-    row.save(update_fields=['enabled', 'items_per_tick', 'interval_value', 'interval_unit', 'updated_at'])
+    row.backfill_pages_per_tick = backfill_pages_per_tick
+    row.save(update_fields=[
+        'enabled', 'items_per_tick', 'interval_value', 'interval_unit',
+        'backfill_pages_per_tick', 'updated_at',
+    ])
 
     return JsonResponse(_serialize(row))

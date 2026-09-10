@@ -56,7 +56,6 @@ logger = logging.getLogger(__name__)
 
 TICK_SECONDS_DEFAULT = 360  # 6 min -> 10 ticks/hour -> 10 fetches/hour
 MAX_PAGES_STEADY = 1
-MAX_PAGES_BACKFILL = 3  # only used the very first time there's no history at all yet
 NOTIFY_REPEAT_AFTER = timedelta(hours=24)
 
 # source strings on Item.source for tweets archived via this poller (and,
@@ -107,7 +106,7 @@ class Command(BaseCommand):
 
         state, _ = TwitterPollState.objects.get_or_create(pk=1)
         try:
-            self._discover(state)
+            self._discover(state, poller_settings.backfill_pages_per_tick)
         except (TwitterAuthError, TwitterGQLError) as e:
             self._record_failure(state, str(e))
         except Exception as e:  # any other unexpected failure counts too
@@ -118,7 +117,7 @@ class Command(BaseCommand):
 
         self._drain(poller_settings.items_per_tick)
 
-    def _discover(self, state: TwitterPollState):
+    def _discover(self, state: TwitterPollState, backfill_pages_per_tick: int):
         # Resolving screen_name is ONLY needed for Likes discovery below —
         # Bookmarks needs nothing but auth_token/ct0 (session-based). So a
         # failure here (most commonly: twid not configured yet — see
@@ -165,7 +164,7 @@ class Command(BaseCommand):
         # compare against yet, so a page full of new items wouldn't
         # otherwise stop); afterwards known_ids already bounds each fetch
         # to just what's new since the last tick.
-        max_pages = MAX_PAGES_BACKFILL if not known_ids else MAX_PAGES_STEADY
+        max_pages = backfill_pages_per_tick if not known_ids else MAX_PAGES_STEADY
 
         # Resume from wherever the previous tick left off if it never
         # reached a known tweet (still catching up on a backlog bigger
