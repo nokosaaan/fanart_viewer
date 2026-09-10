@@ -739,8 +739,17 @@ class Command(BaseCommand):
         items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
             'id', 'characters', 'preview_data',
         )
+        # This scan alone used to print nothing at all until it finished —
+        # every multi-character-or-not Item gets touched (an N+1 query per
+        # 2-6-character item, to pull its preview_images), so on a large DB
+        # this silent phase alone can run long enough to look identical to
+        # "hung" from the outside. Report periodically instead.
+        self.stdout.write('\nScanning DB for multi-character candidate items...')
         candidates = []  # (item_id, chars, image_bytes)
+        scanned = 0
+        t_scan = time.time()
         for item in items.iterator():
+            scanned += 1
             chars = [c for c in (item.characters or []) if c]
             if not (2 <= len(chars) <= max_chars):
                 continue
@@ -752,8 +761,15 @@ class Command(BaseCommand):
             else:
                 continue
             candidates.append((item.id, chars, image_bytes))
+            if scanned % 500 == 0:
+                self.stdout.write(f'  scanned {scanned} items, {len(candidates)} candidates so far '
+                                   f'({time.time() - t_scan:.0f}s elapsed)')
 
-        self.stdout.write(f'\n{len(candidates)} multi-character items to check for a clean person-detection match...')
+        self.stdout.write(f'\n{len(candidates)} multi-character items to check for a clean person-detection match '
+                           f'(each needs a person-detection pass, PLUS one full tagger inference pass per detected '
+                           f'person if the box count matches — i.e. up to {max_chars}x the per-image cost of the '
+                           f'single-character extraction step above; this is the slow part with --include-multi-'
+                           f'character, not a hang)...')
         rows = []
         t0 = time.time()
         for i, (item_id, chars, image_bytes) in enumerate(candidates):
@@ -782,9 +798,18 @@ class Command(BaseCommand):
                 crop_features.append(feature)
             if ok and crop_features:
                 rows.append((item_id, chars, crop_features))
-            if (i + 1) % 25 == 0 or i + 1 == len(candidates):
+            # Every 5 items, not 25 — each one here can cost several full
+            # tagger inference passes (one per detected person), unlike one
+            # cheap image each in _extract_features' solo-image loop above,
+            # so the old 25-item interval could go quiet for far longer
+            # between updates despite steady progress. Includes a per-item
+            # rate + rough ETA so "is this stuck?" has a concrete answer.
+            if (i + 1) % 5 == 0 or i + 1 == len(candidates):
+                elapsed = time.time() - t0
+                rate = elapsed / (i + 1)
+                remaining = rate * (len(candidates) - i - 1)
                 self.stdout.write(f'  checked {i + 1}/{len(candidates)} items, {len(rows)} usable so far '
-                                   f'({time.time() - t0:.0f}s elapsed)')
+                                   f'({elapsed:.0f}s elapsed, {rate:.1f}s/item, ~{remaining:.0f}s remaining)')
 
         default_multi_name = (
             f'character_features_multi_{backend_choice}.joblib' if feature_source == 'tags'
