@@ -1,0 +1,45 @@
+# Deploys site/ (a plain static HTML/CSS/JS download page -- see that
+# folder, no build step needed) to GitHub Pages via the official Actions-
+# based deployment flow, so Pages doesn't need to be pointed at any
+# particular branch/folder in repo settings beyond choosing "GitHub
+# Actions" as its source (Settings -> Pages -> Source -- a one-time,
+# manual step this workflow can't do on its own).
+#
+# The page itself fetches release/asset info live from the GitHub REST
+# API client-side (see site/app.js) -- nothing here needs to inject
+# version data into the page at deploy time.
+name: Deploy download page
+
+on:
+  push:
+    branches: [main, exe-packaging]
+    paths:
+      - 'site/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
