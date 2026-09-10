@@ -112,34 +112,42 @@ class TwitterCredential(models.Model):
 
 
 class PollerSettings(models.Model):
-    """Single-row on/off switch + rate controls for poll_twitter_updates's
-    background polling — see item.management.commands.poll_twitter_updates
-    and exe/launcher.py's _poller_loop. Defaults to enabled=True at the
-    field level (preserves the existing docker `poller` service's always-
-    on behavior for anyone already relying on it — it only ever checked
-    has_credentials(), never asked permission); the exe-packaged build's
-    launcher.py explicitly creates this row with enabled=False on first
-    run instead, since unattended background fetching without the user
-    having opted in is exactly what a personal, per-user install shouldn't
-    do silently.
+    """Per-platform on/off switch + rate controls for the background
+    pollers (poll_twitter_updates / poll_pixiv_bookmarks) — see
+    exe/launcher.py's per-platform poller threads. One row per `platform`
+    ('twitter'/'pixiv'), not a single shared row — Twitter and Pixiv have
+    genuinely independent rate-limit concerns and history sizes, so
+    forcing them onto one shared enabled/interval made no sense once
+    there were two real pollers to configure (they used to share a single
+    row, back when this only had to cover Twitter).
+
+    Defaults to enabled=True at the field level (preserves the existing
+    docker `poller` service's always-on behavior for anyone already
+    relying on it — it only ever checked has_credentials(), never asked
+    permission); the exe-packaged build's launcher.py explicitly creates
+    both platforms' rows with enabled=False on first run instead, since
+    unattended background fetching without the user having opted in is
+    exactly what a personal, per-user install shouldn't do silently.
     """
+    PLATFORM_CHOICES = [('twitter', 'Twitter/X'), ('pixiv', 'Pixiv')]
     UNIT_CHOICES = [
         ('minutes', '分'), ('hours', '時間'), ('days', '日'), ('weeks', '週'),
     ]
     _UNIT_SECONDS = {'minutes': 60, 'hours': 3600, 'days': 86400, 'weeks': 604800}
 
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, unique=True)
     enabled = models.BooleanField(default=True)
-    # How many queued items poll_twitter_updates's _tick drains per tick
+    # How many queued items this platform's poller _tick drains per tick
     # (previously hardcoded to exactly 1).
     items_per_tick = models.IntegerField(default=1)
     interval_value = models.IntegerField(default=6)
     interval_unit = models.CharField(max_length=10, choices=UNIT_CHOICES, default='minutes')
-    # How many discovery pages poll_twitter_updates/poll_pixiv_bookmarks
-    # fetch per tick during the initial backfill (before any history is
-    # known yet) -- previously hardcoded to MAX_PAGES_BACKFILL=3 in both
-    # commands. Higher values reach the oldest bookmark/tweet sooner at
-    # the cost of more requests per tick; has no effect once backfill is
-    # done (steady-state discovery always uses just 1 page).
+    # How many discovery pages this platform's poller fetches per tick
+    # during the initial backfill (before any history is known yet) --
+    # previously hardcoded to MAX_PAGES_BACKFILL=3 in both commands.
+    # Higher values reach the oldest bookmark/tweet sooner at the cost of
+    # more requests per tick; has no effect once backfill is done
+    # (steady-state discovery always uses just 1 page).
     backfill_pages_per_tick = models.IntegerField(default=3)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -149,7 +157,7 @@ class PollerSettings(models.Model):
         return max(60, seconds)  # floor: never busy-loop on a misconfigured tiny value
 
     def __str__(self):
-        return f"PollerSettings(enabled={self.enabled}, every {self.interval_value} {self.interval_unit})"
+        return f"PollerSettings({self.platform}, enabled={self.enabled}, every {self.interval_value} {self.interval_unit})"
 
 
 class PixivCredential(models.Model):

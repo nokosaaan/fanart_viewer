@@ -99,7 +99,7 @@ class Command(BaseCommand):
             logger.info('poll_twitter_updates: no Twitter credentials configured, skipping tick')
             return
 
-        poller_settings, _ = PollerSettings.objects.get_or_create(pk=1)
+        poller_settings, _ = PollerSettings.objects.get_or_create(platform='twitter')
         if not poller_settings.enabled:
             logger.info('poll_twitter_updates: disabled in settings, skipping tick')
             return

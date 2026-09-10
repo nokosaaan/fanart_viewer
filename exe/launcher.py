@@ -203,31 +203,37 @@ def _set_status(window, text):
         pass
 
 
-def _poller_loop():
+def _poller_loop(platform, command):
     """In-process replacement for docker-compose's separate `poller`
     container (poller_entrypoint.sh -> manage.py poll_twitter_updates).
-    There's no second process to run here, so this just calls the same
-    management commands' single-tick mode (`--once`, already exercised
-    for manual testing) on a timer instead -- both Twitter's and Pixiv's
-    poller share one PollerSettings row/interval, so they tick together.
-    Each command's own _tick() already no-ops quickly when disabled/no
-    credentials are set, so it's safe to always call both rather than
-    duplicating that check here — but the sleep interval between ticks is
-    this loop's own responsibility, and is re-read from PollerSettings
-    every cycle (not cached at thread start) so a change made through the
-    settings panel takes effect after the current tick, no restart needed.
+    There's no second process to run here, so this just calls the given
+    management command's single-tick mode (`--once`, already exercised
+    for manual testing) on a timer instead.
+
+    One of these runs per platform (see the two threads started below)
+    rather than a single shared loop -- Twitter's and Pixiv's
+    PollerSettings rows are independent (see that model's own docstring
+    for why), so each platform's own interval has to be able to elapse
+    on its own schedule instead of both being forced onto whichever one
+    ticks first.
+
+    The command's own _tick() already no-ops quickly when disabled/no
+    credentials are set, so this doesn't need to duplicate that check —
+    but the sleep interval between ticks is this loop's own
+    responsibility, and is re-read from PollerSettings every cycle (not
+    cached at thread start) so a change made through the settings panel
+    takes effect after the current tick, no restart needed.
     """
     from django.core.management import call_command
     from item.models import PollerSettings
 
     while True:
-        for command in ('poll_twitter_updates', 'poll_pixiv_bookmarks'):
-            try:
-                call_command(command, once=True)
-            except Exception:
-                logging.getLogger(__name__).exception('%s tick failed', command)
         try:
-            interval = PollerSettings.objects.get(pk=1).interval_seconds
+            call_command(command, once=True)
+        except Exception:
+            logging.getLogger(__name__).exception('%s tick failed', command)
+        try:
+            interval = PollerSettings.objects.get(platform=platform).interval_seconds
         except PollerSettings.DoesNotExist:
             interval = 360
         time.sleep(interval)
@@ -283,12 +289,13 @@ def _start_backend(window):
     # its own — unlike PollerSettings' own field-level default (True,
     # which matches the existing always-on docker `poller` service's
     # behavior for anyone already relying on it), this only ever creates
-    # the row disabled, and only if it doesn't already exist yet (so a
-    # choice made through the settings panel on an earlier launch is
-    # never overwritten back to disabled).
+    # each platform's row disabled, and only if it doesn't already exist
+    # yet (so a choice made through the settings panel on an earlier
+    # launch is never overwritten back to disabled).
     from item.models import PollerSettings
 
-    PollerSettings.objects.get_or_create(pk=1, defaults={'enabled': False})
+    PollerSettings.objects.get_or_create(platform='twitter', defaults={'enabled': False})
+    PollerSettings.objects.get_or_create(platform='pixiv', defaults={'enabled': False})
 
     from waitress import serve
 
@@ -296,7 +303,8 @@ def _start_backend(window):
 
     _set_status(window, 'サーバーを起動中…')
 
-    threading.Thread(target=_poller_loop, daemon=True).start()
+    threading.Thread(target=_poller_loop, args=('twitter', 'poll_twitter_updates'), daemon=True).start()
+    threading.Thread(target=_poller_loop, args=('pixiv', 'poll_pixiv_bookmarks'), daemon=True).start()
     threading.Thread(target=lambda: serve(application, host=HOST, port=PORT), daemon=True).start()
 
     logging.getLogger(__name__).info(

@@ -20,6 +20,10 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .header-menu-item.active{ background:#eff6ff; color:#1d4ed8; font-weight:600 }
 .header-menu-badge{ font-size:11px; background:#2563eb; color:#fff; border-radius:10px; padding:1px 7px }
 .header-menu-divider{ height:1px; background:#f3f4f6; margin:4px 2px }
+.header-menu-group{ display:flex; flex-direction:column }
+.header-menu-group-toggle{ font-weight:600 }
+.header-menu-group-arrow{ font-size:11px; color:#9ca3af }
+.header-menu-submenu{ display:flex; flex-direction:column; gap:2px; padding-left:14px; margin:2px 0 4px }
 .searchbar{ margin-bottom: 14px }
 .controls{ display:flex; gap:8px; align-items:center }
 .controls input{ flex:1; padding:10px; border-radius:8px; border:1px solid #e5e7eb }

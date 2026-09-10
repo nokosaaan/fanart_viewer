@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import PollerSettingsPanel from './PollerSettingsPanel'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -30,14 +31,6 @@ export default function TwitterCredsManager({ onClose }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [pollStatus, setPollStatus] = useState(null)
-  const [pollerEnabled, setPollerEnabled] = useState(false)
-  const [pollerItemsPerTick, setPollerItemsPerTick] = useState(1)
-  const [pollerIntervalValue, setPollerIntervalValue] = useState(6)
-  const [pollerIntervalUnit, setPollerIntervalUnit] = useState('minutes')
-  const [pollerBackfillPages, setPollerBackfillPages] = useState(3)
-  const [pollerSaving, setPollerSaving] = useState(false)
-  const [pollerNotice, setPollerNotice] = useState('')
-  const [pollerError, setPollerError] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,49 +52,9 @@ export default function TwitterCredsManager({ onClose }) {
       const r2 = await fetch('/api/twitter_poll/status/', { credentials: 'same-origin' })
       if (r2.ok) setPollStatus(await r2.json())
     } catch (_) {}
-
-    try {
-      const r3 = await fetch('/api/poller_settings/status/', { credentials: 'same-origin' })
-      if (r3.ok) {
-        const j3 = await r3.json()
-        setPollerEnabled(j3.enabled)
-        setPollerItemsPerTick(j3.items_per_tick)
-        setPollerIntervalValue(j3.interval_value)
-        setPollerIntervalUnit(j3.interval_unit)
-        setPollerBackfillPages(j3.backfill_pages_per_tick)
-      }
-    } catch (_) {}
   }, [])
 
   useEffect(() => { load() }, [load])
-
-  async function savePollerSettings(next) {
-    setPollerSaving(true)
-    setPollerError('')
-    setPollerNotice('')
-    try {
-      const r = await fetch('/api/poller_settings/set/', {
-        method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({
-          enabled: next.enabled, items_per_tick: next.itemsPerTick,
-          interval_value: next.intervalValue, interval_unit: next.intervalUnit,
-          backfill_pages_per_tick: next.backfillPages,
-        }),
-      })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(j.detail || `保存に失敗しました (${r.status})`)
-      setPollerEnabled(j.enabled)
-      setPollerItemsPerTick(j.items_per_tick)
-      setPollerIntervalValue(j.interval_value)
-      setPollerIntervalUnit(j.interval_unit)
-      setPollerBackfillPages(j.backfill_pages_per_tick)
-      setPollerNotice('保存しました。')
-    } catch (e) {
-      setPollerError(e.message)
-    } finally {
-      setPollerSaving(false)
-    }
-  }
 
   async function save() {
     if (!authToken.trim() || !ct0.trim()) { setError('auth_token と ct0 の両方を入力してください'); return }
@@ -178,82 +131,7 @@ export default function TwitterCredsManager({ onClose }) {
             </div>
           )}
 
-          <div style={{ marginBottom: 20, padding: '12px', border: '1px solid #334155', borderRadius: 6 }}>
-            <div style={{ marginBottom: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input
-                  type="checkbox" checked={pollerEnabled}
-                  onChange={e => {
-                    const enabled = e.target.checked
-                    setPollerEnabled(enabled)
-                    savePollerSettings({
-                      enabled, itemsPerTick: pollerItemsPerTick,
-                      intervalValue: pollerIntervalValue, intervalUnit: pollerIntervalUnit,
-                      backfillPages: pollerBackfillPages,
-                    })
-                  }}
-                />
-                <strong>自動でブックマーク/いいねを取得する(Twitter/Pixiv共通)</strong>
-              </label>
-              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
-                オフの間は裏で一切取得を行いません。オンにすると下記の頻度・件数で、設定済みのTwitter/Pixiv両方について継続的に取得します(この設定は両方で共通です)。
-              </div>
-            </div>
-
-            {pollerError && <div style={{ color: '#f87171', marginBottom: 8, fontSize: 13 }}>{pollerError}</div>}
-            {pollerNotice && <div style={{ color: '#4ade80', marginBottom: 8, fontSize: 13 }}>{pollerNotice}</div>}
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              <span style={{ fontSize: 13 }}>件数</span>
-              <input
-                type="number" min="1" value={pollerItemsPerTick}
-                onChange={e => setPollerItemsPerTick(parseInt(e.target.value, 10) || 1)}
-                style={{ width: 60, background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
-                  borderRadius: 6, padding: '6px 8px', fontSize: 13 }}
-              />
-              <span style={{ fontSize: 13 }}>件を</span>
-              <input
-                type="number" min="1" value={pollerIntervalValue}
-                onChange={e => setPollerIntervalValue(parseInt(e.target.value, 10) || 1)}
-                style={{ width: 60, background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
-                  borderRadius: 6, padding: '6px 8px', fontSize: 13 }}
-              />
-              <select
-                value={pollerIntervalUnit} onChange={e => setPollerIntervalUnit(e.target.value)}
-                style={{ background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
-                  borderRadius: 6, padding: '6px 8px', fontSize: 13 }}
-              >
-                <option value="minutes">分</option>
-                <option value="hours">時間</option>
-                <option value="days">日</option>
-                <option value="weeks">週</option>
-              </select>
-              <span style={{ fontSize: 13 }}>ごとに取得</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              <span style={{ fontSize: 13 }}>初回の遡り取得(バックフィル)は1回あたり</span>
-              <input
-                type="number" min="1" value={pollerBackfillPages}
-                onChange={e => setPollerBackfillPages(parseInt(e.target.value, 10) || 1)}
-                style={{ width: 60, background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
-                  borderRadius: 6, padding: '6px 8px', fontSize: 13 }}
-              />
-              <span style={{ fontSize: 13 }}>ページずつ(未処理の古いブックマーク/RT/いいねに追いつくまでの速さ。値を上げるほど早く最古まで到達しますが、1回あたりのリクエスト数が増えます)</span>
-            </div>
-
-            <button
-              className="btn" style={{ fontSize: 13 }}
-              disabled={pollerSaving}
-              onClick={() => savePollerSettings({
-                enabled: pollerEnabled, itemsPerTick: pollerItemsPerTick,
-                intervalValue: pollerIntervalValue, intervalUnit: pollerIntervalUnit,
-                backfillPages: pollerBackfillPages,
-              })}
-            >
-              {pollerSaving ? '保存中…' : '頻度・件数を保存'}
-            </button>
-          </div>
+          <PollerSettingsPanel platform="twitter" label="自動でブックマーク/RT/いいねを取得する" />
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>auth_token</label>

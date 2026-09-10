@@ -535,9 +535,6 @@ function AppMain({ role, onLogout }){
             { label: '再読み込み', onClick: () => window.location.reload() },
             ...(readOnly ? [] : [
               { divider: true },
-              { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
-              { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true) },
-              { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
               {
                 label: bulkFetchRunning
                   ? `取得キュー (取得中 ${bulkFetchProgress ? bulkFetchProgress.done : 0}/${bulkFetchProgress ? bulkFetchProgress.total : '?'})`
@@ -548,9 +545,28 @@ function AppMain({ role, onLogout }){
               { label: '編集キュー', onClick: () => openStandaloneWindow('editQueue') },
               { label: '領域ラベル付けキュー', onClick: () => openStandaloneWindow('regionQueue') },
               { label: '手動でアイテムを追加', onClick: () => setManualAddOpen(true) },
-              { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true) },
-              { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
-              { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
+              { divider: true },
+              {
+                label: 'キャラクター',
+                submenu: [
+                  { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true) },
+                  { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true) },
+                  { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true) },
+                ],
+              },
+              {
+                label: 'Twitter',
+                submenu: [
+                  { label: 'Twitterから画像取得', onClick: () => setTwitterFetchOpen(true) },
+                  { label: 'Twitter/X 認証情報', onClick: () => setTwitterCredsOpen(true) },
+                ],
+              },
+              {
+                label: 'Pixiv',
+                submenu: [
+                  { label: 'Pixiv 認証情報', onClick: () => setPixivCredsOpen(true) },
+                ],
+              },
               { label: 'Poipiku 認証情報', onClick: () => setPoipikuCredsOpen(true) },
               { label: 'バックアップ', onClick: () => setBackupOpen(true) },
             ]),

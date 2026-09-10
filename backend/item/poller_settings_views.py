@@ -1,7 +1,9 @@
-"""Admin-only settings for poll_twitter_updates's background polling (see
-item.models.PollerSettings and item.management.commands.poll_twitter_updates).
-Unlike the credential panels, this data isn't secret, so status/set both
-return the full row.
+"""Admin-only settings for the background pollers (see
+item.models.PollerSettings, item.management.commands.poll_twitter_updates
+and poll_pixiv_bookmarks). One independent row per platform ('twitter'/
+'pixiv') -- see PollerSettings' own docstring for why. Unlike the
+credential panels, this data isn't secret, so status/set both return the
+full row.
 """
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -11,10 +13,12 @@ from security.token_utils import require_admin
 from .models import PollerSettings
 
 _UNITS = {choice for choice, _ in PollerSettings.UNIT_CHOICES}
+_PLATFORMS = {choice for choice, _ in PollerSettings.PLATFORM_CHOICES}
 
 
 def _serialize(row: PollerSettings) -> dict:
     return {
+        'platform': row.platform,
         'enabled': row.enabled,
         'items_per_tick': row.items_per_tick,
         'interval_value': row.interval_value,
@@ -26,20 +30,24 @@ def _serialize(row: PollerSettings) -> dict:
 
 
 @require_http_methods(['GET'])
-def poller_settings_status_view(request):
+def poller_settings_status_view(request, platform):
     denied = require_admin(request)
     if denied:
         return denied
-    row, _ = PollerSettings.objects.get_or_create(pk=1)
+    if platform not in _PLATFORMS:
+        return JsonResponse({'detail': f'platform must be one of {sorted(_PLATFORMS)}'}, status=400)
+    row, _ = PollerSettings.objects.get_or_create(platform=platform)
     return JsonResponse(_serialize(row))
 
 
 @csrf_exempt
 @require_http_methods(['POST'])
-def poller_settings_set_view(request):
+def poller_settings_set_view(request, platform):
     denied = require_admin(request)
     if denied:
         return denied
+    if platform not in _PLATFORMS:
+        return JsonResponse({'detail': f'platform must be one of {sorted(_PLATFORMS)}'}, status=400)
     try:
         import json
         data = json.loads(request.body or b'{}')
@@ -71,7 +79,7 @@ def poller_settings_set_view(request):
     if backfill_pages_per_tick < 1:
         return JsonResponse({'detail': 'backfill_pages_per_tick must be at least 1'}, status=400)
 
-    row, _ = PollerSettings.objects.get_or_create(pk=1)
+    row, _ = PollerSettings.objects.get_or_create(platform=platform)
     row.enabled = bool(data.get('enabled', False))
     row.items_per_tick = items_per_tick
     row.interval_value = interval_value

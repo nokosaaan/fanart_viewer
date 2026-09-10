@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import PollerSettingsPanel from './PollerSettingsPanel'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -127,11 +128,10 @@ export default function PixivCredsManager({ onClose }) {
                   {pollStatus.consecutive_failures}回連続で失敗中 ({formatDate(pollStatus.last_error_at)}): {pollStatus.last_error}
                 </div>
               )}
-              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
-                オン/オフ・頻度・件数の設定は「Twitter/X 認証情報」パネルにあります(Twitter/Pixiv共通の設定です)。
-              </div>
             </div>
           )}
+
+          <PollerSettingsPanel platform="pixiv" label="自動でブックマークを取得する" />
 
           <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>PHPSESSID(推奨)</label>

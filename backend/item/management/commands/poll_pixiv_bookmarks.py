@@ -69,7 +69,7 @@ class Command(BaseCommand):
             logger.info('poll_pixiv_bookmarks: no Pixiv credentials configured, skipping tick')
             return
 
-        poller_settings, _ = PollerSettings.objects.get_or_create(pk=1)
+        poller_settings, _ = PollerSettings.objects.get_or_create(platform='pixiv')
         if not poller_settings.enabled:
             logger.info('poll_pixiv_bookmarks: disabled in settings, skipping tick')
             return
