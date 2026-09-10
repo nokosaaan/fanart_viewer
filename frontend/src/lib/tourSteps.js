@@ -16,6 +16,13 @@
 // in the step's own body text, while spotlighting the menu entry that
 // opens it, is both far more robust and closer to how a first-time user
 // actually experiences the app regardless.
+//
+// needsHeaderMenu: true on every step whose targetId lives inside the
+// header dropdown (see Tour.jsx's own onMenuNeed) — omitted (false) for
+// the toggle button itself (shown BEFORE it's clicked, so the dropdown
+// should still be closed) and for anything outside the menu entirely
+// (the search bar, its filter chips), where a left-open dropdown would
+// otherwise sit on top of and hide the very thing being pointed at.
 
 export function buildTourStepsA(){
   return [
@@ -33,27 +40,32 @@ export function buildTourStepsA(){
       body: 'まずはログイン情報を設定しましょう。「ブラウザでログイン」を押すと本物のログイン画面が別ウィンドウで開くので、普段通りログインするだけで設定できます(開発者ツールは不要です)。ここから自動でブックマーク等を取得する設定もできます。',
       groupToggleId: 'menu-group-twitter',
       targetId: 'menu-twitter-creds',
+      needsHeaderMenu: true,
     },
     {
       title: 'Pixivと連携する',
       body: 'Twitterと同じく、ブラウザでログインするだけで設定できます。R18作品の取得にも使われます。ブックマークの自動取得もここから設定できます。',
       groupToggleId: 'menu-group-pixiv',
       targetId: 'menu-pixiv-creds',
+      needsHeaderMenu: true,
     },
     {
       title: 'Poipikuと連携する(整備中)',
       body: 'Poipikuにも対応していますが、自動取得はまだベータ段階です。うまく動かない場合は手動での取得をお試しください。',
       targetId: 'menu-poipiku-creds',
+      needsHeaderMenu: true,
     },
     {
       title: 'リンクから取得',
       body: '投稿のリンクを1件ずつ、またはここ「取得キュー」からまとめて取得できます。取得方法(HTML解析/API/ブラウザ経由)も選べます。',
       targetId: 'menu-fetch-queue',
+      needsHeaderMenu: true,
     },
     {
       title: '手元の画像を直接登録',
       body: '元の投稿が既に無くても、パソコンに保存済みの画像ファイルを直接アップロードして登録できます。これは完全に手動での登録専用の機能です。',
       targetId: 'menu-manual-add',
+      needsHeaderMenu: true,
     },
     {
       title: 'リンク切れ・削除済みの対策',
@@ -82,38 +94,45 @@ export function buildTourStepsB(){
       title: 'アイテムを編集する',
       body: 'タイトル・キャラクター・タグ・シチュエーション・作者を編集します。データが増えると、AIがスコア付きの候補(最大3件)を提案するようになります。どの根拠(ハッシュタグ・作家履歴・画像解析・Danbooru照合など)から来た提案かも表示されます。',
       targetId: 'menu-edit-queue',
+      needsHeaderMenu: true,
     },
     {
       title: 'キャラクターグループ',
       body: 'どのキャラがどのタイトルに属するかをグループにまとめておくと、AI提案の精度が上がります。新しいタイトル+新しいキャラを同時に登録すると自動でグループが作られます。',
       groupToggleId: 'menu-group-character',
       targetId: 'menu-character-groups',
+      needsHeaderMenu: true,
     },
     {
       title: 'Danbooruリンク',
       body: '画像解析(タガー)はDanbooru由来のタグしか認識できないため、キャラ名とDanbooruタグを紐付けておくと認識精度が大きく上がります。カタカナ名でDanbooruでの綴りが分からない場合は、そのまま入力すると別表記(other_names)から候補を探して表示します。',
       groupToggleId: 'menu-group-character',
       targetId: 'menu-character-danbooru-link',
+      needsHeaderMenu: true,
     },
     {
       title: '複数キャラの領域ラベル付け',
       body: '1枚に複数のキャラが写っている画像は、どの領域が誰かを手動で矩形指定できます。ここでラベル付けしたデータは学習時の確実な教師データとして使われます。',
       targetId: 'menu-region-queue',
+      needsHeaderMenu: true,
     },
     {
       title: '分類器の学習',
       body: 'ここまでのデータを使って、あなた専用のAIモデルを学習させます。最低画像枚数・除外キャラ・複数キャラ画像を含めるか等を指定できます。学習が終わったら、アプリのウィンドウを閉じてfanart_viewer.exeをもう一度起動すると反映されます(このパネルを閉じるだけでは反映されません)。',
       targetId: 'menu-train-classifier',
+      needsHeaderMenu: true,
     },
     {
       title: 'Preview Timelineで眺める',
       body: '集めた画像をギャラリーとして閲覧できます。ホイールまたは↑/↓キーで前後のアイテムへ、←/→キーで同じアイテム内の複数ページ送りができます。「画像を新しいタブで開く」からパソコンに保存することもできます。気に入らない画像は削除して「＋」ボタンや取得キューから再取得すれば選び直せます。',
       targetId: 'menu-preview-timeline',
+      needsHeaderMenu: true,
     },
     {
       title: 'バックアップ',
       body: 'Google Driveへワンクリックでバックアップでき、進捗もリアルタイムで表示されます。初回のみGoogle CloudでOAuthクライアントの作成が必要です(パネル内に手順を用意しています)。',
       targetId: 'menu-backup',
+      needsHeaderMenu: true,
     },
     {
       title: 'これで一通りの案内は終わりです',

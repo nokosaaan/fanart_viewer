@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react'
 // mostly — see tourSteps.js's own reasoning on why), found via a
 // `data-tour="..."` attribute rather than fragile text/class matching.
 //
-// `steps`: [{ title, body, targetId?, groupToggleId? }, ...].
+// `steps`: [{ title, body, targetId?, groupToggleId?, needsHeaderMenu? }, ...].
 //   targetId: data-tour value of the element to spotlight; omitted for a
 //     centered, non-spotlit card (used for anything with no reliably-
 //     present target, e.g. per-item action icons that don't exist when
@@ -17,8 +17,15 @@ import React, { useState, useEffect, useRef } from 'react'
 //     if aria-expanded says it isn't open yet, so an item nested inside a
 //     collapsed submenu becomes findable before this step tries to locate
 //     targetId. Left expanded afterward (harmless — the whole dropdown is
-//     hidden once the tour closes the header menu).
-export default function Tour({ steps, onClose }){
+//     hidden once the header menu itself is closed).
+//   needsHeaderMenu: whether THIS step's target lives inside the header
+//     dropdown — `onMenuNeed(bool)` is called on every step change so the
+//     caller (App.jsx) can open/close it exactly when needed, rather than
+//     leaving it open for an entire tour: a step targeting something
+//     OUTSIDE the menu (the search bar, its filter chips) needs it
+//     closed, since the open dropdown physically overlaps and hides that
+//     part of the screen otherwise.
+export default function Tour({ steps, onClose, onMenuNeed }){
   const [idx, setIdx] = useState(0)
   const [rect, setRect] = useState(null) // DOMRect | 'not-found' | null (centered)
   const step = steps[idx]
@@ -26,11 +33,16 @@ export default function Tour({ steps, onClose }){
   useEffect(() => {
     let cancelled = false
     setRect(null)
-
-    if (step.groupToggleId) {
-      const toggle = document.querySelector(`[data-tour="${step.groupToggleId}"]`)
-      if (toggle && toggle.getAttribute('aria-expanded') === 'false') toggle.click()
-    }
+    // Both of these are just requests, not guarantees this same tick:
+    // onMenuNeed(true) triggers a state update in App.jsx that opens the
+    // header menu on its NEXT render, and even once that dropdown exists,
+    // a groupToggleId's own submenu is a SEPARATE bit of state (MenuEntry's
+    // own, local) that only starts existing once the toggle button itself
+    // is in the DOM to be clicked. Retrying both inside tryFind's own
+    // polling loop below (rather than doing them once, synchronously,
+    // right here) is what actually gives each render a chance to catch up
+    // before giving up.
+    if (onMenuNeed) onMenuNeed(!!step.needsHeaderMenu)
 
     // Opening a menu/submenu takes a render cycle (or two) to actually
     // paint the target into the DOM -- poll briefly instead of assuming
@@ -38,12 +50,16 @@ export default function Tour({ steps, onClose }){
     let attempts = 0
     function tryFind(){
       if (cancelled) return
+      if (step.groupToggleId) {
+        const toggle = document.querySelector(`[data-tour="${step.groupToggleId}"]`)
+        if (toggle && toggle.getAttribute('aria-expanded') === 'false') toggle.click()
+      }
       if (!step.targetId) { setRect(null); return }
       const el = document.querySelector(`[data-tour="${step.targetId}"]`)
       if (el) {
         setRect(el.getBoundingClientRect())
         el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      } else if (attempts < 15) {
+      } else if (attempts < 20) {
         attempts++
         setTimeout(tryFind, 100)
       } else {
@@ -124,21 +140,56 @@ function dim(left, top, width, height){
   return { position: 'fixed', left, top, width, height, background: 'rgba(15,23,42,0.75)', pointerEvents: 'auto' }
 }
 
+const CARD_WIDTH = 320
+const CARD_HEIGHT_ESTIMATE = 180 // rough; only used to keep the card on-screen vertically, not for layout
+const MARGIN = 16
+
 function cardStyle(rect){
   const base = {
-    position: 'fixed', zIndex: 5001, width: 320, maxWidth: '90vw',
+    position: 'fixed', zIndex: 5001, width: CARD_WIDTH, maxWidth: '90vw',
     background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
     padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
   }
   if (!rect || rect === 'not-found') {
     return { ...base, left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }
   }
-  const left = Math.min(Math.max(rect.left, 12), window.innerWidth - 332)
-  const spaceBelow = window.innerHeight - rect.bottom
-  if (spaceBelow > 240) return { ...base, left, top: rect.bottom + 16 }
-  const spaceAbove = rect.top
-  if (spaceAbove > 240) return { ...base, left, top: Math.max(rect.top - 232, 12) }
-  // Not enough room above or below (a very tall viewport-filling target) —
-  // pin to the side instead of overlapping it.
-  return { ...base, left: Math.min(rect.right + 16, window.innerWidth - 332), top: 12 }
+  // clientWidth/clientHeight (excludes any scrollbar) rather than
+  // window.innerWidth/innerHeight (includes it) — the more conservative
+  // of the two, so the card never ends up partly behind a scrollbar.
+  const vw = document.documentElement.clientWidth || window.innerWidth
+  const vh = document.documentElement.clientHeight || window.innerHeight
+
+  // Prefer placing the card beside the target (left, then right),
+  // vertically centered on it and clamped to stay fully on-screen —
+  // this is what actually fixes two real problems a plain above/below
+  // placement had: a target near the right edge (the header menu toggle,
+  // or any item inside its dropdown) pushed the card off-screen to the
+  // right, and a target packed closely among siblings in a tall, narrow
+  // list (the dropdown itself) made an above/below card overlap the
+  // sibling right next to it. Side placement avoids both, since it's
+  // offset onto a part of the screen the list/dropdown doesn't occupy.
+  const spaceLeft = rect.left
+  const spaceRight = vw - rect.right
+  const centeredTop = clamp(
+    rect.top + rect.height / 2 - CARD_HEIGHT_ESTIMATE / 2,
+    MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN,
+  )
+
+  if (spaceLeft >= CARD_WIDTH + MARGIN * 2) {
+    return { ...base, left: rect.left - CARD_WIDTH - MARGIN, top: centeredTop }
+  }
+  if (spaceRight >= CARD_WIDTH + MARGIN * 2) {
+    return { ...base, left: rect.right + MARGIN, top: centeredTop }
+  }
+
+  // Neither side has room (e.g. the target itself spans most of the
+  // width, like the search input) — fall back to above/below instead.
+  const left = clamp(rect.left, MARGIN, vw - CARD_WIDTH - MARGIN)
+  const spaceBelow = vh - rect.bottom
+  if (spaceBelow > 220) return { ...base, left, top: rect.bottom + MARGIN }
+  return { ...base, left, top: Math.max(rect.top - 220, MARGIN) }
+}
+
+function clamp(v, lo, hi){
+  return Math.min(Math.max(v, lo), Math.max(lo, hi))
 }

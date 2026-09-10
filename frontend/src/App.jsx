@@ -105,7 +105,10 @@ function AppMain({ role, onLogout }){
   const [tourPrompt, setTourPrompt] = useState(null)
 
   function startTour(group){
-    setHeaderMenuOpen(true)
+    // Whether the menu should be open is decided per-step from here on
+    // (see Tour.jsx's onMenuNeed) — the very first step in both groups
+    // doesn't target anything inside it, so forcing it open here would
+    // just have Tour immediately close it again a moment later.
     setTourActive(group)
   }
   function closeTour(){
@@ -830,6 +833,7 @@ function AppMain({ role, onLogout }){
         <Tour
           steps={tourActive === 'A' ? buildTourStepsA() : buildTourStepsB()}
           onClose={closeTour}
+          onMenuNeed={setHeaderMenuOpen}
         />
       )}
       {manualAddOpen && <ManualAddItem onClose={()=>setManualAddOpen(false)} onCreated={handleItemCreated} />}
