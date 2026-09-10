@@ -369,6 +369,14 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       if(j.auto_created_character_group){
         alert(`新しいタイトル「${j.auto_created_character_group.name}」のキャラクターグループを自動作成しました。`)
       }
+      // Same idea, for a title an existing group already claims (see
+      // views._maybe_assign_new_characters_to_existing_groups) — a new
+      // character under an already-established franchise gets folded
+      // straight into that group instead of landing in
+      // CharacterGroupManager's「未分類」list for manual assignment.
+      if(j.auto_assigned_to_character_group){
+        alert(`新しいキャラクターをキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
+      }
       if(onSaved) onSaved(j.item)
     }catch(e){
       setLoading(false)

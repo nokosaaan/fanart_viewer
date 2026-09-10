@@ -1588,6 +1588,62 @@ def _maybe_autocreate_character_group(item, orig_titles, orig_characters):
     return group
 
 
+def _maybe_assign_new_characters_to_existing_groups(item, orig_characters):
+    """The everyday counterpart to _maybe_autocreate_character_group: an
+    ALREADY-established title (one an existing CharacterGroup already
+    claims via its own `titles`) getting a brand-new character doesn't
+    need a new group — the character just belongs in the one that's
+    already there. Without this, every such addition would otherwise have
+    to be assigned by hand via CharacterGroupManager.jsx's own
+    "未分類"(unclassified) checkbox list, every single time.
+
+    Same "never guess" posture as _maybe_autocreate_character_group:
+      - Only characters this save actually introduces are considered —
+        one already on the item before this save is left wherever it
+        already is.
+      - A character already belonging to ANY existing group (this one or
+        a different one) is left alone. It may deliberately live in a
+        broader/different group on purpose (e.g. a franchise-wide
+        character kept on a parent group rather than a title-specific
+        child one — see CharacterGroup.parent's own docstring), so
+        silently moving it here would undo a human's earlier, deliberate
+        placement.
+      - Only fires when this item's titles resolve to EXACTLY ONE distinct
+        CharacterGroup across all of them (via an exact match against that
+        group's own `titles` list, not a fuzzy one) — a crossover item
+        whose two titles belong to two different groups is a genuine
+        ambiguity for a human to resolve, not something to guess at here.
+
+    Returns the CharacterGroup characters were added to, or None if
+    nothing qualified (including the case where _maybe_autocreate_
+    character_group already handled this exact character via a brand-new
+    group of its own — by the time this runs, that character is no longer
+    ungrouped, so it's correctly skipped here instead of double-handled).
+    """
+    new_characters = [c for c in (item.characters or []) if c and c not in orig_characters]
+    titles = [t for t in (item.titles or []) if t]
+    if not new_characters or not titles:
+        return None
+
+    matching_groups = {}
+    already_grouped = set()
+    for g in CharacterGroup.objects.all():
+        already_grouped.update(g.characters or [])
+        if any(t in (g.titles or []) for t in titles):
+            matching_groups[g.pk] = g
+    if len(matching_groups) != 1:
+        return None
+    group = next(iter(matching_groups.values()))
+
+    to_add = [c for c in new_characters if c not in already_grouped]
+    if not to_add:
+        return None
+
+    group.characters = _merge_unique(group.characters, to_add)
+    group.save(update_fields=['characters'])
+    return group
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.all().order_by('-id')
@@ -2982,10 +3038,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if 'titles' in updates and 'characters' in updates:
             auto_group = _maybe_autocreate_character_group(item, orig_titles, orig_characters)
 
+        assigned_group = None
+        if 'characters' in updates:
+            assigned_group = _maybe_assign_new_characters_to_existing_groups(item, orig_characters)
+
         serializer = ItemSerializer(item, context={'request': request})
         response = {'status': 'updated', 'updated': updates, 'item': serializer.data}
         if auto_group is not None:
             response['auto_created_character_group'] = {'id': auto_group.id, 'name': auto_group.name}
+        if assigned_group is not None:
+            response['auto_assigned_to_character_group'] = {'id': assigned_group.id, 'name': assigned_group.name}
         return Response(response)
 
     @action(detail=False, methods=['post'], url_path='create_manual')
