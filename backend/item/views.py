@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlparse
 from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem, TwitterPollState
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
+from . import pixiv_salvage
 from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
 from .serializers import ItemSerializer, CharacterGroupSerializer, CharacterAliasGroupSerializer
 from security.ssrf_guard import validate_url, SSRFError
@@ -3003,6 +3004,62 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'uploaded', 'added': created, 'item': serializer.data})
+
+    @action(detail=True, methods=['post'], url_path='salvage_pixiv')
+    def salvage_pixiv(self, request, pk=None):
+        """Recover a DELETED Pixiv artwork's original image(s) straight
+        from Pixiv's CDN (see item.pixiv_salvage's own docstring for how)
+        -- for when the item's link is a pixiv.net artwork that's gone
+        (404/removed) and the user never saved a copy locally either (if
+        they had, upload_preview above is the right tool instead).
+
+        Runs synchronously and can genuinely take a while (a brute-force
+        second-by-second search over the gap between the nearest still-
+        existing neighboring posts) -- item.pixiv_salvage.MAX_BRACKET_SECONDS
+        refuses up front rather than grinding for a very long time, but
+        even a search within that cap can take real minutes.
+
+        Appends recovered images after any existing previews (same
+        append-don't-replace convention as upload_preview) rather than
+        assuming there are none -- a caller that specifically wants a
+        clean slate first should DELETE previews/ before calling this.
+        """
+        item = self.get_object()
+
+        match = re.search(r'/artworks/(\d+)', item.link or '')
+        if not match:
+            return Response(
+                {'detail': 'このアイテムのリンクはPixivの作品URL(pixiv.net/artworks/12345)ではありません'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        artwork_id = int(match.group(1))
+
+        try:
+            urls = pixiv_salvage.discover_salvage_urls(artwork_id)
+        except pixiv_salvage.PixivSalvageError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        except Exception as e:
+            logging.exception('Pixiv salvage failed for item %s', item.pk)
+            return Response({'detail': 'サルベージに失敗しました', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        images = pixiv_salvage.fetch_salvaged_images(urls)
+        if not images:
+            return Response({'detail': '画像の発見には成功しましたが、ダウンロードに失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        start_order = item.preview_images.count()
+        created = 0
+        for offset, (data, content_type) in enumerate(images):
+            try:
+                PreviewImage.objects.create(item=item, order=start_order + offset, data=data, content_type=content_type)
+                created += 1
+            except Exception:
+                logging.exception('Failed to save salvaged image for item %s', item.pk)
+
+        if created == 0:
+            return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'salvaged', 'found': len(urls), 'added': created, 'item': serializer.data})
 
     @action(detail=True, methods=['post'], url_path='detect_regions')
     def detect_regions(self, request, pk=None):

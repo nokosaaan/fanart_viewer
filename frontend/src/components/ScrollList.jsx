@@ -42,6 +42,16 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   const [copied, setCopied] = useState(false)
   const [uploadingLocal, setUploadingLocal] = useState(false)
   const localFileInputRef = useRef(null)
+  const [salvaging, setSalvaging] = useState(false)
+  const isPixivArtwork = !!(it.link && /pixiv\.net\/artworks\/\d+/.test(it.link))
+  // The URL box defaults to read-only (selectable/copyable, not typeable) so
+  // it can't be accidentally overwritten mid-click -- editing is an
+  // explicit opt-in via the lock icon, for the deliberate "retry from a
+  // different URL" case (typo in the original link, or fetching a
+  // replacement source) rather than something that should ever happen by
+  // accident.
+  const [urlEditable, setUrlEditable] = useState(false)
+  const urlInputRef = useRef(null)
 
   // Saving now happens from the fetch queue (see FetchQueueManager), which is
   // a separate component from whichever ItemRow originally fetched the
@@ -80,6 +90,32 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
     }finally{
       setUploadingLocal(false)
       if(localFileInputRef.current) localFileInputRef.current.value = ''
+    }
+  }
+
+  // For when the Pixiv post itself is gone (404/removed) and the user
+  // never saved a copy locally either — recovers the original image(s)
+  // straight from Pixiv's CDN via a brute-force timestamp search (see
+  // item.pixiv_salvage). Can genuinely take from several seconds to a
+  // couple of minutes, so this shows an explicit status toast rather
+  // than just spinning silently — a plain loading button gives no sense
+  // of whether it's stuck or just working through a wide search window.
+  async function onSalvage(){
+    if(salvaging) return
+    setSalvaging(true)
+    showToast('サルベージ中…(数十秒〜数分かかることがあります)', 'loading')
+    try{
+      const resp = await fetch(`/api/items/${it.id}/salvage_pixiv/`, { method: 'POST' })
+      const j = await resp.json().catch(()=>({}))
+      if(!resp.ok){ showToast('サルベージ失敗: '+(j.detail||resp.status), 'error'); return }
+      setHasPreviewLocal(true)
+      notify('item-preview-updated', { id: it.id })
+      showToast(`サルベージ成功: ${j.added}件の画像を復元しました ✓`, 'success')
+    }catch(err){
+      console.error(err)
+      showToast('サルベージ失敗', 'error')
+    }finally{
+      setSalvaging(false)
     }
   }
 
@@ -256,8 +292,27 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
       <div className="actions-row">
         {!readOnly && (
           <div style={{display:'inline-block'}}>
-            <input className="url-input" type="text" value={url} onChange={e=>setUrl(e.target.value)}
-              onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); onFetch(e) } }} />
+            <input
+              ref={urlInputRef} className="url-input" type="text" value={url}
+              readOnly={!urlEditable}
+              onChange={e=>{ if(urlEditable) setUrl(e.target.value) }}
+              onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); onFetch(e) } }}
+              style={urlEditable ? undefined : {cursor:'default', background:'#f3f4f6'}}
+            />
+            <button
+              type="button" className="btn" style={{marginLeft:6, padding:'6px 8px', lineHeight:1}}
+              title={urlEditable ? 'ロックする(誤って書き換えるのを防ぐ)' : '編集を許可する(別URLで再取得したい場合)'}
+              onClick={()=>{
+                setUrlEditable(prev=>!prev)
+                if(!urlEditable) setTimeout(()=>urlInputRef.current && urlInputRef.current.focus(), 0)
+              }}
+            >
+              {urlEditable ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 019.9-1"/></svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+              )}
+            </button>
             <select value={fetchMethod} onChange={e=>setFetchMethod(e.target.value)} style={{marginLeft:8, marginRight:8}} title="Choose fetch method">
               <option value="html">HTML scrape</option>
               <option value="api">Use API</option>
@@ -288,6 +343,21 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
               )}
             </button>
           </>
+        )}
+        {!readOnly && isPixivArtwork && (
+          <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}}
+            title="Pixivが投稿を削除済みで、手元にも画像が無い場合に、CDNから元画像のサルベージを試みます(数十秒〜数分かかることがあります)"
+            onClick={onSalvage}
+            disabled={salvaging}
+          >
+            {salvaging ? '…' : (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+                <circle cx="11" cy="11" r="7"/>
+                <line x1="16.65" y1="16.65" x2="21" y2="21"/>
+                <path d="M11 8v3l2 2"/>
+              </svg>
+            )}
+          </button>
         )}
         {!readOnly && <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear previews" onClick={async ()=>{
           const ok = window.confirm('Clear all previews for this item? This cannot be undone.')
