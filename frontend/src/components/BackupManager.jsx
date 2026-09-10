@@ -22,6 +22,36 @@ function formatDate(iso) {
   return d.toLocaleString('ja-JP')
 }
 
+// Snapshot the last-known status client-side so a reload of the whole
+// page (the app itself tells the user to do exactly this once a restore
+// finishes, to pick up the new DB) doesn't show a blank/reset panel for
+// the brief gap before the resume-poll below completes — these are only
+// ever used to seed the very first render; the live poll that always
+// fires immediately on mount corrects them a moment later regardless.
+function loadCachedStatus(key) {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? JSON.parse(raw) : null
+  } catch (_) {
+    return null
+  }
+}
+function saveCachedStatus(key, status) {
+  try {
+    localStorage.setItem(key, JSON.stringify(status))
+  } catch (_) {}
+}
+const BACKUP_STATUS_CACHE_KEY = 'fv_backup_status_cache'
+const RESTORE_STATUS_CACHE_KEY = 'fv_restore_status_cache'
+// Which file a restore attempt is FOR (see pendingFileRef below) also has
+// to survive a reload — restore_progress.py's own state has no idea
+// which file it's restoring, and a reload wipes the in-memory ref that
+// used to be the only place that was recorded, which meant a reload at
+// exactly the wrong moment (waiting on a large Drive download) lost track
+// of which file the eventual needs_confirmation was even about, so the
+// overwrite/追記/キャンセル dialog silently never appeared.
+const RESTORE_PENDING_FILE_KEY = 'fv_restore_pending_file'
+
 const TABLE_LABELS = {
   item_charactergroup: 'キャラクターグループ',
   item_item: 'アイテム',
@@ -44,7 +74,14 @@ export default function BackupManager({ onClose }) {
   const [folderUrl, setFolderUrl] = useState('')
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
-  const [restoringId, setRestoringId] = useState(null)
+  // Seeded from the last-known restore file/status (see RESTORE_PENDING_FILE_KEY
+  // above) so a reload mid-restore keeps showing "復元中…" on the right row
+  // instead of looking like nothing is happening until the resume-poll lands.
+  const [restoringId, setRestoringId] = useState(() => {
+    const cachedRestore = loadCachedStatus(RESTORE_STATUS_CACHE_KEY)
+    const cachedFile = loadCachedStatus(RESTORE_PENDING_FILE_KEY)
+    return cachedRestore?.running && cachedFile ? cachedFile.id : null
+  })
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   // Set when the server refuses a restore because the DB already has data;
@@ -56,17 +93,32 @@ export default function BackupManager({ onClose }) {
   // and this polls its status instead, so a long backup (a big DB, a slow
   // home upload connection) shows real phase/percent instead of a static
   // spinner for however long it takes.
-  const [backupStatus, setBackupStatus] = useState(null)
+  const [backupStatus, setBackupStatus] = useState(() => loadCachedStatus(BACKUP_STATUS_CACHE_KEY))
   const pollRef = useRef(null)
   // Same background+poll treatment as backup, for restore's own
   // (potentially just as slow) Drive download — see restore_progress.py.
-  const [restoreStatus, setRestoreStatus] = useState(null)
+  const [restoreStatus, setRestoreStatus] = useState(() => loadCachedStatus(RESTORE_STATUS_CACHE_KEY))
   const restorePollRef = useRef(null)
   // restore_progress.py's state has no idea which `file` a restore was
-  // FOR (just a file_id string) — this is purely local, so confirmState
-  // (which needs the file's display name too) can be reconstructed from
-  // whichever file doRestore was last called with.
+  // FOR (just a file_id string) — this is purely local. Read/written
+  // through readPendingFile()/writePendingFile() below (not directly),
+  // which also mirror it to RESTORE_PENDING_FILE_KEY: a plain useRef
+  // would otherwise be reset to null by exactly the reload this app
+  // itself tells the user to do once a restore finishes, losing track of
+  // which file a still-running restore (e.g. a second, slower one
+  // started right after) was even for — silently swallowing the
+  // overwrite/追記/キャンセル confirmation once it eventually came back.
   const pendingFileRef = useRef(null)
+
+  function readPendingFile() {
+    if (pendingFileRef.current) return pendingFileRef.current
+    return loadCachedStatus(RESTORE_PENDING_FILE_KEY)
+  }
+  function writePendingFile(file) {
+    pendingFileRef.current = file
+    if (file) saveCachedStatus(RESTORE_PENDING_FILE_KEY, file)
+    else try { localStorage.removeItem(RESTORE_PENDING_FILE_KEY) } catch (_) {}
+  }
 
   // Google Drive OAuth client — the exe build has no .env a user could
   // edit, so this replaces scripts/google_drive_auth.py's out-of-band
@@ -113,6 +165,7 @@ export default function BackupManager({ onClose }) {
       if (!r.ok) return null
       const j = await r.json()
       setBackupStatus(j)
+      saveCachedStatus(BACKUP_STATUS_CACHE_KEY, j)
       if (!j.running && pollRef.current) {
         clearInterval(pollRef.current)
         pollRef.current = null
@@ -210,22 +263,33 @@ export default function BackupManager({ onClose }) {
       if (!r.ok) return null
       const j = await r.json()
       setRestoreStatus(j)
+      saveCachedStatus(RESTORE_STATUS_CACHE_KEY, j)
       if (!j.running) {
         if (restorePollRef.current) {
           clearInterval(restorePollRef.current)
           restorePollRef.current = null
         }
+        // Every branch below is gated on readPendingFile() (not just the
+        // needs_confirmation one) — this is what a fresh mount's react=true
+        // resume-poll relies on to avoid resurrecting a stale error/result
+        // left over from some unrelated earlier restore attempt: the server
+        // state persists indefinitely until the next start(), but the
+        // pending-file marker is only ever set while THIS attempt is still
+        // unresolved, and cleared the instant it's handled either here or
+        // via cancelOverwrite().
         if (react) {
-          const file = pendingFileRef.current
-          if (j.needs_confirmation && file) {
+          const file = readPendingFile()
+          if (file && j.needs_confirmation) {
             setConfirmState({ file, current: j.needs_confirmation.current, backup: j.needs_confirmation.backup })
-          } else if (j.error) {
+          } else if (file && j.error) {
             setError(j.error)
             setRestoringId(null)
-          } else if (j.result !== null) {
+            writePendingFile(null)
+          } else if (file && j.result !== null) {
             // result is {} for strict/overwrite, or the merge summary dict
             setConfirmState(null)
             setRestoringId(null)
+            writePendingFile(null)
             if (j.result && Object.keys(j.result).length > 0) {
               const mr = j.result
               setNotice(
@@ -250,17 +314,23 @@ export default function BackupManager({ onClose }) {
     restorePollRef.current = setInterval(() => pollRestoreStatus(true), 1000)
   }
 
-  // Only resumes polling for an ALREADY-RUNNING restore (mirrors backup's
-  // own mount-resume effect) — see pollRestoreStatus's own comment on why
-  // `react` is false here specifically.
+  // react=true here (unlike backup's own mount-resume effect) so a reload
+  // that lands exactly after a restore this session was tracking already
+  // reached a terminal state (needs_confirmation, or a result/error that
+  // finished while the page was reloading) still surfaces it, instead of
+  // silently dropping it because nothing was polling yet to react to it.
+  // This is safe from resurrecting truly-stale/already-handled state from
+  // an unrelated earlier visit because pollRestoreStatus only acts on
+  // needs_confirmation/error/result when readPendingFile() is non-null —
+  // and that's cleared the moment any of those is actually handled.
   useEffect(() => {
-    pollRestoreStatus(false).then(j => { if (j && j.running) startRestorePolling() })
+    pollRestoreStatus(true).then(j => { if (j && j.running) startRestorePolling() })
     return () => { if (restorePollRef.current) clearInterval(restorePollRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function doRestore(file, mode) {
-    pendingFileRef.current = file
+    writePendingFile(file)
     setRestoringId(file.id)
     setError('')
     setNotice('')
@@ -272,10 +342,12 @@ export default function BackupManager({ onClose }) {
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `復元失敗 (${r.status})`)
       setRestoreStatus(j)
+      saveCachedStatus(RESTORE_STATUS_CACHE_KEY, j)
       startRestorePolling()
     } catch (e) {
       setError(e.message)
       setRestoringId(null)
+      writePendingFile(null)
     }
   }
 
@@ -296,6 +368,7 @@ export default function BackupManager({ onClose }) {
   function cancelOverwrite() {
     setConfirmState(null)
     setRestoringId(null)
+    writePendingFile(null)
   }
 
   return (
@@ -465,7 +538,7 @@ export default function BackupManager({ onClose }) {
                   <button
                     className="btn"
                     style={{ fontSize: 12 }}
-                    disabled={restoringId === f.id}
+                    disabled={restoringId != null}
                     onClick={() => restoreBackup(f)}
                   >
                     {restoringId === f.id ? '復元中…' : '復元'}
