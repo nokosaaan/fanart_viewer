@@ -36,6 +36,13 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
   const [openId, setOpenId] = useState(queue.length > 0 ? queue[0].id : null)
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [saving, setSaving] = useState(false)
+  // Same 3 choices as ScrollList.jsx's per-item fetch-method dropdown,
+  // applied uniformly to every item in this bulk run (unlike ScrollList's
+  // own per-row auto-default to Playwright for pixiv links, this one
+  // selector covers a page's worth of items that may span several
+  // domains, so there's no single "right" auto-default to pick for the
+  // whole batch — the user picks one explicitly instead).
+  const [bulkFetchMethod, setBulkFetchMethod] = useState('html')
 
   const openEntry = queue.find(q => q.id === openId) || null
 
@@ -79,7 +86,12 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
         </div>
 
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
-          <button className="btn" onClick={()=>onRunBulkFetch(pendingItems)} disabled={bulkRunning || pendingItems.length===0}>
+          <select value={bulkFetchMethod} onChange={e=>setBulkFetchMethod(e.target.value)} disabled={bulkRunning} title="一括取得の手法を選択">
+            <option value="html">HTML scrape</option>
+            <option value="api">Use API</option>
+            <option value="playwright">Use Browser (Playwright)</option>
+          </select>
+          <button className="btn" onClick={()=>onRunBulkFetch(pendingItems, bulkFetchMethod)} disabled={bulkRunning || pendingItems.length===0}>
             {bulkRunning
               ? `取得中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : pendingItems.length})`
               : `このページを一括取得 (${pendingItems.length}件)`}

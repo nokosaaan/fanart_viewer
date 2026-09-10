@@ -115,8 +115,13 @@ function AppMain({ role, onLogout }){
   // `pendingItems` is a snapshot taken at click time (see FetchQueueManager),
   // so subsequent pagination/filter changes while this runs don't retarget
   // an already-started run.
-  async function runBulkFetch(pendingItems){
+  async function runBulkFetch(pendingItems, forceMethod){
     if(bulkFetchRunning || !pendingItems || pendingItems.length === 0) return
+    // Same mapping ScrollList.jsx's own per-item dropdown uses: 'html' is
+    // this app's existing default cascade (direct-image URL, then HTML
+    // og:image scrape), so only 'api'/'playwright' are ever passed through
+    // as an explicit override.
+    const forceMethodParam = forceMethod === 'api' ? 'api' : (forceMethod === 'playwright' ? 'playwright' : undefined)
     bulkFetchCancelledRef.current = false
     bulkFetchAbortRef.current = new AbortController()
     setBulkFetchRunning(true)
@@ -134,7 +139,7 @@ function AppMain({ role, onLogout }){
       setBulkFetchProgress({ done: i, total: pendingItems.length })
       const it = pendingItems[i]
       try{
-        const res = await fetchPreviewCandidates(it.id, it.link, { signal: bulkFetchAbortRef.current.signal })
+        const res = await fetchPreviewCandidates(it.id, it.link, { force_method: forceMethodParam, signal: bulkFetchAbortRef.current.signal })
         if(bulkFetchCancelledRef.current) break  // cancelled while this request was in flight — discard its result
         const body = res.body || {}
         if(res.ok && body.status === 'saved'){
