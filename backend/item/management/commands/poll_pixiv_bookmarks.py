@@ -211,7 +211,13 @@ class Command(BaseCommand):
     @staticmethod
     def _fetch_item(item: Item, url: str) -> bool:
         try:
-            response = _call_fetch_and_save_preview(item.pk, {'url': url})
+            # Pixiv's own og:image (what the plain HTML-scrape default
+            # reads) is always the small square1200 thumbnail, never the
+            # original -- see the identical fix/reasoning in
+            # ScrollList.jsx's per-item fetch-method default. This whole
+            # command only ever fetches pixiv.net links, so there's no
+            # domain check needed here the way there is on the frontend.
+            response = _call_fetch_and_save_preview(item.pk, {'url': url, 'force_method': 'playwright'})
             return 200 <= response.status_code < 300
         except Exception:
             logger.exception('poll_pixiv_bookmarks: fetch failed for item %s (%s)', item.pk, url)
