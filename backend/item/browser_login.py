@@ -219,3 +219,20 @@ def cancel_login(platform: str):
     """Closes the login window without capturing anything — used when the
     user gives up, or opened the wrong platform's window."""
     _call('cancel', platform, timeout=15)
+
+
+def shutdown():
+    """Closes any open login browser and stops the worker thread — called
+    when the whole app is quitting (see exe/launcher.py's window-closing
+    handler) so a login window left open doesn't linger as an orphaned
+    Chromium process after the app itself is gone (child processes aren't
+    killed just because their parent exited). A no-op if the worker was
+    never even started (nothing was ever opened this session)."""
+    with _worker_lock:
+        started = _worker_started
+    if not started:
+        return
+    try:
+        _call('shutdown', timeout=10)
+    except Exception:
+        logger.exception('browser_login.shutdown failed')

@@ -203,6 +203,15 @@ def _set_status(window, text):
         pass
 
 
+# Set by the window-closed handler below (see webview.start() at the
+# bottom of this file) so every poller thread's sleep wakes up immediately
+# instead of finishing out however many minutes are left on its current
+# interval -- closing the app window is meant to actually stop background
+# work, not leave it ticking away invisibly with no window to show for it
+# (the exact "ghost task" this whole mechanism exists to prevent).
+_shutdown_event = threading.Event()
+
+
 def _poller_loop(platform, command):
     """In-process replacement for docker-compose's separate `poller`
     container (poller_entrypoint.sh -> manage.py poll_twitter_updates).
@@ -223,11 +232,21 @@ def _poller_loop(platform, command):
     responsibility, and is re-read from PollerSettings every cycle (not
     cached at thread start) so a change made through the settings panel
     takes effect after the current tick, no restart needed.
+
+    Stops as soon as _shutdown_event is set (checked both before starting
+    a new tick and via the sleep below, so at most one tick still in
+    flight ever runs after the window closes, never a fresh one) -- each
+    platform's own resume/poll-state is DB-persisted per tick already
+    (TwitterPollState/PixivPollState/PoipikuPollState and friends), so
+    stopping between ticks, however abruptly, is exactly as safe as the
+    normal steady-state gap between two ticks always already was; the
+    next launch's loop just picks the resume state back up and continues
+    from there, no explicit "save where we stopped" step needed.
     """
     from django.core.management import call_command
     from item.models import PollerSettings
 
-    while True:
+    while not _shutdown_event.is_set():
         try:
             call_command(command, once=True)
         except Exception:
@@ -236,7 +255,12 @@ def _poller_loop(platform, command):
             interval = PollerSettings.objects.get(platform=platform).interval_seconds
         except PollerSettings.DoesNotExist:
             interval = 360
-        time.sleep(interval)
+        # Event.wait(timeout) returns True (immediately, if already set)
+        # instead of blindly sleeping the full interval -- the difference
+        # between "the app quits within a second" and "within up to
+        # several minutes" of the window closing.
+        if _shutdown_event.wait(interval):
+            return
 
 
 def _start_backend(window):
@@ -361,6 +385,44 @@ def _run_training_mode():
         sys.exit(1)
 
 
+def _on_window_closed():
+    """Fires once the pywebview window is actually gone. Closing the
+    window used to be assumed equivalent to the process exiting outright
+    (the poller/server threads are daemons, so in principle they don't
+    keep the interpreter alive on their own) -- but that assumption is
+    exactly what let a poller thread (or, worse, an actual OS child
+    process -- a browser_login.py login window left open counts as one;
+    child processes on Windows are NOT killed just because their parent
+    exited) keep running invisibly after the window closed, doing real
+    work with no UI left to show for it. This makes shutdown explicit
+    instead of assumed:
+      1. Signal every _poller_loop to stop at its next wake-up (near-
+         immediate, not "whenever its current interval happens to elapse"
+         -- see _shutdown_event).
+      2. Best-effort close any browser_login.py login window still open
+         (a real, separate Chromium process this app launched).
+      3. Force the process to actually exit shortly after, in case
+         webview.start() itself doesn't return promptly on this platform/
+         backend for some other reason -- os._exit() skips normal Python
+         interpreter teardown on purpose: there is nothing left needing a
+         graceful shutdown by this point, and the whole point here is an
+         unconditional guarantee that nothing survives the window closing.
+    """
+    _shutdown_event.set()
+    try:
+        from item import browser_login
+
+        browser_login.shutdown()
+    except Exception:
+        logging.getLogger(__name__).exception('browser_login.shutdown failed during app close')
+
+    def _force_exit_soon():
+        time.sleep(3)
+        os._exit(0)
+
+    threading.Thread(target=_force_exit_soon, daemon=True).start()
+
+
 if __name__ == '__main__':
     if IS_TRAINING_MODE:
         _run_training_mode()
@@ -368,7 +430,12 @@ if __name__ == '__main__':
         import webview  # noqa: E402
 
         window = webview.create_window('fanart_viewer', html=_LOADING_HTML, width=1280, height=860)
+        window.events.closed += _on_window_closed
         webview.start(_start_backend, args=(window,))
-        # webview.start() blocks until the window is closed; both background
-        # threads started in _start_backend are daemons, so returning here
-        # ends the process — no separate shutdown step needed.
+        # webview.start() blocks until the window is closed. It returning
+        # here should end the process on its own (every background thread
+        # started in _start_backend is a daemon) -- but _on_window_closed
+        # above (fired by pywebview itself, not this line) no longer just
+        # trusts that: it explicitly stops the pollers and force-exits
+        # shortly after, so this line finishing (or not) doesn't matter
+        # either way.
