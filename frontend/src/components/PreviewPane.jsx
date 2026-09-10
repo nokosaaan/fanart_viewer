@@ -478,11 +478,21 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   </a>
                   {!readOnly && (
                     <div style={{marginTop:12}}>
-                      <button className="btn" style={{padding:'7px 10px', lineHeight:1}} title="Delete this preview" onClick={deleteCurrentPreview} disabled={deleting}>
-                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M4 6h16"/><path d="M4 6c0 2 1 3 3 3"/><path d="M20 6c0 2-1 3-3 3"/><line x1="12" y1="6" x2="12" y2="20"/></svg>}
+                      <button className="btn" style={{padding:'7px 10px', lineHeight:1, position:'relative'}} title="Delete this preview (only this one image)" onClick={deleteCurrentPreview} disabled={deleting}>
+                        {deleting ? '…' : (
+                          <>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>
+                            {/* "1" badge distinguishes this from "Clear all previews" below — same
+                                trash-can glyph otherwise, so the number is the only thing telling
+                                "delete just this one image" and "delete every image" apart. */}
+                            <span style={{position:'absolute', top:-4, right:-4, background:'#3b82f6', color:'#fff',
+                              borderRadius:'50%', width:14, height:14, fontSize:10, lineHeight:'14px',
+                              textAlign:'center', fontWeight:700}}>1</span>
+                          </>
+                        )}
                       </button>
                       <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Clear all previews" onClick={clearAllPreviews} disabled={deleting}>
-                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M4 6h16"/><path d="M4 6c0 2 1 3 3 3"/><path d="M20 6c0 2-1 3-3 3"/><line x1="12" y1="6" x2="12" y2="20"/></svg>}
+                        {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>}
                       </button>
                     </div>
                   )}

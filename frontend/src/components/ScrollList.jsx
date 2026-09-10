@@ -397,7 +397,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
             alert('Previews cleared.')
           }catch(e){ console.error(e); alert('Failed to clear previews') }
         }}>
-          <svg width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M15 4l-3 3-2.5-.5L3 13l3 3 1-1 1 1 3-3-.5-2.5 3-3z"/><line x1="6" y1="16" x2="4" y2="18"/><line x1="8" y1="18" x2="6" y2="20"/><line x1="10" y1="17" x2="8" y2="19"/></svg>
+          <svg width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M4 6h16"/><path d="M4 6c0 2 1 3 3 3"/><path d="M20 6c0 2-1 3-3 3"/><line x1="12" y1="6" x2="12" y2="20"/></svg>
         </button>}
         {!readOnly && <>
           <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff', padding:'7px 10px', lineHeight:1}} title="Delete item" onClick={async ()=>{
