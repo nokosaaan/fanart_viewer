@@ -116,7 +116,7 @@ import time
 from collections import defaultdict
 
 import numpy as np
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from item.models import Item, CharacterAliasGroup
 from item import tagger
@@ -398,8 +398,15 @@ class Command(BaseCommand):
             from sklearn.model_selection import train_test_split
             from sklearn.metrics import classification_report
         except ImportError as e:
-            self.stderr.write(self.style.ERROR(f'scikit-learn/joblib not available: {e}'))
-            return
+            # raise, not self.stderr.write(...); return -- this command runs
+            # as a subprocess the GUI panel (see item/classifier_training.py)
+            # only learns the outcome of via its exit code; a bare `return`
+            # here exits 0 (success) even though nothing was actually
+            # trained, which is exactly what made a failed run (e.g.
+            # --backend canary with timm not installed) show as "training
+            # completed successfully" in the app. Same reasoning applies to
+            # every other early-abort `return` in this method below.
+            raise CommandError(f'scikit-learn/joblib not available: {e}')
 
         classifier_choice = options['classifier']
 
@@ -425,32 +432,28 @@ class Command(BaseCommand):
         feature_source = options['feature_source']
         tagger_backend = 'timm' if backend_choice == 'canary' else 'onnx'
         if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
-            self.stderr.write(self.style.ERROR(
+            raise CommandError(
                 "--backend canary requires the 'timm' backend, which isn't installed on this server "
                 '(see requirements-timm.txt / the INSTALL_TIMM_TAGGER build arg).'
-            ))
-            return
+            )
         if feature_source == 'embedding' and backend_choice != 'canary':
-            self.stderr.write(self.style.ERROR('--feature-source embedding requires --backend canary.'))
-            return
+            raise CommandError('--feature-source embedding requires --backend canary.')
         if classifier_choice == 'metric_learning' and not _have_torch():
-            self.stderr.write(self.style.ERROR(
+            raise CommandError(
                 "--classifier metric_learning requires the optional 'torch' dependency "
                 '(see requirements-timm.txt / the INSTALL_TIMM_TAGGER build arg), which is not installed.'
-            ))
-            return
+            )
 
         general_tag_names = None
         if options['use_cache']:
             self.stdout.write(f"Loading cached features from {options['use_cache']}...")
             cache = joblib.load(options['use_cache'])
             if cache.get('backend') != tagger_backend or cache.get('feature_source', 'tags') != feature_source:
-                self.stderr.write(self.style.ERROR(
+                raise CommandError(
                     f"Cache was extracted with backend={cache.get('backend')!r}/"
                     f"feature_source={cache.get('feature_source', 'tags')!r}, but backend={tagger_backend!r}/"
                     f"feature_source={feature_source!r} was requested — features aren't compatible."
-                ))
-                return
+                )
             raw_rows = cache['rows']  # [(item_id, character, feature_vector), ...]
             general_tag_names = cache['general_tag_names']
             self.stdout.write(f'Loaded {len(raw_rows)} cached (item, character, feature) rows.\n')
@@ -459,7 +462,11 @@ class Command(BaseCommand):
                 min_images, tagger_backend, feature_source, options['max_images_per_character'],
             )
             if raw_rows is None:
-                return
+                # _extract_features already wrote the specific reason via
+                # self.stderr before returning None -- this just needs to
+                # turn that into a nonzero exit (see the ImportError catch
+                # above for why a plain `return` isn't enough).
+                raise CommandError('特徴抽出に失敗しました(詳細は上記のログを確認してください)。')
             default_cache_name = (
                 f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
                 else f'character_features_{backend_choice}_{feature_source}.joblib'
@@ -508,11 +515,10 @@ class Command(BaseCommand):
             )
         eligible = {c: rows for c, rows in by_char.items() if len(rows) >= min_images}
         if len(eligible) < 2:
-            self.stderr.write(self.style.ERROR(
+            raise CommandError(
                 f'Only {len(eligible)} character(s) have >= {min_images} images after applying --exclude — '
                 'need at least 2 distinct classes to train a classifier.'
-            ))
-            return
+            )
 
         self.stdout.write(f'{len(eligible)} characters included after filtering (>= {min_images} images, '
                            f'excluding {sorted(exclude) or "none"}):')
