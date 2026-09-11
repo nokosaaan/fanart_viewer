@@ -298,6 +298,10 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     // (see backend item/views.py's _cross_boost_title_candidates/_cross_
     // boost_character_candidates)。
     character_group: 'キャラ推論から連動', title_group: 'タイトル推論から連動',
+    // 投稿文(description)を英訳してDanbooruで検索し、ヒットしたタグを
+    // キャラ/タイトルのリンク表で本アプリの表記に変換したもの
+    // (see backend item/danbooru_lookup.py's match_description_to_danbooru)。
+    danbooru_description: '投稿文の英訳+Danbooru照合',
   }
   const MATCH_METHOD_LABELS = { direct: '既存表記と直接一致', danbooru_link: 'Danbooruリンク経由で翻訳' }
 

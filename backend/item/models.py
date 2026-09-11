@@ -370,6 +370,37 @@ class DanbooruAliasCache(models.Model):
         return f"{self.hashtag_norm} -> {self.resolved_character_name or '(no match)'}"
 
 
+class DanbooruDescriptionLinkCache(models.Model):
+    """Caches item.danbooru_lookup.match_description_to_danbooru's result
+    for one Item.description -- translating a post's own caption to
+    English and searching Danbooru for a matching title/character (see
+    that function's own docstring) makes one or more real HTTP requests
+    (translation + Danbooru search), so this is keyed by a hash of the
+    ORIGINAL (untranslated) description text, exactly like DanbooruAlias
+    Cache/DanbooruTitleCache are keyed by their own respective inputs —
+    same "even a no-match result is worth caching" reasoning: most
+    descriptions won't happen to mention a recognizable title/character
+    by name at all, and re-translating + re-querying Danbooru for the
+    same never-matching text on every suggestion request would be pure
+    waste.
+
+    `matched_title_name`/`matched_character_names` are this app's OWN
+    vocabulary (via TitleDanbooruLink/CharacterDanbooruLink's reverse
+    lookup — Danbooru tag -> this app's own label), not raw Danbooru tag
+    strings — a caller boosting a suggestion score needs a value that
+    could actually show up as a title/character elsewhere in this app,
+    not Danbooru's own tag spelling.
+    """
+    description_hash = models.CharField(max_length=64, unique=True)
+    translated_text = models.TextField(null=True, blank=True)
+    matched_title_name = models.CharField(max_length=255, null=True, blank=True)
+    matched_character_names = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.description_hash[:12]}... -> title={self.matched_title_name!r}, characters={self.matched_character_names!r}"
+
+
 class CharacterDanbooruLink(models.Model):
     """Links this app's own character name (Japanese, as stored in
     Item.characters) to the matching Danbooru character tag (e.g.

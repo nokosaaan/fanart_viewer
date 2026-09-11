@@ -720,3 +720,170 @@ def _query_danbooru(tag: str) -> str | None:
 
     top_tag, _count = counter.most_common(1)[0]
     return top_tag.replace("_", " ")
+
+
+def translate_description(text: str) -> str | None:
+    """Translates `text` (an Item.description/caption, any source
+    language) to English via Google Translate's public web endpoint (see
+    the `deep-translator` package in requirements.txt — no API key, same
+    no-paid-API posture as every other external lookup in this module).
+    Only ever called behind the same `external` opt-in every other
+    Danbooru-facing function here already requires (see
+    match_description_to_danbooru, the sole caller).
+
+    Returns None for blank input or any failure (network error, the
+    translation library itself raising, an empty/whitespace-only result)
+    — never raises; a translation outage should mean this source
+    contributes nothing to a suggestion, not break the whole request.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        from deep_translator import GoogleTranslator
+
+        # Google's own endpoint caps a single request well under this;
+        # a real post caption is never remotely this long, but truncate
+        # defensively rather than let an unusually long description fail
+        # the request outright.
+        translated = GoogleTranslator(source="auto", target="en").translate(text[:4000])
+    except Exception as e:
+        logger.warning("danbooru_lookup.translate_description: failed: %s", e)
+        return None
+    translated = (translated or "").strip()
+    return translated or None
+
+
+def _extract_proper_noun_phrases(translated_text: str) -> list[str]:
+    """Best-effort named-entity-ish candidate phrases from already-
+    translated English text: maximal runs of consecutive capitalized
+    words (e.g. "Blue Archive", "Hatsune Miku" out of "... featuring
+    Hatsune Miku from Blue Archive ..."). Titles and character names are
+    almost always proper nouns, and this sidesteps needing a real NLP
+    dependency just to find candidates worth checking against Danbooru.
+
+    English also capitalizes a sentence's first word regardless of
+    properness, so an occasional ordinary word slips into the candidate
+    list this way — harmless, since every candidate still has to
+    independently resolve to a REAL Danbooru tag (via autocomplete_tags)
+    AND pass the caller's own category filter before it can contribute
+    anything; a stray non-proper-noun candidate just fails to match
+    anything and is silently dropped.
+
+    Returns longest-first, case-insensitively deduplicated, capped at 10
+    entries (a long caption could otherwise translate into dozens of
+    candidate phrases, each an extra Danbooru request downstream).
+    """
+    import re
+
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", translated_text or "")
+    phrases = []
+    current = []
+    for w in words:
+        if w[:1].isupper():
+            current.append(w)
+        else:
+            if current:
+                phrases.append(" ".join(current))
+            current = []
+    if current:
+        phrases.append(" ".join(current))
+
+    seen = set()
+    ordered = []
+    for p in sorted(set(phrases), key=len, reverse=True):
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(p)
+    return ordered[:10]
+
+
+def match_description_to_danbooru(description: str) -> dict:
+    """Item.description (any language) -> {'title_name': str|None,
+    'character_names': [str, ...]} in THIS APP'S OWN vocabulary --
+    translates the text to English (translate_description), extracts
+    candidate proper-noun phrases (_extract_proper_noun_phrases), checks
+    each against Danbooru's own tag autocomplete (autocomplete_tags),
+    and reverse-looks-up any copyright(category=3)/character(category=4)
+    hit against TitleDanbooruLink/CharacterDanbooruLink -- those tables
+    map THIS app's own label -> Danbooru tag, so this is used in reverse
+    (Danbooru tag -> this app's own label). A hit with no corresponding
+    link row yet contributes nothing: this never invents a new link, it
+    only reuses ones a human or the automated resolver already confirmed
+    via the character-link/title-link review UI.
+
+    Cached in DanbooruDescriptionLinkCache (including a no-match result)
+    keyed by the RAW description text -- most captions won't happen to
+    name a recognizable title/character at all, and re-translating +
+    re-querying Danbooru for the same never-matching text on every
+    suggestion request for the same item would be pure waste.
+
+    Returns {'title_name': None, 'character_names': []} for a blank
+    description, a translation failure, or no resolvable match -- never
+    raises (this feeds into _collect_candidates as one more source among
+    several, not something a single bad description should ever be able
+    to break the whole suggestion request over).
+    """
+    import hashlib
+
+    from .models import CharacterDanbooruLink, DanbooruDescriptionLinkCache, TitleDanbooruLink
+
+    text = (description or "").strip()
+    empty_result = {"title_name": None, "character_names": []}
+    if not text:
+        return empty_result
+
+    description_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    cached = DanbooruDescriptionLinkCache.objects.filter(description_hash=description_hash).first()
+    if cached is not None:
+        return {
+            "title_name": cached.matched_title_name,
+            "character_names": list(cached.matched_character_names or []),
+        }
+
+    translated = translate_description(text)
+    title_name = None
+    character_names = []
+    if translated:
+        title_tag = None
+        character_tags = []
+        for phrase in _extract_proper_noun_phrases(translated):
+            candidates = autocomplete_tags(phrase, limit=5)
+            if title_tag is None:
+                copyright_hits = sorted(
+                    (c for c in candidates if c.get("category") == 3),
+                    key=lambda c: -(c.get("post_count") or 0),
+                )
+                if copyright_hits:
+                    title_tag = copyright_hits[0]["value"]
+            character_hits = sorted(
+                (c for c in candidates if c.get("category") == 4),
+                key=lambda c: -(c.get("post_count") or 0),
+            )
+            if character_hits:
+                character_tags.append(character_hits[0]["value"])
+            # Enough signal gathered -- stop spending further Danbooru
+            # requests on the remaining (shorter, less specific) phrases.
+            if title_tag and len(character_tags) >= 3:
+                break
+
+        if title_tag:
+            link = TitleDanbooruLink.objects.filter(danbooru_tag=title_tag).first()
+            if link:
+                title_name = link.title_name
+        for tag in character_tags:
+            link = CharacterDanbooruLink.objects.filter(danbooru_tag=tag).first()
+            if link and link.character_name not in character_names:
+                character_names.append(link.character_name)
+
+    DanbooruDescriptionLinkCache.objects.update_or_create(
+        description_hash=description_hash,
+        defaults={
+            "translated_text": translated,
+            "matched_title_name": title_name,
+            "matched_character_names": character_names,
+        },
+    )
+    return {"title_name": title_name, "character_names": character_names}

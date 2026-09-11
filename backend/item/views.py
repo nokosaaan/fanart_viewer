@@ -1235,6 +1235,19 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
             for c in hashtag_hits['characters']:
                 char_c.append({'value': c, 'source': 'hashtag', 'confidence': 1.0})
 
+    # Translate the post's own caption to English and search Danbooru for
+    # a matching title/character (see danbooru_lookup.match_description_
+    # to_danbooru) -- an external network call (translation + Danbooru
+    # both), so gated behind the same `external` opt-in as every other
+    # Danbooru-facing source below, not run unconditionally.
+    if external and (want_titles or want_characters) and (item.description or '').strip():
+        desc_match = danbooru_lookup.match_description_to_danbooru(item.description)
+        if want_titles and desc_match['title_name']:
+            title_c.append({'value': desc_match['title_name'], 'source': 'danbooru_description', 'confidence': 1.0})
+        if want_characters:
+            for c in desc_match['character_names']:
+                char_c.append({'value': c, 'source': 'danbooru_description', 'confidence': 1.0})
+
     if want_titles or want_characters or want_situation:
         db = _suggest_from_existing_data(item)
         if db:
@@ -1381,6 +1394,17 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
     # danbooru's own untested-by-the-grid weights above.
     'character_group': 1.5,
     'title_group': 1.5,
+    # Translated-description -> Danbooru search -> link-table reverse
+    # lookup (see danbooru_lookup.match_description_to_danbooru) — weighted
+    # the same as 'danbooru' (a comparable "external Danbooru confirmation,
+    # then resolved through an already-reviewed link table" signal), even
+    # though it goes through more steps (translation quality, a proper-
+    # noun-phrase heuristic, fuzzy autocomplete matching) than 'danbooru'
+    # itself does — every one of those steps still has to land on a REAL
+    # Danbooru tag with an existing link row before this contributes
+    # anything at all, so a wrong guess doesn't silently sneak through as
+    # if it were as reliable as a hashtag.
+    'danbooru_description': 3.0,
 }
 
 # A same-request character/title combined score is capped at this before

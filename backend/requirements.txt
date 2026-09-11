@@ -72,3 +72,12 @@ matplotlib
 # tags. Pure Python + a small built-in kana table -- no ML model, no native
 # extension, trivial on the Pi4 deployment target.
 pykakasi
+# Item.description -> English translation, used only by danbooru_lookup.
+# translate_description (gated behind the same `external` opt-in flag as
+# every other Danbooru network call in this app -- see that function's
+# own docstring) so a post's own caption text can be matched against
+# Danbooru's tag data even when it's written in Japanese. Pure Python,
+# just wraps Google Translate's public web endpoint over plain requests --
+# no API key, no native extension, same "no paid API" posture as the rest
+# of this app's external lookups.
+deep-translator
