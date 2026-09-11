@@ -264,7 +264,20 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
             return (
               <div key={l.character_name} style={{ border: '1px solid #334155', borderRadius: 6, background: '#1e293b', marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>{l.character_name}</span>
+                  {/* readOnly input (not a plain span) so the name can be
+                      click-dragged to select/copy, same as the app's URL
+                      box's own read-only behavior — a plain span's text is
+                      technically selectable too, but an input is what
+                      actually behaves reliably for that without a
+                      surrounding row's onClick handlers interfering. */}
+                  <input
+                    type="text" readOnly value={l.character_name}
+                    style={{
+                      fontSize: 13, color: '#f1f5f9', fontWeight: 600,
+                      background: 'transparent', border: 'none', outline: 'none', padding: 0,
+                      width: `${l.character_name.length + 2}ch`, cursor: 'text',
+                    }}
+                  />
                   {l.group_name && (
                     <span style={{ fontSize: 11, color: '#94a3b8', background: '#0f172a', border: '1px solid #334155', borderRadius: 4, padding: '2px 6px' }}>
                       {l.parent_group_name ? `${l.parent_group_name} / ${l.group_name}` : l.group_name}

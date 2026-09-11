@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useRef} from 'react'
+import React, {useEffect, useState, useRef, useMemo} from 'react'
 import { notify } from '../lib/crossWindowSync'
 import { getPlatformIcon } from '../lib/platformIcon'
 
@@ -8,7 +8,26 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [items, setItems] = useState([])
   const allLoadedRef = useRef([]) // full unfiltered set fetched from API
   const [loading, setLoading] = useState(false)
-  const [selectedIndex, setSelectedIndex] = useState(null)
+  // Which item's enlarged view is open, tracked by STABLE id rather than a
+  // plain positional index into `items` — `items` itself gets fully
+  // replaced after basically any preview mutation (delete/clear -- see the
+  // item-preview-updated listener and deleteCurrentPreview/clearAllPreviews
+  // below, both of which trigger a full reload), and a positional index
+  // into a freshly-replaced array can point at the wrong item, or (worse)
+  // silently render nothing once the array shrinks, closing the enlarged
+  // view entirely right when the user was mid-review of exactly that item.
+  // Deriving `selectedIndex` by re-locating this id in the CURRENT `items`
+  // on every render keeps the same item open across any reload, and only
+  // actually closes when that item is genuinely no longer present (e.g.
+  // its last preview was just deleted, so it dropped out of this pane's
+  // own has_preview-filtered list) -- which is the one case where closing
+  // is actually correct.
+  const [selectedItemId, setSelectedItemId] = useState(null)
+  const selectedIndex = useMemo(() => {
+    if (selectedItemId == null) return null
+    const idx = items.findIndex(it => it && it.id === selectedItemId)
+    return idx === -1 ? null : idx
+  }, [items, selectedItemId])
   // Guards the initialItemId auto-jump below so it fires exactly once per
   // "open" — without it, a later `items` refresh (lazy pagination, an
   // item-preview-updated resync) would re-run the jump and yank the user
@@ -133,7 +152,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   // found, at the cost of the old "fast path" partial-load optimization.
   useEffect(()=>{
     if(!open) return
-    setSelectedIndex(null)
+    setSelectedItemId(null)
     setPanePageIndex(0)
     loadItems('/api/items/?page_size=1000', true, Infinity)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,7 +174,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     if(idx !== -1){
       jumpedItemIdRef.current = initialItemId
       setPanePageIndex(Math.floor(idx / PANE_PAGE_SIZE))
-      setSelectedIndex(idx)
+      setSelectedItemId(initialItemId)
     }
   }, [open, initialItemId, items])
 
@@ -179,7 +198,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   useEffect(()=>{
     function onKey(e){
       if(selectedIndex===null) return
-      if(e.key==='Escape') setSelectedIndex(null)
+      if(e.key==='Escape') setSelectedItemId(null)
       // Up/Down move to the prev/next ITEM, matching the mouse wheel below
       // (deltaY drives next()/prev()) — Left/Right instead page through
       // THIS item's own images. Keeping both input methods on the same
@@ -218,7 +237,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }, [selectedIndex, items])
 
   function openLarge(i){
-    setSelectedIndex(i)
+    const it = items[i]
+    if(it) setSelectedItemId(it.id)
   }
 
   // when selectedIndex changes, fetch the preview list for that item
@@ -376,12 +396,14 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
 
   function prev(){
     if(selectedIndex===null) return
-    setSelectedIndex((selectedIndex - 1 + items.length) % items.length)
+    const it = items[(selectedIndex - 1 + items.length) % items.length]
+    if(it) setSelectedItemId(it.id)
   }
 
   function next(){
     if(selectedIndex===null) return
-    setSelectedIndex((selectedIndex + 1) % items.length)
+    const it = items[(selectedIndex + 1) % items.length]
+    if(it) setSelectedItemId(it.id)
   }
 
   return (
@@ -438,14 +460,14 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       </div>
 
       {selectedIndex!==null && items[selectedIndex] && (
-        <div className="preview-modal-backdrop" onClick={()=>setSelectedIndex(null)}>
+        <div className="preview-modal-backdrop" onClick={()=>setSelectedItemId(null)}>
           <div className="preview-modal">
               {/* Left/right full-height edge zones for consistent click areas */}
             <div className="modal-edge modal-edge-left" onClick={e=>{e.stopPropagation(); prev()}} aria-label="Previous" />
             <div className="modal-edge modal-edge-right" onClick={e=>{e.stopPropagation(); next()}} aria-label="Next" />
 
               {/* Close button (top-right) */}
-              <button className="modal-close" onClick={()=>setSelectedIndex(null)} aria-label="Close">✕</button>
+              <button className="modal-close" onClick={()=>setSelectedItemId(null)} aria-label="Close">✕</button>
 
             <div className="modal-content" onClick={e=>e.stopPropagation()}>
               {(() => {
@@ -510,7 +532,16 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 )}
                 <div className="modal-timeline">
                   {previews && previews.length>0 ? previews.map(p=> (
-                    <img key={p.index} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
+                    // key is the preview's own stable DB id, not its
+                    // position-based `index` -- deleting one image shifts
+                    // every later one's index down (see item/views.py's
+                    // preview_delete_by_id, which reindexes the remainder
+                    // contiguously), so a positional key made React keep
+                    // reusing DOM nodes by their OLD slot and only ever
+                    // drop the last one, regardless of which image was
+                    // actually deleted -- the thumbnail that visually
+                    // disappeared was almost never the one just removed.
+                    <img key={p.id} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
                   )) : (
                     <div className="timeline-empty">No previews</div>
                   )}

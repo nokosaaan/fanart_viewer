@@ -41,7 +41,19 @@ export default function CharacterGroupManager({ onClose }) {
     ])
     const list = Array.isArray(gr) ? gr : (gr.results || [])
     setGroups(list)
-    setCollapsed(Object.fromEntries(list.map(g => [g.id, true])))
+    // Only default NEWLY-seen groups to collapsed, preserving whatever the
+    // user already had expanded/collapsed for groups seen before — load()
+    // re-runs after every single action (moving a character, renaming,
+    // adding a title, ...), and unconditionally resetting the whole tree
+    // shut here used to force re-expanding everything just to continue
+    // reviewing where you left off after one move.
+    setCollapsed(prev => {
+      const next = { ...prev }
+      for (const g of list) {
+        if (!(g.id in next)) next[g.id] = true
+      }
+      return next
+    })
     setAllChars(Array.isArray(ch) ? ch : [])
     setAllTitles(Array.isArray(ti) ? ti : [])
   }, [])

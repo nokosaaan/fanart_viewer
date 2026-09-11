@@ -66,7 +66,7 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .chip-dropdown{ margin-top:8px; background:#fff; border:1px solid #e6e6f0; box-shadow:0 6px 14px rgba(16,24,40,0.06); border-radius:8px; padding:8px }
 .chip-row{ padding:6px 4px; border-bottom:1px dashed #f0f0f0 }
 .chip-row:last-child{ border-bottom:0 }
-.artist-chip{ background:#fff; border:1px solid #eef2f6; padding:8px 10px; border-radius:8px }
+.artist-chip{ background:#fff; border:1px solid #eef2f6; padding:8px 10px; border-radius:8px; font:inherit; color:inherit; width:100%; box-sizing:border-box; cursor:text }
 
 /* Situation chips */
 .situation-chip{ display:inline-block; padding:6px 10px; border-radius:999px; color:#fff; font-weight:600; font-size:12px }

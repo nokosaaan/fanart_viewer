@@ -261,7 +261,12 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter }){
 
         <div className="col artist-col">
           <div className="col-header">Artist</div>
-          <div className="artist-chip">{artistState || '—'}</div>
+          {/* readOnly input (not a plain div) so the artist name can be
+              click-dragged to select/copy exactly like the URL box above —
+              a plain div's text is technically selectable too, but an
+              input is what actually behaves reliably for click-drag
+              selection without a surrounding onClick swallowing the drag. */}
+          <input type="text" readOnly value={artistState || '—'} className="artist-chip" />
         </div>
 
         <div className="col tags-col">
