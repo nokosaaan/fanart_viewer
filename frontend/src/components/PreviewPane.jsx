@@ -119,29 +119,25 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     }
   }
 
+  // Runs on open AND on every filteredItems change (search/situation filter
+  // toggled, title/preview-missing toggled, etc. — anything App.jsx's
+  // `filtered` memo depends on) while the pane is open. This used to only
+  // RE-FILTER whatever had already been loaded (allLoadedRef.current) —
+  // the initial open only fetched the first page_size=1000 items up front
+  // (newest-first; the rest loaded lazily as the user scrolled THIS pane),
+  // so switching to a filter matching mostly-older items (e.g. a less
+  // common situation than whatever's newest) could show "No previews
+  // available" even though matching items with previews genuinely exist,
+  // simply because this pane had never fetched them yet. A full reload
+  // (following every `next` link) guarantees every match is actually
+  // found, at the cost of the old "fast path" partial-load optimization.
   useEffect(()=>{
     if(!open) return
-    setPanePageIndex(0)
-    // Fast path: only the first chunk up front; the rest loads lazily as the
-    // user scrolls (see the onScroll effect below), instead of chasing every
-    // `next` link before the timeline can show anything.
-    loadItems('/api/items/?page_size=1000', true, 1)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-
-  // Re-apply filter when filteredItems changes (e.g. search/situation filter toggled while pane is open)
-  useEffect(()=>{
-    if(!open) return
-    let have = allLoadedRef.current || []
-    if(Array.isArray(filteredItems) && filteredItems.length > 0){
-      const allowedIds = new Set(filteredItems.map(it => it.id))
-      have = have.filter(it => allowedIds.has(it.id))
-    }
-    setItems(have)
     setSelectedIndex(null)
     setPanePageIndex(0)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredItems])
+    loadItems('/api/items/?page_size=1000', true, Infinity)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, filteredItems])
 
   // Jump straight to a specific item's enlarged view — set when the pane is
   // opened via ScrollList's preview thumbnail (see App.jsx's
