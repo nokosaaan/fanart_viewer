@@ -15,6 +15,12 @@ const TRUST_THRESHOLD = 0.6
 
 function classify(link) {
   if (!link.attempted) return 'unattempted'
+  // A row a tag collision demoted (danbooru_tag cleared) whose actual fix
+  // was renaming/merging this character's own name to match the tag's
+  // rightful owner has no tag to link, by design — conflict_resolved is
+  // the human's explicit "I've handled this" override, so it counts as
+  // linked regardless (see CharacterDanbooruLink.conflict_resolved).
+  if (link.conflict_resolved) return 'linked'
   if (!link.danbooru_tag) return 'unresolved'
   if (link.resolved_via === 'title_roster' && (link.match_score ?? 0) < TRUST_THRESHOLD) return 'low_confidence'
   return 'linked'
@@ -53,6 +59,7 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState(null)   // character_name whose debug panel is open
   const [resolving, setResolving] = useState(null) // character_name currently mid-resolve
+  const [markingResolved, setMarkingResolved] = useState(null) // character_name currently mid mark_conflict_resolved
   const [manualFor, setManualFor] = useState(null) // character_name showing the manual-tag input
   const [manualValue, setManualValue] = useState('')
   const [error, setError] = useState('')
@@ -181,6 +188,24 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
     }
   }
 
+  async function markConflictResolved(name, resolved) {
+    setMarkingResolved(name)
+    setError('')
+    try {
+      const resp = await fetch('/api/character-links/mark_conflict_resolved/', {
+        method: 'POST', headers: HEADERS, credentials: 'same-origin',
+        body: JSON.stringify({ character_name: name, resolved }),
+      })
+      const j = await resp.json().catch(() => ({}))
+      if (!resp.ok) { setError(j.detail || '更新に失敗しました'); return }
+      setLinks(prev => prev.map(l => l.character_name === name ? { ...l, conflict_resolved: j.conflict_resolved } : l))
+    } catch (e) {
+      setError('更新に失敗しました: ' + (e && e.message ? e.message : String(e)))
+    } finally {
+      setMarkingResolved(null)
+    }
+  }
+
   async function submitManual(name, tag) {
     setError('')
     try {
@@ -248,6 +273,12 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
                   {l.danbooru_tag && (
                     <span style={{ fontSize: 12, color: '#86efac' }}>→ {l.danbooru_tag}</span>
                   )}
+                  {l.conflict_resolved && !l.danbooru_tag && (
+                    <span title="タグの衝突でリンクが解除された後、キャラ名の統一(リネーム/マージ)で手動解決済みとしてマークされています"
+                      style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: '#14532d', color: '#86efac' }}>
+                      ✓ 手動解決済み(命名統一)
+                    </span>
+                  )}
                   {cls === 'low_confidence' && (
                     <span title="自動解決の確信度がsuggest_tagsの信頼しきい値(0.6)未満です — 誤りの可能性があります"
                       style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: '#78350f', color: '#fde68a' }}>
@@ -272,6 +303,19 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
                       <button className="btn" onClick={() => submitManual(l.character_name, null)}
                         style={{ fontSize: 11, background: '#7f1d1d', color: '#fecaca' }}>
                         リンク解除
+                      </button>
+                    )}
+                    {l.attempted && !l.danbooru_tag && (
+                      <button
+                        className="btn"
+                        disabled={markingResolved === l.character_name}
+                        onClick={() => markConflictResolved(l.character_name, !l.conflict_resolved)}
+                        title={l.conflict_resolved
+                          ? 'このキャラを再び「未解決」扱いに戻します'
+                          : 'タグの衝突後、キャラ名を統一(リネーム/マージ)して解決済みであることを手動でマークします — Danbooruタグは付きません'}
+                        style={{ fontSize: 11, background: l.conflict_resolved ? '#334155' : '#14532d', color: l.conflict_resolved ? '#f1f5f9' : '#86efac' }}
+                      >
+                        {markingResolved === l.character_name ? '更新中…' : (l.conflict_resolved ? '解決済みを解除' : '✓ 解決済みにする')}
                       </button>
                     )}
                     {l.debug_info && (

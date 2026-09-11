@@ -397,6 +397,16 @@ class CharacterDanbooruLink(models.Model):
     match_score = models.FloatField(null=True, blank=True)
     debug_info = models.JSONField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # Manual override for a row a tag collision left with no danbooru_tag
+    # (see danbooru_lookup.dedupe_tag_collisions) whose real fix was
+    # renaming/merging this character's OWN name in Item.characters/
+    # CharacterGroup to match the winning name, rather than finding it a
+    # different Danbooru tag of its own — there IS no tag to link once
+    # that's done (the name shouldn't even exist separately anymore), so
+    # the row would otherwise sit in the "unresolved" queue forever even
+    # though a human has already fully handled it. CharacterDanbooruLinkManager.
+    # jsx's own classify() treats this the same as a real link once set.
+    conflict_resolved = models.BooleanField(default=False)
 
     class Meta:
         indexes = [models.Index(fields=['danbooru_tag'])]

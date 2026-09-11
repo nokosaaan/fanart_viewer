@@ -3531,8 +3531,44 @@ class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
                 'match_score': link.match_score if link else None,
                 'debug_info': link.debug_info if link else None,
                 'updated_at': link.updated_at if link else None,
+                'conflict_resolved': link.conflict_resolved if link else False,
             })
         return Response(results)
+
+    @action(detail=False, methods=['post'], url_path='mark_conflict_resolved')
+    def mark_conflict_resolved(self, request):
+        """Body: {"character_name": "...", "resolved": true|false (default true)}.
+
+        Manual override for a row danbooru_lookup.dedupe_tag_collisions
+        demoted (danbooru_tag cleared due to a collision with another
+        character's tag) whose actual fix was renaming/merging THIS
+        character's own name elsewhere in the app (Item.characters/
+        CharacterGroup) to match the tag's rightful owner, rather than
+        ever finding it a different Danbooru tag of its own — there is no
+        tag to link once that's done, so the row would otherwise sit in
+        the "unresolved" tab forever despite a human already having fully
+        handled it. See CharacterDanbooruLink.conflict_resolved's own
+        docstring; CharacterDanbooruLinkManager.jsx's classify() treats a
+        row with this set the same as a real link regardless of
+        danbooru_tag.
+        """
+        name = (request.data.get('character_name') or '').strip()
+        if not name:
+            return Response({'detail': 'character_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        resolved = bool(request.data.get('resolved', True))
+
+        link, _created = CharacterDanbooruLink.objects.update_or_create(
+            character_name=name,
+            defaults={'conflict_resolved': resolved},
+        )
+        return Response({
+            'character_name': link.character_name,
+            'danbooru_tag': link.danbooru_tag,
+            'resolved_via': link.resolved_via,
+            'match_score': link.match_score,
+            'debug_info': link.debug_info,
+            'conflict_resolved': link.conflict_resolved,
+        })
 
     @action(detail=False, methods=['post'], url_path='resolve')
     def resolve(self, request):
