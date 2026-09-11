@@ -63,36 +63,34 @@ item.views._suggest_for_item). That integration is a deliberate follow-up
 once this command's holdout accuracy has actually been reviewed.
 
 --include-multi-character (v2 extension): also learns from items with 2+
-confirmed characters, which v1 skipped entirely. Since Item.characters is
-just a flat name list with no per-region label, there's no direct way to
-know which detected person box is which named character — this uses
-self-training (pseudo-labeling) to bridge that gap:
+confirmed characters, which v1 skipped entirely — but ONLY from images a
+human has manually region-labeled (Item.character_regions, via
+RegionLabelQueueManager.jsx/RegionAnnotator.jsx), never from automatic
+person-detection alone.
 
-  1. Fit a "teacher" classifier on single-character images only (exactly
-     v1's process).
-  2. For each multi-character item where the person detector finds EXACTLY
-     as many boxes as the item has confirmed characters (anything else is
-     skipped — an ambiguous box/character count has no reliable
-     assignment), score every (box, candidate character) pair with the
-     teacher's predict_proba, RESTRICTED to just that item's own confirmed
-     characters (never the full class list — the item's cast is already
-     known, this only needs to figure out which box is which member of it).
-  3. Solve the box<->character assignment as a linear sum assignment
-     (scipy) maximizing total confidence, and keep only pairs whose
-     confidence clears --bootstrap-confidence — a low-confidence pairing is
-     as likely to be wrong as right, and a wrong pseudo-label actively
-     teaches the wrong thing.
-  4. Retrain a final classifier on single-character data PLUS the accepted
-     pseudo-labeled crops, but still report holdout accuracy against ONLY
-     the original single-character holdout split (never against
-     pseudo-labeled data) — the whole point is measuring whether the extra
-     (noisier) data helps the model recognize real, unambiguous examples
-     better, not measuring how well it reproduces its own guesses.
-
-This is the same "reuse the existing per-person crop machinery, tag each
-crop independently" strategy tagger.py's suggest_tags() already uses for
-the Danbooru-trained backends (see its docstring) — applied here to
-generate labeled TRAINING data instead of a live suggestion.
+An earlier version of this tried to bridge multi-character items WITHOUT
+manual labels via self-training: automatically detect person boxes, accept
+the item only when the detected box count happened to equal its confirmed
+character count, and pseudo-label each box by asking a "teacher" classifier
+(trained on single-character data) which candidate character it most
+resembles, keeping only pairings above a confidence threshold. This was
+removed as unsound, not just unused: the person detector is the SAME
+detector RegionLabelQueueManager's human reviewers already routinely have
+to correct (wrong/missing/merged boxes) before a region label is trusted
+for training at all — a coincidental box-count match on an unreviewed item
+is not evidence those boxes are correct crops of the right people, it's
+just an unverified guess with no human ever looking at it. And unlike that
+guess, a human-drawn region + label pair already IS a direct, trustworthy
+(box, character) mapping — there is nothing left to infer, so there's
+nothing for a confidence-gated pseudo-labeling step to add. See
+_get_manual_labeled_rows for the actual (much simpler) v2 process: read
+Item.character_regions, resolve each region's label (collapsing a linked
+CharacterAliasGroup to its canonical name; skipping only the one region
+when 2+ unlinked names make it ambiguous — see that method's own
+docstring), and train directly on the crop. An item with 2+ characters and
+no region labels at all simply contributes nothing here — same as v1 skips
+single-character-only, this skips unlabeled-multi-character entirely
+rather than guess.
 
 Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier
@@ -108,9 +106,9 @@ Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
       --use-cache /app/data/tagger/char_features_onnx.joblib --exclude 牢屋敷メンバー,ユキ
 
-  # v2: also bootstrap-learn from multi-character images
+  # v2: also learn from manually region-labeled multi-character images
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --exclude 牢屋敷メンバー --include-multi-character --bootstrap-confidence 0.7
+      --exclude 牢屋敷メンバー --include-multi-character
 """
 import importlib.util
 import os
@@ -378,17 +376,9 @@ class Command(BaseCommand):
                                   'feature extraction entirely and refit straight from these cached '
                                   'features (still applies --exclude/--min-images as filters first).')
         parser.add_argument('--include-multi-character', action='store_true',
-                             help='Also bootstrap-learn from multi-character items via person-detection '
-                                  'crops + self-training (see module docstring). Off by default since it '
-                                  'adds a second, separately-cached extraction pass.')
-        parser.add_argument('--bootstrap-confidence', type=float, default=0.7,
-                             help="Minimum teacher-classifier confidence for a crop<->character pseudo-"
-                                  "label to be accepted (default 0.7 — stricter than the production "
-                                  "0.5 default, since a wrong pseudo-label actively teaches the wrong thing)")
-        parser.add_argument('--max-characters-per-item', type=int, default=6,
-                             help='Skip multi-character items with more confirmed characters than this '
-                                  '(default 6) — a large group shot is unlikely to get a clean 1:1 '
-                                  'person-detection match anyway, and each extra crop costs a tagger pass.')
+                             help='Also learn from multi-character items, but ONLY the ones a human has '
+                                  'manually region-labeled (Item.character_regions — see module docstring). '
+                                  'Off by default since most archives have few or no labeled regions yet.')
         parser.add_argument('--classifier',
                              choices=['logreg', 'mlp', 'nearest_centroid', 'metric_learning'], default='logreg',
                              help="Classifier head to fit on top of the (frozen) features: 'logreg' "
@@ -399,12 +389,6 @@ class Command(BaseCommand):
                                   "'metric_learning' (real gradient-trained metric learning: an ArcFace-style "
                                   "learned embedding projection + margin loss — the literature survey's "
                                   "priority-1 approach; requires torch, see requirements-timm.txt)")
-        parser.add_argument('--multi-feature-cache', type=str, default=None,
-                             help='Where to cache extracted multi-character crop features (raw, before '
-                                  'pseudo-labeling). Default: character_features_multi_<backend>.joblib.')
-        parser.add_argument('--use-multi-cache', type=str, default=None,
-                             help='Path to a previously-saved --multi-feature-cache file — skip person '
-                                  'detection/crop extraction and pseudo-label straight from these.')
 
     def handle(self, *args, **options):
         try:
@@ -541,8 +525,8 @@ class Command(BaseCommand):
         # Train/holdout split — class_weight='balanced' so the smallest
         # included classes aren't drowned out by the largest ones. This
         # holdout is the ONE evaluation ground truth used throughout,
-        # including after --include-multi-character adds bootstrap data —
-        # never evaluated against pseudo-labels.
+        # including after --include-multi-character adds manually-labeled
+        # region data.
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=options['test_size'], random_state=options['random_state'], stratify=y,
         )
@@ -559,49 +543,43 @@ class Command(BaseCommand):
 
         teacher, final_train_acc, final_test_acc = fit_and_report(X_train, y_train, 'single-character only')
         final_clf = teacher
-        used_bootstrap = False
+        used_manual_regions = False
 
         if options['include_multi_character']:
             # Manual region labels (see Item.character_regions, populated via
             # RegionLabelQueueManager.jsx/RegionAnnotator.jsx) are ground
             # truth — a human already said "this box is character X" — so
-            # they skip the teacher-classifier confidence gate entirely
-            # unlike the automatic bootstrap path below. This is the ONLY
-            # way a character that never appears alone (only in CP/MULTIPLE
-            # images) gets any multi-character training data at all: the
-            # bootstrap teacher has never seen such a character, so its
-            # confidence for it is never reliable enough to clear
-            # --bootstrap-confidence on its own.
+            # they're used directly, with no confidence gate or automatic
+            # person-detection step of any kind (see module docstring for
+            # why an earlier automatic-bootstrap approach was removed: it
+            # re-ran the same person detector human reviewers already have
+            # to correct, so a coincidental box-count match proved nothing).
+            # An item with 2+ characters and no region labels at all
+            # contributes nothing here — it's skipped, never guessed at.
             manual_rows = self._get_manual_labeled_rows(tagger_backend, options['feature_source'], general_tag_names)
 
-            multi_rows = self._get_multi_character_rows(options, tagger_backend, general_tag_names)
-            pseudo_rows = self._bootstrap_label(
-                multi_rows, teacher, options['bootstrap_confidence'],
-            )
-
-            combined_extra = manual_rows + pseudo_rows
-            if combined_extra:
-                X_boot = np.stack([f for _c, f in combined_extra])
-                y_boot = np.array([c for c, _f in combined_extra])
-                X_combined = np.concatenate([X_train, X_boot])
-                y_combined = np.concatenate([y_train, y_boot])
+            if manual_rows:
+                X_extra = np.stack([f for _c, f in manual_rows])
+                y_extra = np.array([c for c, _f in manual_rows])
+                X_combined = np.concatenate([X_train, X_extra])
+                y_combined = np.concatenate([y_train, y_extra])
                 self.stdout.write(
-                    f'\nAdding {len(manual_rows)} manually-labeled + {len(pseudo_rows)} bootstrap-labeled '
-                    f'crops to the {len(X_train)} single-character training examples...'
+                    f'\nAdding {len(manual_rows)} manually-labeled crops to the {len(X_train)} '
+                    f'single-character training examples...'
                 )
-                teacher_test_acc = final_test_acc
+                manual_only_test_acc = final_test_acc
                 final_clf, final_train_acc, final_test_acc = fit_and_report(
-                    X_combined, y_combined, 'single-character + manual + bootstrap',
+                    X_combined, y_combined, 'single-character + manual regions',
                 )
-                used_bootstrap = True
+                used_manual_regions = True
                 self.stdout.write(self.style.SUCCESS(
-                    f'\nHoldout accuracy: {teacher_test_acc:.1%} (single-character only) -> '
-                    f'{final_test_acc:.1%} (with manual + bootstrap crops)'
+                    f'\nHoldout accuracy: {manual_only_test_acc:.1%} (single-character only) -> '
+                    f'{final_test_acc:.1%} (with manual region crops)'
                 ))
             else:
                 self.stdout.write(self.style.WARNING(
-                    '\nNo manually-labeled regions and no multi-character crops cleared '
-                    '--bootstrap-confidence — keeping the single-character-only classifier.'
+                    '\nNo manually-labeled regions found — keeping the single-character-only classifier. '
+                    '(See RegionLabelQueueManager.jsx to label multi-character items.)'
                 ))
 
         # Save — self-contained: records which backend/tag ordering produced
@@ -626,7 +604,7 @@ class Command(BaseCommand):
             'min_images': min_images,
             'excluded': sorted(exclude),
             'classifier_type': classifier_choice,
-            'used_multi_character_bootstrap': used_bootstrap,
+            'used_manual_region_labels': used_manual_regions,
             'train_accuracy': final_train_acc,
             'holdout_accuracy': final_test_acc,
         }, output_path)
@@ -635,10 +613,11 @@ class Command(BaseCommand):
     def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names):
         """[(character, feature), ...] for every human-labeled region across
         all items with Item.character_regions set (see RegionAnnotator.jsx /
-        ItemViewSet.character_regions_view) — already correctly paired, no
-        teacher-classifier confidence gating needed (unlike
-        _bootstrap_label's output, which this is designed to sit alongside:
-        see handle()'s `manual_rows + pseudo_rows` combination).
+        ItemViewSet.character_regions_view) — this is the ONLY source of
+        multi-character training data (see module docstring for why an
+        earlier automatic-detection-based approach was removed); a human
+        already drew the box and named it, so there's no confidence gate
+        to apply, just direct (character, feature) pairs to train on.
 
         A region can carry more than one character name for two very
         different reasons: person-detection sometimes merges two
@@ -733,167 +712,6 @@ class Command(BaseCommand):
             ))
         self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {items.count()} annotated item(s).')
         return rows
-
-    def _get_multi_character_rows(self, options, tagger_backend, expected_general_tag_names):
-        """Returns [(item_id, candidate_chars, [crop_feature, ...]), ...] for
-        multi-character items where person detection found EXACTLY as many
-        boxes as the item has confirmed characters — anything else (0/1
-        boxes, or a mismatched count) is skipped, since there's no reliable
-        way to know which box is which character otherwise. Raw and
-        unlabeled — pairing crops to specific character names happens in
-        _bootstrap_label, using a teacher classifier that isn't fit yet
-        when this runs."""
-        import joblib
-
-        backend_choice = options['backend']
-        feature_source = options['feature_source']
-        if options['use_multi_cache']:
-            self.stdout.write(f"Loading cached multi-character crops from {options['use_multi_cache']}...")
-            cache = joblib.load(options['use_multi_cache'])
-            if cache.get('backend') != tagger_backend or cache.get('feature_source', 'tags') != feature_source:
-                self.stderr.write(self.style.ERROR(
-                    f"Multi-character cache was extracted with backend={cache.get('backend')!r}/"
-                    f"feature_source={cache.get('feature_source', 'tags')!r}, but backend={tagger_backend!r}/"
-                    f"feature_source={feature_source!r} was requested."
-                ))
-                return []
-            self.stdout.write(f"Loaded {len(cache['rows'])} cached multi-character items.\n")
-            return cache['rows']
-
-        max_chars = options['max_characters_per_item']
-        # character_regions=[] (exclude anything already region-annotated) --
-        # those items already have a reliable, human-drawn box-per-character
-        # from _get_manual_labeled_rows, so running person-DETECTION and
-        # then confidence-gated pseudo-labeling here too would be pure
-        # redundant work chasing a noisier version of data this run is
-        # already going to use unconditionally.
-        items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).filter(
-            character_regions=[],
-        ).only('id', 'characters', 'preview_data')
-        # This scan alone used to print nothing at all until it finished —
-        # every multi-character-or-not Item gets touched (an N+1 query per
-        # 2-6-character item, to pull its preview_images), so on a large DB
-        # this silent phase alone can run long enough to look identical to
-        # "hung" from the outside. Report periodically instead.
-        self.stdout.write('\nScanning DB for multi-character candidate items...')
-        candidates = []  # (item_id, chars, image_bytes)
-        scanned = 0
-        t_scan = time.time()
-        for item in items.iterator():
-            scanned += 1
-            chars = [c for c in (item.characters or []) if c]
-            if not (2 <= len(chars) <= max_chars):
-                continue
-            imgs = list(item.preview_images.order_by('order'))
-            if imgs:
-                image_bytes = bytes(max(imgs, key=lambda x: len(x.data or b'')).data)
-            elif item.preview_data:
-                image_bytes = bytes(item.preview_data)
-            else:
-                continue
-            candidates.append((item.id, chars, image_bytes))
-            if scanned % 500 == 0:
-                self.stdout.write(f'  scanned {scanned} items, {len(candidates)} candidates so far '
-                                   f'({time.time() - t_scan:.0f}s elapsed)')
-
-        self.stdout.write(f'\n{len(candidates)} multi-character items to check for a clean person-detection match '
-                           f'(each needs a person-detection pass, PLUS one full tagger inference pass per detected '
-                           f'person if the box count matches — i.e. up to {max_chars}x the per-image cost of the '
-                           f'single-character extraction step above; this is the slow part with --include-multi-'
-                           f'character, not a hang)...')
-        rows = []
-        t0 = time.time()
-        for i, (item_id, chars, image_bytes) in enumerate(candidates):
-            try:
-                boxes = tagger._detect_person_boxes(image_bytes)
-            except Exception as e:
-                self.stderr.write(f'item {item_id}: person detection failed ({e}), skipping')
-                continue
-            if len(boxes) != len(chars):
-                continue  # ambiguous — can't assign crops to characters reliably
-
-            crop_features = []
-            ok = True
-            for box in boxes:
-                try:
-                    crop_bytes = tagger._crop_with_padding(image_bytes, box)
-                    feature, names = self._compute_feature(crop_bytes, tagger_backend, options['feature_source'])
-                except Exception as e:
-                    self.stderr.write(f'item {item_id}: crop feature extraction failed ({e}), skipping item')
-                    ok = False
-                    break
-                if names != expected_general_tag_names:
-                    self.stderr.write(f'item {item_id}: feature ordering mismatch, skipping item')
-                    ok = False
-                    break
-                crop_features.append(feature)
-            if ok and crop_features:
-                rows.append((item_id, chars, crop_features))
-            # Every 5 items, not 25 — each one here can cost several full
-            # tagger inference passes (one per detected person), unlike one
-            # cheap image each in _extract_features' solo-image loop above,
-            # so the old 25-item interval could go quiet for far longer
-            # between updates despite steady progress. Includes a per-item
-            # rate + rough ETA so "is this stuck?" has a concrete answer.
-            if (i + 1) % 5 == 0 or i + 1 == len(candidates):
-                elapsed = time.time() - t0
-                rate = elapsed / (i + 1)
-                remaining = rate * (len(candidates) - i - 1)
-                self.stdout.write(f'  checked {i + 1}/{len(candidates)} items, {len(rows)} usable so far '
-                                   f'({elapsed:.0f}s elapsed, {rate:.1f}s/item, ~{remaining:.0f}s remaining)')
-
-        default_multi_name = (
-            f'character_features_multi_{backend_choice}.joblib' if feature_source == 'tags'
-            else f'character_features_multi_{backend_choice}_{feature_source}.joblib'
-        )
-        multi_cache_path = options['multi_feature_cache'] or os.path.join(tagger._data_dir(), default_multi_name)
-        joblib.dump({'rows': rows, 'backend': tagger_backend, 'feature_source': feature_source}, multi_cache_path)
-        self.stdout.write(self.style.SUCCESS(
-            f'\n{len(rows)}/{len(candidates)} multi-character items had a clean box<->character-count match. '
-            f'Cached to {multi_cache_path}.\n'
-        ))
-        return rows
-
-    def _bootstrap_label(self, multi_rows, teacher, min_confidence):
-        """For each (item_id, candidate_chars, crop_features), scores every
-        (crop, candidate character) pair with the teacher's predict_proba
-        RESTRICTED to just that item's own candidate_chars (never the full
-        class list — an item's cast is already known; this only resolves
-        which crop is which member of it), solves the assignment as a
-        linear sum assignment maximizing total confidence (scipy), and
-        keeps only pairs clearing min_confidence. Items whose candidate
-        characters aren't ALL in the teacher's known classes are skipped
-        entirely (can't validate against an unknown class). Returns
-        [(character, feature), ...] pseudo-labeled rows.
-        """
-        from scipy.optimize import linear_sum_assignment
-
-        class_index = {c: i for i, c in enumerate(teacher.classes_)}
-        accepted = []
-        skipped_unknown_class = 0
-
-        for item_id, chars, crop_features in multi_rows:
-            if not all(c in class_index for c in chars):
-                skipped_unknown_class += 1
-                continue
-
-            X_crops = np.stack(crop_features)
-            full_proba = teacher.predict_proba(X_crops)  # (n_crops, n_classes)
-            col_idx = [class_index[c] for c in chars]
-            restricted = full_proba[:, col_idx]  # (n_crops, n_chars) — same order as `chars`
-
-            row_ind, col_ind = linear_sum_assignment(-restricted)  # maximize confidence
-            for r, c in zip(row_ind, col_ind):
-                confidence = restricted[r, c]
-                if confidence >= min_confidence:
-                    accepted.append((chars[c], crop_features[r]))
-
-        self.stdout.write(
-            f'Bootstrap: {len(accepted)} crop<->character pairs accepted (>= {min_confidence:.0%} confidence) '
-            f'out of {sum(len(r[2]) for r in multi_rows)} candidate crops across {len(multi_rows)} items '
-            f'({skipped_unknown_class} items skipped — a confirmed character isn\'t in the trained class set).'
-        )
-        return accepted
 
     def _compute_feature(self, image_bytes, tagger_backend, feature_source):
         """(feature_vector, feature_names) for one image, dispatching on
