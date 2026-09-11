@@ -13,6 +13,12 @@ export default function CharacterGroupManager({ onClose }) {
   const [groups, setGroups] = useState([])
   const [allChars, setAllChars] = useState([])
   const [allTitles, setAllTitles] = useState([])
+  // {character_name: count} — how many Items currently carry this
+  // character (see CharacterGroupViewSet.character_usage_counts). Shown
+  // next to each chip so a name that's no longer used by anything (e.g.
+  // after a rename/merge elsewhere) is easy to spot and clean up, instead
+  // of a group silently accumulating dead entries forever.
+  const [usageCounts, setUsageCounts] = useState({})
   const [collapsed, setCollapsed] = useState({})
   const [newGroupName, setNewGroupName] = useState('')
   const [addingGroup, setAddingGroup] = useState(false)
@@ -34,13 +40,15 @@ export default function CharacterGroupManager({ onClose }) {
   const [parentPickerFor, setParentPickerFor] = useState(null)  // groupId whose parent is being set
 
   const load = useCallback(async () => {
-    const [gr, ch, ti] = await Promise.all([
+    const [gr, ch, ti, uc] = await Promise.all([
       fetch('/api/character-groups/').then(r => r.json()).catch(() => []),
       fetch('/api/items/all_characters/').then(r => r.json()).catch(() => []),
       fetch('/api/items/all_titles/').then(r => r.json()).catch(() => []),
+      fetch('/api/character-groups/character_usage_counts/').then(r => r.json()).catch(() => ({})),
     ])
     const list = Array.isArray(gr) ? gr : (gr.results || [])
     setGroups(list)
+    setUsageCounts(uc && typeof uc === 'object' ? uc : {})
     // Only default NEWLY-seen groups to collapsed, preserving whatever the
     // user already had expanded/collapsed for groups seen before — load()
     // re-runs after every single action (moving a character, renaming,
@@ -350,17 +358,28 @@ export default function CharacterGroupManager({ onClose }) {
 
           {!isCollapsed && (
             <div className="cgm-panel-chips">
-              {chars.map(char => (
+              {chars.map(char => {
+                const count = usageCounts[char] || 0
+                return (
                 <span key={char} className={`cgm-panel-chip${selectedChars.has(char) ? ' cgm-panel-chip-selected' : ''}`}>
                   <input type="checkbox" className="cgm-chip-checkbox" title="複数選択して一括移動"
                     checked={selectedChars.has(char)} onChange={() => toggleSelectChar(char)} />
                   {char}
+                  <span
+                    className="cgm-usage-count"
+                    title={count === 0 ? 'このキャラを使っているアイテムがありません — 削除の候補です' : `このキャラを使っているアイテム数`}
+                    style={{ fontSize: 11, marginLeft: 4, padding: '1px 5px', borderRadius: 8,
+                      background: count === 0 ? '#7f1d1d' : '#334155', color: count === 0 ? '#fecaca' : '#94a3b8' }}
+                  >
+                    {count}
+                  </span>
                   <button className="cgm-chip-btn" title="グループを変更"
                     onClick={() => setMoveState({ chars: [char] })}>⇄</button>
                   <button className="cgm-chip-btn cgm-chip-del" title="このグループから外す"
                     onClick={() => removeFromGroup(char, g.id)}>×</button>
                 </span>
-              ))}
+                )
+              })}
               {chars.length === 0 && <span className="cgm-empty-hint">キャラなし</span>}
             </div>
           )}
@@ -490,15 +509,26 @@ export default function CharacterGroupManager({ onClose }) {
                 <span className="cgm-panel-group-name" style={{ color: '#9ca3af' }}>未分類 ({shownUngrouped.length})</span>
               </div>
               <div className="cgm-panel-chips">
-                {shownUngrouped.map(char => (
+                {shownUngrouped.map(char => {
+                  const count = usageCounts[char] || 0
+                  return (
                   <span key={char} className={`cgm-panel-chip cgm-panel-chip-ungrouped${selectedChars.has(char) ? ' cgm-panel-chip-selected' : ''}`}>
                     <input type="checkbox" className="cgm-chip-checkbox" title="複数選択して一括移動"
                       checked={selectedChars.has(char)} onChange={() => toggleSelectChar(char)} />
                     {char}
+                    <span
+                      className="cgm-usage-count"
+                      title={count === 0 ? 'このキャラを使っているアイテムがありません' : 'このキャラを使っているアイテム数'}
+                      style={{ fontSize: 11, marginLeft: 4, padding: '1px 5px', borderRadius: 8,
+                        background: count === 0 ? '#7f1d1d' : '#334155', color: count === 0 ? '#fecaca' : '#94a3b8' }}
+                    >
+                      {count}
+                    </span>
                     <button className="cgm-chip-btn" title="グループに割り当て"
                       onClick={() => setMoveState({ chars: [char] })}>⇄</button>
                   </span>
-                ))}
+                  )
+                })}
               </div>
             </div>
             )

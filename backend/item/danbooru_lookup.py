@@ -356,6 +356,79 @@ def resolve_character_link(character_name: str, expected_titles=None):
     return link
 
 
+def resolve_title_link(title_name: str):
+    """Resolve one title's Danbooru copyright tag and persist to
+    TitleDanbooruLink -- the title-side counterpart to
+    resolve_character_link. A character needs find_tag_via_title_roster's
+    per-title cast cross-reference to disambiguate a common given name;
+    a title has no equivalent "roster" to check against, but its own
+    name is generally already close to its real copyright tag (e.g.
+    "Blue Archive" -> "blue_archive"), so this just runs it through
+    Danbooru's own autocomplete (the same live tag-search-as-you-type
+    endpoint autocomplete_tags wraps) and takes the highest-post_count
+    candidate whose category is 3 (copyright) -- never a same-spelling
+    character or general tag, which autocomplete_tags's category field
+    lets this rule out directly rather than guessing.
+
+    Returns the TitleDanbooruLink row (created or updated) — never
+    raises for "no confident match", exactly like resolve_character_link.
+    """
+    from .models import TitleDanbooruLink
+
+    candidates = autocomplete_tags(title_name, limit=10)
+    copyright_candidates = sorted(
+        (c for c in candidates if c.get('category') == 3),
+        key=lambda c: -(c.get('post_count') or 0),
+    )
+    tag = copyright_candidates[0]['value'] if copyright_candidates else None
+
+    link, _ = TitleDanbooruLink.objects.update_or_create(
+        title_name=title_name,
+        defaults={
+            'danbooru_tag': tag, 'resolved_via': 'autocomplete' if tag else '',
+            'match_score': None, 'debug_info': {'candidates': candidates},
+        },
+    )
+    return link
+
+
+def dedupe_title_tag_collisions():
+    """Title-side counterpart to dedupe_tag_collisions -- two different
+    titles resolving to the same copyright tag (e.g. a franchise umbrella
+    tag both "Fate" and "Fate/Grand Order" might both land on) means one
+    is wrong, demoted the same way. Since resolve_title_link never sets a
+    match_score (autocomplete's own post_count ranking already picked the
+    best candidate per title, there's no further fuzzy-match score to
+    compare), a tie here just keeps whichever link was queried first —
+    same tie-break as an unscored CharacterDanbooruLink collision would
+    get, not a new rule invented for titles specifically.
+    """
+    from collections import defaultdict
+
+    from .models import TitleDanbooruLink
+
+    by_tag = defaultdict(list)
+    for link in TitleDanbooruLink.objects.exclude(danbooru_tag__isnull=True).exclude(danbooru_tag=''):
+        by_tag[link.danbooru_tag].append(link)
+
+    demotions = []
+    for tag, links in by_tag.items():
+        if len(links) < 2:
+            continue
+        links.sort(key=lambda l: -(l.match_score or 0))
+        winner, losers = links[0], links[1:]
+        for loser in losers:
+            loser.danbooru_tag = None
+            loser.resolved_via = ''
+            loser.debug_info = {
+                'demoted_reason': f'tag collision with {winner.title_name!r}',
+                'original_debug_info': loser.debug_info,
+            }
+            loser.save(update_fields=['danbooru_tag', 'resolved_via', 'debug_info'])
+        demotions.append({'tag': tag, 'winner': winner.title_name, 'demoted': [l.title_name for l in losers]})
+    return demotions
+
+
 def dedupe_tag_collisions():
     """A single real Danbooru character can only ever be ONE of this app's
     own character names — two different names both resolving to the same

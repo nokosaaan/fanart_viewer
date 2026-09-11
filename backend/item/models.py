@@ -415,6 +415,41 @@ class CharacterDanbooruLink(models.Model):
         return f"{self.character_name} -> {self.danbooru_tag or '(unresolved)'}"
 
 
+class TitleDanbooruLink(models.Model):
+    """Title-side counterpart to CharacterDanbooruLink -- same shape and
+    same reasoning, just linking this app's own title string (as stored
+    in Item.titles/CharacterGroup.titles) to the matching Danbooru
+    COPYRIGHT tag (category=3, e.g. 'blue_archive') instead of a
+    character tag. Feeds the same kind of gap CharacterDanbooruLink
+    fills for characters: a title resolved this way can be cross-
+    referenced against Danbooru's own tag data (e.g. a translated post
+    description matched against Danbooru's live tag search — see
+    item.danbooru_lookup.resolve_title_link) even though the local
+    tagger's own vocabulary has no copyright/series tags at all.
+
+    Populated via item.danbooru_lookup.resolve_title_link (a direct
+    Danbooru autocomplete search restricted to copyright-category
+    candidates -- no per-title "roster" concept exists here the way
+    find_tag_via_title_roster needs for characters, since a title's own
+    name is generally already close to its real copyright tag).
+    """
+    title_name = models.CharField(max_length=200, unique=True)
+    danbooru_tag = models.CharField(max_length=200, null=True, blank=True)
+    resolved_via = models.CharField(max_length=32, blank=True, default='')
+    match_score = models.FloatField(null=True, blank=True)
+    debug_info = models.JSONField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    # Same manual-override escape hatch as CharacterDanbooruLink.
+    # conflict_resolved -- see that field's own docstring.
+    conflict_resolved = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [models.Index(fields=['danbooru_tag'])]
+
+    def __str__(self):
+        return f"{self.title_name} -> {self.danbooru_tag or '(unresolved)'}"
+
+
 class CharacterGroup(models.Model):
     name = models.CharField(max_length=200, unique=True)
     characters = models.JSONField(default=list, blank=True)

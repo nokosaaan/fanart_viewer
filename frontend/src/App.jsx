@@ -6,6 +6,7 @@ import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
 import CharacterAliasGroupManager from './components/CharacterAliasGroupManager'
 import CharacterDanbooruLinkManager from './components/CharacterDanbooruLinkManager'
+import TitleDanbooruLinkManager from './components/TitleDanbooruLinkManager'
 import BackupManager from './components/BackupManager'
 import TrainClassifierManager from './components/TrainClassifierManager'
 import FetchQueueManager from './components/FetchQueueManager'
@@ -90,6 +91,7 @@ function AppMain({ role, onLogout }){
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
+  const [titleLinkOpen, setTitleLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [trainClassifierOpen, setTrainClassifierOpen] = useState(false)
   // Onboarding tour (see Tour.jsx / lib/tourSteps.js) — needs the header
@@ -720,6 +722,7 @@ function AppMain({ role, onLogout }){
                   { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true), tourId: 'menu-character-groups' },
                   { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true), tourId: 'menu-character-alias-groups' },
                   { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true), tourId: 'menu-character-danbooru-link' },
+                  { label: 'タイトル↔Danbooruリンク', onClick: () => setTitleLinkOpen(true), tourId: 'menu-title-danbooru-link' },
                 ],
               },
               {
@@ -842,6 +845,7 @@ function AppMain({ role, onLogout }){
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
       {charAliasGroupOpen && <CharacterAliasGroupManager onClose={()=>setCharAliasGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
+      {titleLinkOpen && <TitleDanbooruLinkManager onClose={()=>setTitleLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
       {tourPrompt && (

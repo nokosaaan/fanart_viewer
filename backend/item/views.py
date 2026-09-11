@@ -17,7 +17,7 @@ import json
 import re
 from urllib.parse import urljoin, urlparse
 
-from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem, TwitterPollState
+from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, TitleDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem, TwitterPollState
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
 from . import pixiv_salvage
@@ -3559,6 +3559,31 @@ class CharacterGroupViewSet(viewsets.ModelViewSet):
 
         return Response({'status': 'ok'})
 
+    @action(detail=False, methods=['get'], url_path='character_usage_counts')
+    def character_usage_counts(self, request):
+        """{character_name: count} across every Item.characters in the DB —
+        lets CharacterGroupManager.jsx show, next to each character chip,
+        whether it's actually still used by anything (and if not, a human
+        can confidently remove it from its group instead of guessing).
+        Counts every character name that appears on any item, not just
+        ones already in a CharacterGroup — a name absent from this dict
+        entirely is exactly as "unused" as one present with count 0, but
+        the frontend only ever looks this up for names it already has
+        (group members), so the difference is moot there.
+
+        Same full-scan-a-JSONField-in-Python pattern used throughout this
+        file (e.g. _suggest_from_existing_data, CharacterDanbooruLinkViewSet.
+        list) rather than a DB-side aggregate — Item.characters is a
+        JSONField list, which neither SQLite nor a portable ORM query can
+        group/count elements of directly.
+        """
+        counts = Counter()
+        for chars in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).values_list(
+            'characters', flat=True,
+        ):
+            counts.update(c for c in (chars or []) if c)
+        return Response(dict(counts))
+
 
 class CharacterAliasGroupViewSet(viewsets.ModelViewSet):
     """Same "small reference dataset, no pagination" pattern as
@@ -3805,5 +3830,150 @@ class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
             'match_score': link.match_score,
             'debug_info': link.debug_info,
             'demotions': demotions,
+        })
+
+
+class TitleDanbooruLinkViewSet(viewsets.ViewSet):
+    """Title-side counterpart to CharacterDanbooruLinkViewSet — same
+    review workflow (list every title actually used in the DB, whether
+    or not it's been resolved yet; resolve one at a time against
+    Danbooru's copyright-category tags; manual override; mark a tag-
+    collision demotion resolved once its real fix — renaming/merging the
+    title elsewhere — has been done by hand), just keyed by title name
+    instead of character name. See TitleDanbooruLink's own model
+    docstring and danbooru_lookup.resolve_title_link/dedupe_title_tag_
+    collisions for the title-specific resolution logic."""
+
+    def list(self, request):
+        known_titles = set()
+        for titles in Item.objects.exclude(titles=[]).exclude(titles__isnull=True).values_list('titles', flat=True):
+            known_titles.update(t for t in (titles or []) if t)
+
+        existing = {link.title_name: link for link in TitleDanbooruLink.objects.all()}
+
+        results = []
+        for name in sorted(known_titles):
+            link = existing.get(name)
+            results.append({
+                'title_name': name,
+                # False = resolve/manual has never even run for this title
+                # yet — distinct from "ran, found nothing" (attempted=True,
+                # danbooru_tag=None). Same convention as CharacterDanbooru
+                # LinkViewSet.list's own 'attempted' field.
+                'attempted': link is not None,
+                'danbooru_tag': link.danbooru_tag if link else None,
+                'resolved_via': link.resolved_via if link else '',
+                'match_score': link.match_score if link else None,
+                'debug_info': link.debug_info if link else None,
+                'updated_at': link.updated_at if link else None,
+                'conflict_resolved': link.conflict_resolved if link else False,
+            })
+        return Response(results)
+
+    @action(detail=False, methods=['post'], url_path='resolve')
+    def resolve(self, request):
+        """Body: {"title_name": "..."}. Live Danbooru re-resolve for ONE
+        title. Also re-checks for cross-title tag collisions since a
+        fresh resolution can newly collide with an existing link."""
+        name = (request.data.get('title_name') or '').strip()
+        if not name:
+            return Response({'detail': 'title_name required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        link = danbooru_lookup.resolve_title_link(name)
+        demotions = danbooru_lookup.dedupe_title_tag_collisions()
+        link.refresh_from_db()
+        return Response({
+            'title_name': link.title_name,
+            'danbooru_tag': link.danbooru_tag,
+            'resolved_via': link.resolved_via,
+            'match_score': link.match_score,
+            'debug_info': link.debug_info,
+            'demotions': demotions,
+        })
+
+    @action(detail=False, methods=['get'], url_path='autocomplete')
+    def autocomplete(self, request):
+        """?q=... — live Danbooru tag-search suggestions (see
+        danbooru_lookup.autocomplete_tags) for the manual-entry UI. Not
+        filtered to copyright-only here — the UI itself shows each
+        candidate's category (see CharacterDanbooruLinkManager.jsx's own
+        CATEGORY_COLORS) so a human can tell at a glance if a suggestion
+        is actually a series tag or something else."""
+        q = (request.GET.get('q') or '').strip()
+        if not q:
+            return Response([])
+        return Response(danbooru_lookup.autocomplete_tags(q))
+
+    @action(detail=False, methods=['get'], url_path='alias_search')
+    def alias_search(self, request):
+        """?q=... — Danbooru wiki pages whose other_names match `q` (see
+        danbooru_lookup.search_aliases), for a title whose Danbooru tag
+        name doesn't obviously match its Japanese/English display name.
+        """
+        q = (request.GET.get('q') or '').strip()
+        if not q:
+            return Response([])
+        return Response(danbooru_lookup.search_aliases(q))
+
+    @action(detail=False, methods=['post'], url_path='manual')
+    def manual(self, request):
+        """Body: {"title_name": "...", "danbooru_tag": "..."|null}. Human
+        override — same "never store an unvalidated guess" treatment as
+        CharacterDanbooruLinkViewSet.manual: a non-empty tag is checked
+        against Danbooru's own API first."""
+        name = (request.data.get('title_name') or '').strip()
+        if not name:
+            return Response({'detail': 'title_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        tag = (request.data.get('danbooru_tag') or '').strip() or None
+
+        if tag and not danbooru_lookup.tag_exists(tag):
+            return Response(
+                {'detail': f'"{tag}" does not appear to be a real Danbooru tag — check spelling.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        link, _ = TitleDanbooruLink.objects.update_or_create(
+            title_name=name,
+            defaults={
+                'danbooru_tag': tag,
+                'resolved_via': 'human_review',
+                'match_score': 1.0 if tag else None,
+                'debug_info': {'reason': 'manually set' if tag else 'manually rejected — no match'},
+            },
+        )
+        demotions = danbooru_lookup.dedupe_title_tag_collisions() if tag else []
+        link.refresh_from_db()
+        return Response({
+            'title_name': link.title_name,
+            'danbooru_tag': link.danbooru_tag,
+            'resolved_via': link.resolved_via,
+            'match_score': link.match_score,
+            'debug_info': link.debug_info,
+            'demotions': demotions,
+        })
+
+    @action(detail=False, methods=['post'], url_path='mark_conflict_resolved')
+    def mark_conflict_resolved(self, request):
+        """Body: {"title_name": "...", "resolved": true|false (default
+        true)}. Same manual override as CharacterDanbooruLinkViewSet.
+        mark_conflict_resolved, for a title-side tag collision whose real
+        fix was renaming/merging the title elsewhere rather than finding
+        it a different tag."""
+        name = (request.data.get('title_name') or '').strip()
+        if not name:
+            return Response({'detail': 'title_name required'}, status=status.HTTP_400_BAD_REQUEST)
+        resolved = bool(request.data.get('resolved', True))
+
+        link, _created = TitleDanbooruLink.objects.update_or_create(
+            title_name=name,
+            defaults={'conflict_resolved': resolved},
+        )
+        return Response({
+            'title_name': link.title_name,
+            'danbooru_tag': link.danbooru_tag,
+            'resolved_via': link.resolved_via,
+            'match_score': link.match_score,
+            'debug_info': link.debug_info,
+            'conflict_resolved': link.conflict_resolved,
         })
 
