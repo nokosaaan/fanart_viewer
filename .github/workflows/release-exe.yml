@@ -78,6 +78,18 @@ jobs:
           # have no Windows wheel and aren't actually imported by
           # item.tagger's use of it).
           pip install --no-deps dghs-imgutils pyrfc6266
+          # Pre-installs the optional canary/timm tagger backend (item/
+          # tagger.py's HAVE_TIMM) into every released build, so a user
+          # never has to `pip install` anything themselves to use
+          # "2026年学習の最新モデル" from TrainClassifierManager.jsx's
+          # dropdown -- this is what fanart_viewer.spec's own torch/
+          # torchvision detection (HAVE_TIMM_TAGGER_DEPS) keys off of, so
+          # having it installed HERE, before the PyInstaller build step
+          # below, is what actually gets its native binaries bundled in.
+          # Adds real weight to every release (CPU-only torch/torchvision
+          # wheels, a few hundred MB) and build time -- accepted trade-off
+          # for shipping it pre-installed rather than as a manual pip step.
+          pip install -r backend\requirements-timm.txt
 
       - name: Build with PyInstaller
         working-directory: exe
