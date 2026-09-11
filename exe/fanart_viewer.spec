@@ -18,7 +18,7 @@ import sys
 # file's own directory, regardless of the cwd build.sh runs from.
 sys.path.insert(0, os.path.join(SPECPATH, '..', 'backend'))
 
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_dynamic_libs
 
 hiddenimports = [
     'whitenoise.middleware',
@@ -74,10 +74,42 @@ datas += collect_data_files('playwright')
 # without this).
 datas += collect_data_files('pykakasi')
 
+# torch/torchvision (requirements-timm.txt's optional canary/timm tagger
+# backend -- see item/tagger.py's HAVE_TIMM) are only installed in some
+# build venvs at all, hence the import-guard: unlike the packages above,
+# collect_submodules()/collect_dynamic_libs() on a package that ISN'T
+# installed raises ModuleNotFoundError immediately (spec-parse time), which
+# would break the build for anyone NOT opting into the timm extras.
+#
+# When they ARE installed, plain Analysis() static scanning isn't enough --
+# confirmed live: a build with no explicit torchvision collection produced
+# "RuntimeError: operator torchvision::nms does not exist" at runtime on
+# EVERY tagger call (100% failure), even though the exact same torch/
+# torchvision versions imported and ran nms fine unfrozen, in the build
+# venv itself. torchvision's own torch.library.register_fake("torchvision
+# ::nms") (its _meta_registrations.py, imported transitively via `import
+# timm` -> timm/layers/norm_act.py's unconditional `from torchvision.ops.
+# misc import FrozenBatchNorm2d`) throws unless torchvision's compiled _C
+# extension already loaded successfully first -- which needs ITS OWN
+# native DLLs (not just the torch ones collect_submodules() finds via pure-
+# Python import scanning) to actually be sitting next to it in the frozen
+# build. collect_dynamic_libs() is what actually gathers those.
+try:
+    import torch  # noqa: F401
+    HAVE_TIMM_TAGGER_DEPS = True
+except ImportError:
+    HAVE_TIMM_TAGGER_DEPS = False
+
+binaries = []
+if HAVE_TIMM_TAGGER_DEPS:
+    hiddenimports += collect_submodules('torchvision')
+    binaries += collect_dynamic_libs('torch')
+    binaries += collect_dynamic_libs('torchvision')
+
 a = Analysis(
     ['launcher.py'],
     pathex=['../backend'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
