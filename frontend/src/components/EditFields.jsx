@@ -293,6 +293,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     tag_similarity: 'タグ類似度(強)', tag_similarity_weak: 'タグ類似度(弱)',
     tagger: 'タガー直接認識', tagger_group: 'タガー+キャラグループ', classifier: '独自分類器', danbooru: 'Danbooru照合',
     oc_heuristic: 'オリジナル創作(推定)',
+    // キャラ⇔タイトルの相互作用 — 提案中のキャラのスコアからタイトルを、
+    // (その結果を踏まえた)タイトルのスコアからキャラを、互いに後押しする
+    // (see backend item/views.py's _cross_boost_title_candidates/_cross_
+    // boost_character_candidates)。
+    character_group: 'キャラ推論から連動', title_group: 'タイトル推論から連動',
   }
   const MATCH_METHOD_LABELS = { direct: '既存表記と直接一致', danbooru_link: 'Danbooruリンク経由で翻訳' }
 
@@ -300,7 +305,13 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // ソース — 単独だと誤りやすいので、候補カード上に常時マーカーを出す(展開しな
   // いと見えない根拠パネルとは別に)。hashtag/tagger/classifier/danbooru は
   // このアイテム自身の内容(投稿文・画像)を直接見ているので対象外。
-  const LOW_PRIORITY_SOURCES = new Set(['artist_history', 'artist_history_weak', 'tag_similarity', 'tag_similarity_weak'])
+  // character_group/title_group も同様 — このアイテム自身のもう一方の
+  // フィールド(キャラ⇔タイトル)から間接的に推論された値であり、画像/投稿を
+  // 直接見た結果ではない。
+  const LOW_PRIORITY_SOURCES = new Set([
+    'artist_history', 'artist_history_weak', 'tag_similarity', 'tag_similarity_weak',
+    'character_group', 'title_group',
+  ])
 
   function candidateSourceTier(contributors){
     if(!contributors || contributors.length === 0) return null

@@ -1371,7 +1371,33 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
     'tagger': 2.0,
     'tagger_group': 2.0,
     'classifier': 4.0,
+    # Cross-field boosts (see _cross_boost_title_candidates/_cross_boost_
+    # character_candidates below) -- a second-order inference derived from
+    # the OTHER field's own already-uncertain combined score, so weighted
+    # more modestly than a direct signal like hashtag/danbooru/artist_
+    # history; not grid-searched (the existing grid search only ever
+    # optimized character accuracy against the pre-cross-boost candidate
+    # pool), just a reasoned starting point in the same spirit as hashtag/
+    # danbooru's own untested-by-the-grid weights above.
+    'character_group': 1.5,
+    'title_group': 1.5,
 }
+
+# A same-request character/title combined score is capped at this before
+# being reused as another field's synthetic candidate `confidence` --
+# combined scores are unbounded weighted sums (a single hashtag hit alone
+# is already 5.0), so without a cap an already-strong candidate on one
+# field would swamp DEFAULT_ENSEMBLE_WEIGHTS' scale on the other field
+# entirely out of proportion to every other source, which is scaled
+# against confidences in roughly the 0-1 range (a tagger's own sigmoid
+# score, or a flat 1.0 for hashtag/danbooru/artist_history).
+_CROSS_FIELD_CONFIDENCE_CAP = 1.0
+# Only a candidate whose OWN combined score already clears this bar gets
+# to vote on the other field at all -- roughly "at least one full-
+# confidence source, or a couple of weaker ones agreeing", so a single
+# barely-above-zero guess (e.g. one tag_similarity_weak hit alone, ~0.15)
+# doesn't get to introduce noise into the other field.
+_CROSS_FIELD_MIN_SCORE = 1.0
 
 # Situation gets its OWN weight scheme, not DEFAULT_ENSEMBLE_WEIGHTS — the
 # tagger's own composition/rating heuristic (see tagger._situation_hint:
@@ -1435,6 +1461,94 @@ def _character_breakdown(entries, values):
     return breakdown
 
 
+def _known_titles():
+    """Every distinct title string used anywhere in the DB -- see
+    _titles_for_group's own use of this (the group.name exact-match
+    fallback), factored out so both directions of the title<->character
+    cross-boost can share one query instead of each recomputing it."""
+    known_titles = set()
+    for titles in Item.objects.exclude(titles=[]).exclude(titles__isnull=True).values_list('titles', flat=True):
+        known_titles.update(titles or [])
+    return known_titles
+
+
+def _titles_for_group(group, known_titles):
+    """Same walk-up-the-parent-chain logic as _match_tagger_characters'
+    own internal `titles_for_group` closure (see that function's
+    docstring for the full reasoning on the group.name exact-match
+    fallback and why a franchise umbrella like "Fate" is deliberately
+    NOT treated as a title this way) -- kept as a separate, module-level
+    copy rather than extracting/sharing that closure, since the two
+    call sites build their own different supporting indexes already and
+    aren't otherwise coupled."""
+    node, seen = group, set()
+    while node is not None and node.pk not in seen:
+        seen.add(node.pk)
+        if node.titles:
+            return node.titles
+        if node.name in known_titles:
+            return [node.name]
+        node = node.parent
+    return []
+
+
+def _character_group_index():
+    """dict: normalized character name -> the CharacterGroup it belongs
+    to (first one found, mirroring _match_tagger_characters' own
+    group_by_char_norm) -- used by _cross_boost_title_candidates below."""
+    index = {}
+    for group in CharacterGroup.objects.all():
+        for c in (group.characters or []):
+            index.setdefault(_normalize_char_name(c), group)
+    return index
+
+
+def _cross_boost_title_candidates(char_scores, known_titles):
+    """Character inference -> title inference: a character candidate
+    with a high OWN combined score (see _combine_candidates) makes the
+    title(s) its CharacterGroup belongs to more likely, on top of
+    whatever the item's own hashtags/tags/artist-history already
+    suggest. Returns synthetic 'character_group' entries in the same
+    {'value','source','confidence'} shape _collect_candidates produces,
+    ready to be appended to collected['title'] before combining."""
+    group_index = _character_group_index()
+    boosts = []
+    for char_name, score in char_scores.items():
+        if score < _CROSS_FIELD_MIN_SCORE:
+            continue
+        group = group_index.get(_normalize_char_name(char_name))
+        if not group:
+            continue
+        confidence = min(score, _CROSS_FIELD_CONFIDENCE_CAP)
+        for title in _titles_for_group(group, known_titles):
+            boosts.append({'value': title, 'source': 'character_group', 'confidence': confidence})
+    return boosts
+
+
+def _cross_boost_character_candidates(title_scores, known_titles):
+    """The mirror direction: a title candidate with a high OWN combined
+    score makes every character belonging to a CharacterGroup under that
+    title more likely. Called AFTER title_scores already includes
+    _cross_boost_title_candidates' own contribution (see
+    _suggest_for_item_ensemble's call order) -- so a character can, in
+    one pass, end up indirectly reinforced by its own group's title
+    signal without needing an iterative fixed-point solve: character
+    scores feed titles once, then the (now character-aware) title scores
+    feed characters once, and both stop there."""
+    strong_titles = {t for t, s in title_scores.items() if s >= _CROSS_FIELD_MIN_SCORE}
+    if not strong_titles:
+        return []
+    boosts = []
+    for group in CharacterGroup.objects.all():
+        matched_titles = strong_titles & set(_titles_for_group(group, known_titles))
+        if not matched_titles:
+            continue
+        confidence = min(max(title_scores[t] for t in matched_titles), _CROSS_FIELD_CONFIDENCE_CAP)
+        for char_name in (group.characters or []):
+            boosts.append({'value': char_name, 'source': 'title_group', 'confidence': confidence})
+    return boosts
+
+
 def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
                                 general_threshold=0.35, character_threshold=0.85,
                                 image_index=None):
@@ -1463,7 +1577,30 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         image_index=image_index,
     )
 
-    title_values, title_scores = _combine_candidates(collected['title'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    # Title <-> character cross-boost: a character candidate's own combined
+    # score makes its CharacterGroup's title(s) more likely, and (using
+    # that now-boosted title score) a title candidate's own combined score
+    # makes every character in a CharacterGroup under that title more
+    # likely in turn — see _cross_boost_title_candidates/_cross_boost_
+    # character_candidates. Requires both fields to actually be wanted;
+    # skipped entirely otherwise (nothing to boost, or nothing to boost
+    # FROM).
+    cross_boost = collected['want_titles'] and collected['want_characters']
+    known_titles = _known_titles() if cross_boost else None
+
+    # Stage 1: characters combined from their own sources only — this
+    # (not the final, title-boosted char_scores below) is what titles get
+    # boosted FROM, so the boost reflects "how well does the image/tags/
+    # history alone support this character", not a value already inflated
+    # by the very title boost it's about to help produce.
+    _char_values_stage1, char_scores_stage1 = _combine_candidates(
+        collected['character'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3,
+    )
+
+    title_entries = collected['title']
+    if cross_boost:
+        title_entries = title_entries + _cross_boost_title_candidates(char_scores_stage1, known_titles)
+    title_values, title_scores = _combine_candidates(title_entries, DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
     # top_k=3 (not more): this is a REVIEW list a human picks from (see
     # EditFields.jsx's candidate cards), not an auto-apply-everything list
     # — three ranked options is enough to catch "the right answer wasn't
@@ -1479,10 +1616,13 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     # already name a title that has never been used anywhere in this app
     # before; that capability existed in `collected['title']` all along, it
     # just never survived past this function).
-    char_values, char_scores = _combine_candidates(collected['character'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    char_entries = collected['character']
+    if cross_boost:
+        char_entries = char_entries + _cross_boost_character_candidates(title_scores, known_titles)
+    char_values, char_scores = _combine_candidates(char_entries, DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
     situation_values, _situation_scores = _combine_candidates(collected['situation'], DEFAULT_SITUATION_WEIGHTS, top_k=1)
 
-    char_breakdown = _character_breakdown(collected['character'], char_values)
+    char_breakdown = _character_breakdown(char_entries, char_values)
     characters = [
         {
             'name': name, 'score': round(char_scores[name], 4), 'matched': True, 'source': 'ensemble',
@@ -1491,7 +1631,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         for name in char_values
     ]
 
-    title_breakdown = _character_breakdown(collected['title'], title_values)
+    title_breakdown = _character_breakdown(title_entries, title_values)
     titles = [
         {'name': name, 'score': round(title_scores[name], 4), 'contributors': title_breakdown[name]}
         for name in title_values
