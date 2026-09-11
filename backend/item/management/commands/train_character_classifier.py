@@ -489,14 +489,39 @@ class Command(BaseCommand):
                 '(reuse with --use-cache to skip re-extraction next time).\n'
             ))
 
+        # An item with manual character_regions gets a reliable, human-drawn
+        # crop fed straight in via _get_manual_labeled_rows below when
+        # --include-multi-character is on — including its whole-image
+        # feature here too would train on the SAME image/character twice
+        # (once on the full frame, once on the region crop), for no
+        # benefit, since the crop already supersedes the noisier
+        # whole-image signal. Only excluded when that replacement is
+        # actually going to run this pass; raw_rows/the feature cache
+        # itself stays untouched (deliberately -- see _extract_features'
+        # own docstring on staying reusable across differently-flagged
+        # runs), this just skips folding those specific rows into X/y.
+        annotated_item_ids = (
+            set(Item.objects.exclude(character_regions=[]).values_list('id', flat=True))
+            if options['include_multi_character'] else set()
+        )
+
         # Apply --exclude and --min-images as filters on whatever rows we now have
         # (freshly extracted or loaded from cache) — this is the cheap part, so
         # changing these two never requires touching the tagger/DB again.
         by_char = defaultdict(list)
+        skipped_annotated = 0
         for item_id, char, feature in raw_rows:
             if char in exclude:
                 continue
+            if item_id in annotated_item_ids:
+                skipped_annotated += 1
+                continue
             by_char[char].append((item_id, feature))
+        if skipped_annotated:
+            self.stdout.write(
+                f'Skipped {skipped_annotated} whole-image feature(s) for region-annotated items '
+                '(their manually-labeled crop is used instead — see below).'
+            )
         eligible = {c: rows for c, rows in by_char.items() if len(rows) >= min_images}
         if len(eligible) < 2:
             self.stderr.write(self.style.ERROR(
@@ -736,9 +761,15 @@ class Command(BaseCommand):
             return cache['rows']
 
         max_chars = options['max_characters_per_item']
-        items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
-            'id', 'characters', 'preview_data',
-        )
+        # character_regions=[] (exclude anything already region-annotated) --
+        # those items already have a reliable, human-drawn box-per-character
+        # from _get_manual_labeled_rows, so running person-DETECTION and
+        # then confidence-gated pseudo-labeling here too would be pure
+        # redundant work chasing a noisier version of data this run is
+        # already going to use unconditionally.
+        items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).filter(
+            character_regions=[],
+        ).only('id', 'characters', 'preview_data')
         # This scan alone used to print nothing at all until it finished —
         # every multi-character-or-not Item gets touched (an N+1 query per
         # 2-6-character item, to pull its preview_images), so on a large DB

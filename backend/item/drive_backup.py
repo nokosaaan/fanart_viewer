@@ -123,7 +123,15 @@ DUMP_TIMEOUT = 1800  # item_previewimage stores images as bytea and runs several
 # its own rows (e.g. django_content_type id=1) on a freshly migrated target database, so
 # dumping them causes primary-key collisions on restore. The app's own IDs don't collide
 # because those tables start out empty on a fresh migrate.
-BACKUP_TABLES = ['item_charactergroup', 'item_item', 'item_previewimage']
+#
+# item_characterdanboorulink was NOT originally included here -- restoring
+# a backup onto a fresh install brought back every Item/CharacterGroup but
+# silently dropped every character<->Danbooru tag link ever resolved
+# (manually or via link_danbooru_characters), since that table simply
+# never existed in the backup file to restore FROM. It's included now for
+# the same overwrite/merge treatment as the others (see
+# _merge_backup_sqlite's own per-table dedup rule for how it's merged).
+BACKUP_TABLES = ['item_charactergroup', 'item_item', 'item_previewimage', 'item_characterdanboorulink']
 
 
 def _is_sqlite() -> bool:
@@ -426,10 +434,12 @@ def _restore_backup_sqlite(file_id: str, mode: str = 'strict', progress_cb=None)
 
     from django.db import connection, transaction
 
-    from .models import Item, CharacterGroup, PreviewImage
+    from .models import Item, CharacterGroup, PreviewImage, CharacterDanbooruLink
 
     progress_cb = progress_cb or _noop_progress
-    has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
+    has_existing = (
+        Item.objects.exists() or CharacterGroup.objects.exists() or CharacterDanbooruLink.objects.exists()
+    )
 
     service = get_drive_service()
 
@@ -475,6 +485,7 @@ def _restore_backup_sqlite(file_id: str, mode: str = 'strict', progress_cb=None)
                     'item_charactergroup': CharacterGroup.objects.count(),
                     'item_item': Item.objects.count(),
                     'item_previewimage': PreviewImage.objects.count(),
+                    'item_characterdanboorulink': CharacterDanbooruLink.objects.count(),
                 },
                 backup=backup_counts,
             )
@@ -491,12 +502,15 @@ def _restore_backup_sqlite(file_id: str, mode: str = 'strict', progress_cb=None)
                         with connection.cursor() as cursor:
                             if has_existing and mode == 'overwrite':
                                 # item_previewimage FKs to item_item -- delete it first.
+                                # item_characterdanboorulink has no FK to anything else here.
                                 cursor.execute('DELETE FROM item_previewimage')
                                 cursor.execute('DELETE FROM item_item')
                                 cursor.execute('DELETE FROM item_charactergroup')
+                                cursor.execute('DELETE FROM item_characterdanboorulink')
                             cursor.execute('INSERT INTO item_charactergroup SELECT * FROM backup_src.item_charactergroup')
                             cursor.execute('INSERT INTO item_item SELECT * FROM backup_src.item_item')
                             cursor.execute('INSERT INTO item_previewimage SELECT * FROM backup_src.item_previewimage')
+                            cursor.execute('INSERT INTO item_characterdanboorulink SELECT * FROM backup_src.item_characterdanboorulink')
                 except sqlite3.OperationalError as e:
                     raise DriveBackupError(f'復元失敗: {e}') from e
                 result = None
@@ -601,11 +615,17 @@ def _merge_backup_sqlite(connection) -> dict:
         that Item was itself skipped as a duplicate (its images are
         presumably already present locally too), inserted with the
         remapped item id otherwise.
+      - CharacterDanbooruLink: matched by `character_name` (also the
+        model's own unique constraint) -- an existing local link (even an
+        unresolved one) is left untouched, same reasoning as CharacterGroup:
+        this device's own review/resolution work is never silently
+        clobbered by merging in another device's archive. Only character
+        names with no local link row at all are inserted.
 
     Returns a small summary dict (counts of what was actually added vs.
     skipped) for the caller to report back to the user.
     """
-    from .models import CharacterGroup, Item, PreviewImage
+    from .models import CharacterGroup, Item, PreviewImage, CharacterDanbooruLink
 
     with connection.cursor() as cursor:
         # --- CharacterGroup: dedup by name, remap self-referential parent ---
@@ -697,11 +717,35 @@ def _merge_backup_sqlite(connection) -> dict:
             PreviewImage.objects.create(item_id=new_item_id, **kwargs)
             previews_added += 1
 
+        # --- CharacterDanbooruLink: dedup by character_name ---
+        cdl_cols = _concrete_columns(CharacterDanbooruLink)  # ['character_name','danbooru_tag','resolved_via','match_score','debug_info','updated_at']
+        cursor.execute(f'SELECT {_quoted(cdl_cols)} FROM backup_src.item_characterdanboorulink')
+        backup_links = cursor.fetchall()
+
+        character_links_added = 0
+        for row in backup_links:
+            kwargs = dict(zip(cdl_cols, row))
+            if kwargs.get('debug_info') is not None:
+                kwargs['debug_info'] = json.loads(kwargs['debug_info'])
+
+            if CharacterDanbooruLink.objects.filter(character_name=kwargs['character_name']).exists():
+                continue
+
+            # updated_at has auto_now=True, so .create() always stamps "now"
+            # regardless of what's passed -- same restore-afterwards
+            # pattern as CharacterGroup.created_at above.
+            original_updated_at = _as_aware_utc(kwargs.pop('updated_at', None))
+            new_link = CharacterDanbooruLink.objects.create(**kwargs)
+            if original_updated_at is not None:
+                CharacterDanbooruLink.objects.filter(pk=new_link.pk).update(updated_at=original_updated_at)
+            character_links_added += 1
+
     return {
         'groups_added': groups_added,
         'items_added': items_added,
         'items_skipped': items_skipped,
         'previews_added': previews_added,
+        'character_links_added': character_links_added,
     }
 
 
@@ -728,10 +772,12 @@ def _restore_backup_postgres(file_id: str, mode: str = 'strict', progress_cb=Non
     if mode == 'merge':
         raise DriveBackupError('Postgresデプロイでは追記(マージ)復元はサポートしていません。上書きのみ対応しています。')
 
-    from .models import Item, CharacterGroup, PreviewImage
+    from .models import Item, CharacterGroup, PreviewImage, CharacterDanbooruLink
 
     progress_cb = progress_cb or _noop_progress
-    has_existing = Item.objects.exists() or CharacterGroup.objects.exists()
+    has_existing = (
+        Item.objects.exists() or CharacterGroup.objects.exists() or CharacterDanbooruLink.objects.exists()
+    )
 
     service = get_drive_service()
     params = _db_params()
@@ -757,6 +803,7 @@ def _restore_backup_postgres(file_id: str, mode: str = 'strict', progress_cb=Non
                     'item_charactergroup': CharacterGroup.objects.count(),
                     'item_item': Item.objects.count(),
                     'item_previewimage': PreviewImage.objects.count(),
+                    'item_characterdanboorulink': CharacterDanbooruLink.objects.count(),
                 },
                 backup=_count_dump_rows(dump_path, is_gz),
             )
@@ -775,7 +822,7 @@ def _restore_backup_postgres(file_id: str, mode: str = 'strict', progress_cb=Non
         if has_existing and mode == 'overwrite':
             # item_previewimage FKs to item_item, so CASCADE covers it too.
             truncate = subprocess.run(
-                psql_cmd + ['-c', 'TRUNCATE item_previewimage, item_item, item_charactergroup RESTART IDENTITY CASCADE;'],
+                psql_cmd + ['-c', 'TRUNCATE item_previewimage, item_item, item_charactergroup, item_characterdanboorulink RESTART IDENTITY CASCADE;'],
                 env=env, capture_output=True, timeout=60,
             )
             if truncate.returncode != 0:

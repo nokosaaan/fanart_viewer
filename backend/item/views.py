@@ -3501,12 +3501,27 @@ class CharacterDanbooruLinkViewSet(viewsets.ViewSet):
 
         existing = {link.character_name: link for link in CharacterDanbooruLink.objects.all()}
 
+        # Which CharacterGroup (if any) each character belongs to, and that
+        # group's own parent group (e.g. "Fate/strange Fake" under "Fate")
+        # -- shown alongside the link so a character sharing a bare name
+        # with an unrelated one in a different series (or just an
+        # unfamiliar name) can be told apart at a glance, instead of only
+        # ever seeing whichever raw Item.titles the character happened to
+        # appear under.
+        group_by_char = {}
+        for g in CharacterGroup.objects.select_related('parent').all():
+            for c in (g.characters or []):
+                group_by_char.setdefault(c, g)
+
         results = []
         for name in sorted(titles_by_char):
             link = existing.get(name)
+            group = group_by_char.get(name)
             results.append({
                 'character_name': name,
                 'titles': sorted(titles_by_char[name]),
+                'group_name': group.name if group else None,
+                'parent_group_name': group.parent.name if group and group.parent else None,
                 # False = link_danbooru_characters/the resolve action has
                 # never even run for this name yet — distinct from "ran,
                 # found nothing" (attempted=True, danbooru_tag=None).

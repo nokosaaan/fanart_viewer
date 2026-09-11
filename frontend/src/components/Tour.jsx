@@ -101,6 +101,7 @@ export default function Tour({ steps, onClose, onMenuNeed }){
 
   const hasSpotlight = rect && rect !== 'not-found'
   const PAD = 8
+  const placement = computeCardPlacement(rect, dropdownRect)
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 5000 }}>
@@ -133,7 +134,8 @@ export default function Tour({ steps, onClose, onMenuNeed }){
         <div style={dim(0, 0, '100%', '100%')} />
       )}
 
-      <div style={cardStyle(rect, dropdownRect)}>
+      <div style={placement.style}>
+        {placement.arrow && <div style={arrowStyle(placement.arrow)} />}
         <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{idx + 1} / {steps.length}</div>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#f8fafc', marginBottom: 8 }}>{step.title}</div>
         <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, marginBottom: 16, whiteSpace: 'pre-wrap' }}>{step.body}</div>
@@ -154,16 +156,31 @@ function dim(left, top, width, height){
 }
 
 const CARD_WIDTH = 320
-const CARD_HEIGHT_ESTIMATE = 180 // rough; only used to keep the card on-screen vertically, not for layout
-const MARGIN = 16
+const CARD_HEIGHT_ESTIMATE = 200 // rough; only used to keep the card on-screen vertically, not for layout
+const MARGIN = 20
+const ARROW_SIZE = 9 // speech-bubble tail (see arrowStyle) — MARGIN already leaves it room
 
-function cardStyle(rect, dropdownRect){
+const CARD_BASE = {
+  position: 'fixed', zIndex: 5001,
+  background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
+  padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+}
+
+// Speech-bubble placement: figures out both the card's position AND, when
+// there's a real spotlighted target, a pointer ("tail") on whichever edge
+// faces it -- a plain rectangle sitting somewhere near the target left it
+// ambiguous exactly which of several nearby controls a step was actually
+// about (see HeaderMenu.jsx's tightly-packed dropdown items); an explicit
+// arrow removes that ambiguity regardless of which side the card ends up
+// on. Returns `{ style, arrow: {side, offset} | null }` -- `arrow` is null
+// for the no-target (centered) card, and also as a last resort below when
+// no side has enough room to avoid the card overlapping the target itself.
+function computeCardPlacement(rect, dropdownRect){
   if (!rect || rect === 'not-found') {
     return {
-      position: 'fixed', zIndex: 5001, width: CARD_WIDTH, maxWidth: '90vw',
-      background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
-      padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-      left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+      style: { ...CARD_BASE, width: CARD_WIDTH, maxWidth: '90vw',
+        left: '50%', top: '50%', transform: 'translate(-50%, -50%)' },
+      arrow: null,
     }
   }
   // clientWidth/clientHeight (excludes any scrollbar) rather than
@@ -177,59 +194,117 @@ function cardStyle(rect, dropdownRect){
   // still place the card such that the (CSS-shrunk) box either overflows
   // the edge it's anchored away from or leaves an oddly large gap.
   const width = Math.min(CARD_WIDTH, vw - MARGIN * 2)
-  const base = {
-    position: 'fixed', zIndex: 5001, width, maxWidth: '90vw',
-    background: '#1e293b', border: '1px solid #334155', borderRadius: 10,
-    padding: 18, boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-  }
+  const style = { ...CARD_BASE, width, maxWidth: '90vw' }
 
-  // Prefer placing the card beside the target (left, then right),
-  // vertically centered on it and clamped to stay fully on-screen —
-  // this is what actually fixes two real problems a plain above/below
-  // placement had: a target near the right edge (the header menu toggle,
-  // or any item inside its dropdown) pushed the card off-screen to the
-  // right, and a target packed closely among siblings in a tall, narrow
-  // list (the dropdown itself) made an above/below card overlap the
-  // sibling right next to it. Side placement avoids both, since it's
-  // offset onto a part of the screen the list/dropdown doesn't occupy.
+  // Prefer placing the card beside the target (right, then left),
+  // vertically centered on it — side placement is what actually avoids
+  // two real problems a plain above/below placement had: a target near
+  // the right edge (the header menu toggle, or any item inside its
+  // dropdown) pushed the card off-screen or forced it to overlap the
+  // target itself, and a target packed closely among siblings in a tall,
+  // narrow list (the dropdown itself) made an above/below card overlap
+  // the sibling right next to it.
   const spaceLeft = rect.left
   const spaceRight = vw - rect.right
   const centeredTop = clamp(
     rect.top + rect.height / 2 - CARD_HEIGHT_ESTIMATE / 2,
     MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN,
   )
+  // Arrow offset (distance down from the card's own top edge) that points
+  // at the target's vertical center, clamped so the tail never renders
+  // outside the card's own edge even when the target sits far above/below
+  // where centeredTop had to clamp the card to stay on-screen.
+  const sideArrowOffset = clamp(
+    rect.top + rect.height / 2 - centeredTop, ARROW_SIZE * 2, CARD_HEIGHT_ESTIMATE - ARROW_SIZE * 2,
+  )
 
-  if (spaceLeft >= width + MARGIN * 2) {
-    return { ...base, left: rect.left - width - MARGIN, top: centeredTop }
-  }
   if (spaceRight >= width + MARGIN * 2) {
-    return { ...base, left: rect.right + MARGIN, top: centeredTop }
+    return {
+      style: { ...style, left: rect.right + MARGIN, top: centeredTop },
+      arrow: { side: 'left', offset: sideArrowOffset }, // tail on the card's LEFT edge, pointing left at the target
+    }
+  }
+  if (spaceLeft >= width + MARGIN * 2) {
+    return {
+      style: { ...style, left: rect.left - width - MARGIN, top: centeredTop },
+      arrow: { side: 'right', offset: sideArrowOffset }, // tail on the card's RIGHT edge, pointing right at the target
+    }
   }
 
   // Neither side has room -- typically means the window itself is
   // narrower than usual (not maximized), not just that this particular
-  // target is wide. If the target lives inside a dropdown, fall back to
-  // placing the card below/above the WHOLE dropdown column (not just
-  // this one item) instead: an above/below placement anchored to a
-  // single item risks overlapping the sibling row right next to it,
-  // exactly the problem side-placement exists to avoid in the first
-  // place -- using the container's own bounds instead keeps that
-  // guarantee even when side-placement itself isn't possible. The
-  // spotlight ring still makes it obvious which row the card is about,
-  // even though the card no longer sits flush against it.
-  const bounds = dropdownRect || rect
-  const left = clamp(bounds.left, MARGIN, vw - width - MARGIN)
-  const spaceBelow = vh - bounds.bottom
-  const spaceAbove = bounds.top
+  // target is wide. If the target lives inside a dropdown, clear against
+  // the WHOLE dropdown column (not just this one item) instead: an
+  // above/below placement anchored to a single item risks overlapping the
+  // sibling row right next to it, exactly the problem side-placement
+  // exists to avoid in the first place -- using the container's own
+  // bounds instead keeps that guarantee even when side-placement itself
+  // isn't possible.
+  const clearance = dropdownRect || rect
+  const left = clamp(clearance.left, MARGIN, vw - width - MARGIN)
+  const spaceBelow = vh - clearance.bottom
+  const spaceAbove = clearance.top
+  // Arrow offset (distance right from the card's own left edge) pointing
+  // at the ACTUAL target's horizontal center (not the whole dropdown's),
+  // clamped to stay within the card's own width.
+  const belowAboveArrowOffset = clamp(rect.left + rect.width / 2 - left, ARROW_SIZE * 2, width - ARROW_SIZE * 2)
+
   if (spaceBelow >= CARD_HEIGHT_ESTIMATE + MARGIN) {
-    return { ...base, left, top: bounds.bottom + MARGIN }
+    return {
+      style: { ...style, left, top: clearance.bottom + MARGIN },
+      arrow: { side: 'top', offset: belowAboveArrowOffset }, // tail on the card's TOP edge, pointing up at the target
+    }
   }
   if (spaceAbove >= CARD_HEIGHT_ESTIMATE + MARGIN) {
-    return { ...base, left, top: Math.max(bounds.top - CARD_HEIGHT_ESTIMATE - MARGIN, MARGIN) }
+    return {
+      style: { ...style, left, top: Math.max(clearance.top - CARD_HEIGHT_ESTIMATE - MARGIN, MARGIN) },
+      arrow: { side: 'bottom', offset: belowAboveArrowOffset }, // tail on the card's BOTTOM edge, pointing down at the target
+    }
   }
-  // No room above or below the container either (a very short window) --
-  // nothing left to offset against; center vertically as a last resort.
-  return { ...base, left, top: clamp(vh / 2 - CARD_HEIGHT_ESTIMATE / 2, MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN) }
+
+  // Nothing fits cleanly (a very short/narrow window) -- centering the
+  // card WITHOUT a tail is deliberately preferred here over forcing any
+  // of the placements above: every one of them would put the card
+  // overlapping the very thing it's supposed to explain, which is worse
+  // than just not pointing at it. The spotlight ring still highlights the
+  // target on its own regardless.
+  return {
+    style: {
+      ...style,
+      left: clamp(vw / 2 - width / 2, MARGIN, vw - width - MARGIN),
+      top: clamp(vh / 2 - CARD_HEIGHT_ESTIMATE / 2, MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN),
+    },
+    arrow: null,
+  }
+}
+
+// Renders `arrow` (see computeCardPlacement) as a small solid CSS triangle
+// on the given edge of the card, offset along that edge toward the
+// target. `side` names which edge of the CARD the tail sits on (matching
+// the direction it points, e.g. 'left' = tail on the card's left edge,
+// pointing further left at the target).
+function arrowStyle(arrow){
+  const S = ARROW_SIZE
+  const base = { position: 'absolute', width: 0, height: 0 }
+  switch (arrow.side) {
+    case 'left':
+      return { ...base, left: -S, top: arrow.offset - S,
+        borderTop: `${S}px solid transparent`, borderBottom: `${S}px solid transparent`,
+        borderRight: `${S}px solid #1e293b` }
+    case 'right':
+      return { ...base, right: -S, top: arrow.offset - S,
+        borderTop: `${S}px solid transparent`, borderBottom: `${S}px solid transparent`,
+        borderLeft: `${S}px solid #1e293b` }
+    case 'top':
+      return { ...base, top: -S, left: arrow.offset - S,
+        borderLeft: `${S}px solid transparent`, borderRight: `${S}px solid transparent`,
+        borderBottom: `${S}px solid #1e293b` }
+    case 'bottom':
+    default:
+      return { ...base, bottom: -S, left: arrow.offset - S,
+        borderLeft: `${S}px solid transparent`, borderRight: `${S}px solid transparent`,
+        borderTop: `${S}px solid #1e293b` }
+  }
 }
 
 function clamp(v, lo, hi){

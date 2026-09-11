@@ -240,6 +240,11 @@ export default function CharacterDanbooruLinkManager({ onClose }) {
               <div key={l.character_name} style={{ border: '1px solid #334155', borderRadius: 6, background: '#1e293b', marginBottom: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>{l.character_name}</span>
+                  {l.group_name && (
+                    <span style={{ fontSize: 11, color: '#94a3b8', background: '#0f172a', border: '1px solid #334155', borderRadius: 4, padding: '2px 6px' }}>
+                      {l.parent_group_name ? `${l.parent_group_name} / ${l.group_name}` : l.group_name}
+                    </span>
+                  )}
                   {l.danbooru_tag && (
                     <span style={{ fontSize: 12, color: '#86efac' }}>→ {l.danbooru_tag}</span>
                   )}

@@ -56,6 +56,7 @@ const TABLE_LABELS = {
   item_charactergroup: 'キャラクターグループ',
   item_item: 'アイテム',
   item_previewimage: 'プレビュー画像',
+  item_characterdanboorulink: 'キャラ↔Danbooruリンク',
 }
 
 const PHASE_LABELS = {
@@ -306,7 +307,8 @@ export default function BackupManager({ onClose }) {
               setNotice(
                 `追記が完了しました: アイテム${mr.items_added}件追加` +
                 (mr.items_skipped ? `(重複${mr.items_skipped}件はスキップ)` : '') +
-                `、プレビュー画像${mr.previews_added}件、キャラクターグループ${mr.groups_added}件追加。ページを再読み込みしてください。`
+                `、プレビュー画像${mr.previews_added}件、キャラクターグループ${mr.groups_added}件、` +
+                `キャラ↔Danbooruリンク${mr.character_links_added ?? 0}件追加。ページを再読み込みしてください。`
               )
             } else {
               setNotice('復元が完了しました。ページを再読み込みしてください。')
