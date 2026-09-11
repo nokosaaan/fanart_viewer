@@ -408,9 +408,33 @@ function AppMain({ role, onLogout }){
       }catch(e){/* ignore */}
     }
     window.addEventListener('item-updated', onItemUpdated)
+    // Every preview mutation (manual upload, salvage, fetch-and-save, clear
+    // one/all previews -- see ScrollList.jsx/PreviewPane.jsx) broadcasts
+    // this with just an id, and used to only flip each individual row's own
+    // local `hasPreviewLocal` state -- the shared `items` array here kept
+    // whatever (possibly has_preview:false) value it had from its last
+    // fetch. That stale `has_preview` then got written into the localStorage
+    // cache (see the debounced saveCachedItems effect below) and seeded
+    // right back in on the next full reload, silently overriding a preview
+    // that had, in fact, been saved. Re-fetch just this one item and merge
+    // it in, the same way onItemUpdated already does for edits.
+    function onItemPreviewUpdated(ev){
+      const id = ev && ev.detail && ev.detail.id
+      if(id == null) return
+      ;(async () => {
+        try{
+          const r = await fetch(`/api/items/${id}/`)
+          if(!r.ok) return
+          const fresh = await r.json()
+          setItems(prev => Array.isArray(prev) ? prev.map(it => it.id === fresh.id ? { ...it, ...fresh } : it) : prev)
+        }catch(e){ /* next full reload will pick up the correct state anyway */ }
+      })()
+    }
+    window.addEventListener('item-preview-updated', onItemPreviewUpdated)
     return ()=>{
       window.removeEventListener('item-deleted', onItemDeleted)
       window.removeEventListener('item-updated', onItemUpdated)
+      window.removeEventListener('item-preview-updated', onItemPreviewUpdated)
     }
   }, [])
 
@@ -425,10 +449,21 @@ function AppMain({ role, onLogout }){
   }, [items])
 
   // Search/filters only see whatever's been loaded so far. The first time the
-  // user actually searches, fetch the rest of the dataset in the background
-  // (once) so results aren't silently incomplete.
+  // user actually filters — a text query, a filter chip, OR any of the
+  // quick toggles (situation/title-missing/preview-missing) — fetch the
+  // rest of the dataset in the background (once) so results aren't
+  // silently incomplete. situationFilter/titleMissingOnly/previewMissingOnly
+  // used to be left out of this check entirely, so narrowing down to just
+  // e.g. "SOLO" only ever filtered whatever pages happened to already be
+  // loaded — anything past that point (not yet paged/scrolled into `items`)
+  // silently never appeared as a match, in both the main list AND
+  // PreviewPane (which intersects its own broader fetch against this same
+  // `filtered` array's id set — see App.jsx's <PreviewPane filteredItems=...>
+  // and PreviewPane.jsx's own loadItems/effect), which is exactly what made
+  // Preview Timeline look like it wasn't honoring the current filter.
   useEffect(()=>{
-    const searching = query.trim() !== '' || filters.length > 0
+    const searching = query.trim() !== '' || filters.length > 0 ||
+      situationFilter !== 'ALL' || titleMissingOnly || previewMissingOnly
     if(!searching || !nextPageUrl || fullIndexStartedRef.current) return
     fullIndexStartedRef.current = true
     let cancelled = false
@@ -438,7 +473,11 @@ function AppMain({ role, onLogout }){
         const { items: rest, nextUrl } = await fetchItemsPages(nextPageUrl)
         if(cancelled) return
         setItems(prev => {
-          const merged = uniqueById([...(Array.isArray(prev)?prev:[]), ...rest])
+          // Freshly-fetched first (see the initial-load effect above for the
+          // same ordering, and why) -- a stale cached `prev` entry for an id
+          // that also appears in `rest` must not win over what was just
+          // re-fetched from the server.
+          const merged = uniqueById([...rest, ...(Array.isArray(prev)?prev:[])])
           itemsCountRef.current = merged.length
           return merged
         })
@@ -451,7 +490,7 @@ function AppMain({ role, onLogout }){
       }
     })()
     return ()=>{ cancelled = true }
-  }, [query, filters, nextPageUrl])
+  }, [query, filters, situationFilter, titleMissingOnly, previewMissingOnly, nextPageUrl])
 
   const suggestions = useMemo(()=>{
     const set = new Set()
@@ -742,7 +781,7 @@ function AppMain({ role, onLogout }){
         setPreviewMissingOnly={setPreviewMissingOnly}
         readOnly={readOnly}
       />
-      <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} />
+      <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
           <button className="btn" onClick={loadNextPage} disabled={loadingPages}>{loadingPages ? 'Loading…' : 'Load more pages'}</button>

@@ -74,7 +74,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
         if(!mountedRef.current) return accumulated
         allLoadedRef.current = accumulated
         let have = accumulated
-        if(Array.isArray(filteredItems) && filteredItems.length > 0){
+        // No `.length > 0` guard here on purpose: a filter that legitimately
+        // matches zero items (e.g. a situation filter with no results) must
+        // show an empty timeline, not silently fall back to every loaded
+        // item just because the intersection happened to be empty.
+        if(Array.isArray(filteredItems)){
           const allowedIds = new Set(filteredItems.map(it => it.id))
           have = have.filter(it => allowedIds.has(it.id))
         }
@@ -93,7 +97,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
         if(!mountedRef.current) return withPreview
         allLoadedRef.current = (allLoadedRef.current || []).concat(withPreview)
         let have = allLoadedRef.current
-        if(Array.isArray(filteredItems) && filteredItems.length > 0){
+        // No `.length > 0` guard here on purpose: a filter that legitimately
+        // matches zero items (e.g. a situation filter with no results) must
+        // show an empty timeline, not silently fall back to every loaded
+        // item just because the intersection happened to be empty.
+        if(Array.isArray(filteredItems)){
           const allowedIds = new Set(filteredItems.map(it => it.id))
           have = have.filter(it => allowedIds.has(it.id))
         }

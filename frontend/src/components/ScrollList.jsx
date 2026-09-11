@@ -16,7 +16,7 @@ function OpenLinkIcon({ link }) {
     : <img src="/icons/export-link.svg" alt="Open" style={{ width: 16, height: 16 }} />
 }
 
-function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
+function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
@@ -208,7 +208,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
               <>
                 {titlesState.slice(0,2).map((t,i)=> (
                   <div key={i} style={{display:'inline-flex', alignItems:'center', marginRight:6}}>
-                    <button className="chip" onClick={()=>{}} style={{paddingRight:8}}>{t}</button>
+                    <button className="chip" onClick={()=>onAddFilter && onAddFilter(t)} title="このタイトルで絞り込む" style={{paddingRight:8}}>{t}</button>
                       <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} style={{marginLeft:4, padding:'6px'}} title="タイトルをコピー">
                         <img src="/icons/copy.svg" alt="Copy title" style={{width:16, height:16}} />
                       </button>
@@ -229,7 +229,11 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
               <div className="chip-dropdown">
                 {titlesState.map((t,i)=> (
                   <div key={i} className="chip-row" style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
-                    <div style={{flex:1, wordBreak:'break-word'}}>{t}</div>
+                    <div
+                      style={{flex:1, wordBreak:'break-word', cursor: onAddFilter ? 'pointer' : undefined}}
+                      onClick={()=>onAddFilter && onAddFilter(t)}
+                      title="このタイトルで絞り込む"
+                    >{t}</div>
                     <div style={{marginLeft:8, display:'flex', alignItems:'center', gap:6}}>
                         <button className="chip" onClick={async ()=>{ try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} title="タイトルをコピー" style={{padding:6}}>
                         <img src="/icons/copy.svg" alt="Copy" style={{width:16, height:16}} />
@@ -249,7 +253,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
             {/* Characters: always show all characters when present */}
             {Array.isArray(charsState) && charsState.length>0 && (
               <div className="chips" style={{marginTop:8}}>
-                {charsState.map((c,i)=> <button key={i} className="chip" onClick={()=>{}}>{c}</button>)}
+                {charsState.map((c,i)=> <button key={i} className="chip" onClick={()=>onAddFilter && onAddFilter(c)} title="このキャラクターで絞り込む">{c}</button>)}
               </div>
             )}
           </div>
@@ -265,7 +269,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
           <div className="chips">
             {Array.isArray(tagsState) && tagsState.length>0 ? (
               <>
-                {tagsState.slice(0,3).map((tag,i)=> <button key={i} className="chip" onClick={()=>{}}>{tag}</button>)}
+                {tagsState.slice(0,3).map((tag,i)=> <button key={i} className="chip" onClick={()=>onAddFilter && onAddFilter(tag)} title="このタグで絞り込む">{tag}</button>)}
                 {tagsState.length>3 && (
                   <button className="chip more" onClick={()=>setShowTags(s=>!s)}>{showTags? '▲' : `+${tagsState.length-3}`}</button>
                 )}
@@ -275,7 +279,14 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
             )}
             {showTags && Array.isArray(tagsState) && (
               <div className="chip-dropdown">
-                {tagsState.map((tag,i)=> <div key={i} className="chip-row">{tag}</div>)}
+                {tagsState.map((tag,i)=> (
+                  <div
+                    key={i} className="chip-row"
+                    style={{cursor: onAddFilter ? 'pointer' : undefined}}
+                    onClick={()=>onAddFilter && onAddFilter(tag)}
+                    title="このタグで絞り込む"
+                  >{tag}</div>
+                ))}
               </div>
             )}
           </div>
@@ -458,11 +469,11 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview }){
   )
 }
 
-export default function ScrollList({items, readOnly=false, onEnqueueFetch, onOpenPreview}){
+export default function ScrollList({items, readOnly=false, onEnqueueFetch, onOpenPreview, onAddFilter}){
   return (
     <div className="scroll-list">
       {items.map(it=> (
-        <ItemRow it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch} onOpenPreview={onOpenPreview} />
+        <ItemRow it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch} onOpenPreview={onOpenPreview} onAddFilter={onAddFilter} />
       ))}
     </div>
   )
