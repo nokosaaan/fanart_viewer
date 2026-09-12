@@ -30,6 +30,13 @@ export default function TrainClassifierManager({ onClose }) {
   const [exclude, setExclude] = useState('')
   const [includeMulti, setIncludeMulti] = useState(false)
   const [backend, setBackend] = useState('onnx')
+  // On by default — see classifier_training.py's own _build_argv comment:
+  // re-running the tagger on every already-processed image every single
+  // retrain is expensive enough that skipping it is the sensible default,
+  // not a power-user opt-in. Turning it off forces a full from-scratch
+  // extraction this run only (useful right after a mislabeled image was
+  // fixed, or if the cache is ever suspected to be stale/corrupt).
+  const [useCache, setUseCache] = useState(true)
 
   const logRef = useRef(null)
   const pollRef = useRef(null)
@@ -75,6 +82,7 @@ export default function TrainClassifierManager({ onClose }) {
         min_images: minImages.trim() ? parseInt(minImages, 10) : undefined,
         exclude: exclude.trim(),
         include_multi_character: includeMulti,
+        update_cache: useCache,
       }
       const r = await fetch('/api/train_classifier/start/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
@@ -155,9 +163,14 @@ export default function TrainClassifierManager({ onClose }) {
                       borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box', marginBottom: 10 }}
                   />
 
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#cbd5e1', marginBottom: 14, cursor: 'pointer' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#cbd5e1', marginBottom: 10, cursor: 'pointer' }}>
                     <input type="checkbox" checked={includeMulti} onChange={e => setIncludeMulti(e.target.checked)} />
                     複数人が写っている画像も学習に混ぜる(領域ラベル付けキューでラベル済みのもの中心。件数が少ないうちは不要です)
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#cbd5e1', marginBottom: 14, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={useCache} onChange={e => setUseCache(e.target.checked)} />
+                    前回までの画像解析結果をキャッシュして再利用する(新しく増えた画像分だけ解析するので2回目以降が高速になります。オフにすると今回だけ全件を解析し直します)
                   </label>
 
                   <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '9px 20px', fontSize: 13, fontWeight: 600 }}

@@ -28,11 +28,14 @@ it (that flag is only ever inspected by exe/launcher.py, which dev/Docker
 never runs at all). is_available() gates the whole feature on this.
 """
 import logging
+import os
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+from item import tagger
 
 logger = logging.getLogger(__name__)
 
@@ -61,21 +64,27 @@ def training_log_path() -> Path:
 
 
 # Options a regular user might actually want to change — see exe/README.txt,
-# which documents these same four as "usually all you need" (min-images and
+# which documents these same as "usually all you need" (min-images and
 # backend/classifier defaults are already the recommended values; --exclude
 # is the one RELEASE_LOCAL.md flags as commonly necessary in practice).
-# Deliberately NOT exposed here: --feature-cache/--use-cache/--multi-
-# feature-cache/--use-multi-cache/--classifier/--test-size/--random-state/
-# --max-characters-per-item/--bootstrap-confidence/--output — all real
-# argparse options, just power-user tuning knobs irrelevant to "I added
-# some new characters, let's retrain" (still reachable via train.ps1's own
+# `update_cache` (a checkbox, not a raw path — see below) is the one
+# exception to "power-user tuning knob": re-running the tagger on every
+# already-processed image every single time is expensive enough on a
+# personal machine that skipping it by default for anyone who trains more
+# than once is worth the one extra checkbox.
+# Deliberately still NOT exposed here: --feature-cache/--use-cache (the
+# frozen, no-DB-check variant)/--classifier/--test-size/--random-state/
+# --output/--max-images-per-character/--feature-source — all real argparse
+# options, just power-user tuning knobs irrelevant to "I added some new
+# characters, let's retrain" (still reachable via train.ps1's own
 # passthrough args for anyone who wants them).
 def _build_argv(options: dict) -> list:
     argv = []
 
-    backend = options.get('backend')
-    if backend in ('onnx', 'canary'):
-        argv += ['--backend', backend]
+    backend_choice = options.get('backend')
+    if backend_choice not in ('onnx', 'canary'):
+        backend_choice = 'onnx'  # train_character_classifier's own default
+    argv += ['--backend', backend_choice]
 
     min_images = options.get('min_images')
     if min_images is not None:
@@ -94,6 +103,17 @@ def _build_argv(options: dict) -> list:
 
     if options.get('include_multi_character'):
         argv += ['--include-multi-character']
+
+    # A checkbox, not a free-text path field — a non-technical user has no
+    # reason to ever pick where this file lives, and always pointing at the
+    # SAME well-known default (matching train_character_classifier.py's own
+    # --feature-cache default naming exactly, keyed only by --backend) is
+    # what actually lets this be reused run after run: --feature-source
+    # isn't exposed in this GUI at all, so it's always the 'tags' variant
+    # of that default name.
+    if options.get('update_cache'):
+        cache_path = os.path.join(tagger._data_dir(), f'character_features_{backend_choice}.joblib')
+        argv += ['--update-cache', cache_path]
 
     return argv
 

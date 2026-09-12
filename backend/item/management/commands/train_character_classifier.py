@@ -45,17 +45,29 @@ than two single-identity classes normally would be.
 
 THE EXPENSIVE PART is feature extraction (running the tagger's forward pass
 once per image) — the classifier fit itself is fast. This command caches
-every extracted (item_id, character, feature vector) to --feature-cache
-after extraction, so a later run that only changes --exclude/--min-images/
---test-size (e.g. to drop a bad label you noticed in the first report) can
-reuse it via --use-cache instead of re-extracting from scratch. A cache is
-only valid for the --backend it was extracted with; extracting is still
-needed again after adding new single-character items to the DB, or to
-widen the character set below the cache's original --min-images floor
-(cache stores whatever this run's --min-images left in, not a fixed lower
-floor — a much lower --min-images used only for the cache-generating run
-maximizes future reuse, at the cost of extracting a few more long-tail
-images that run).
+every extracted (item_id, character, feature vector, image key) to
+--feature-cache after extraction, so a later run that only changes
+--exclude/--min-images/--test-size (e.g. to drop a bad label you noticed in
+the first report) can reuse it via --use-cache instead of re-extracting from
+scratch — but --use-cache trusts the file exactly as saved and never looks
+at the DB again at all, so it goes stale the moment a new single-character
+item/image is added. A cache is only valid for the --backend/--feature-source
+it was extracted with (widening the character set below the cache's
+original --min-images floor still needs a fresh extraction — a cache stores
+whatever this run's --min-images left in, not a fixed lower floor).
+
+--update-cache is the incremental alternative for ongoing use as the DB
+grows: it still scans the DB (needed to discover what's new), but reuses
+each image's already-cached feature vector by its own stable key (a
+PreviewImage's own id, or the item's id for the legacy single-blob preview
+path) instead of re-running the tagger on it — only images that are new (or
+weren't in the cache yet) actually get extracted, and the refreshed full set
+is written back. The same applies to --include-multi-character's manually
+labeled region crops (keyed by item id + image index + box coordinates, so
+redrawing a box's coordinates correctly forces that one crop to be
+re-extracted). A relabeled/deleted item's stale row is simply dropped
+(the DB scan each run only ever keeps what's currently eligible) rather than
+reused under its old label.
 
 This is a TRAINING script only — it saves a classifier artifact (joblib
 file) but does NOT wire it into the suggestion pipeline (item.tagger /
@@ -102,9 +114,14 @@ Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
       --exclude 牢屋敷メンバー --feature-cache /app/data/tagger/char_features_onnx.joblib
 
-  # Later: tweak and refit WITHOUT re-extracting
+  # Later: tweak and refit WITHOUT re-extracting (never touches the DB)
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
       --use-cache /app/data/tagger/char_features_onnx.joblib --exclude 牢屋敷メンバー,ユキ
+
+  # Ongoing use as the DB grows: only newly-added images get extracted,
+  # everything already in the cache is reused as-is
+  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
+      --update-cache /app/data/tagger/char_features_onnx.joblib --exclude 牢屋敷メンバー
 
   # v2: also learn from manually region-labeled multi-character images
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
@@ -372,9 +389,22 @@ class Command(BaseCommand):
                                   "extraction, for reuse by a later --use-cache run. Default: "
                                   "character_features_<backend>.joblib under the tagger's own cache dir.")
         parser.add_argument('--use-cache', type=str, default=None,
-                             help='Path to a previously-saved --feature-cache file — skip DB scanning and '
-                                  'feature extraction entirely and refit straight from these cached '
-                                  'features (still applies --exclude/--min-images as filters first).')
+                             help='Path to a previously-saved --feature-cache/--update-cache file — skip DB '
+                                  'scanning and feature extraction entirely and refit straight from these '
+                                  'cached features, exactly as saved (still applies --exclude/--min-images '
+                                  'as filters first). Use this for a quick --exclude/--min-images iteration '
+                                  'when you know no new images were added since the cache was made — for '
+                                  'ongoing use as the DB grows, prefer --update-cache instead.')
+        parser.add_argument('--update-cache', type=str, default=None,
+                             help='Path to a --feature-cache/--update-cache file to incrementally refresh: '
+                                  'scans the DB as usual, but reuses each already-cached image\'s feature '
+                                  'vector instead of re-running the (expensive) tagger forward pass on it, '
+                                  "only actually extracting images that are new (or weren't yet successfully "
+                                  'cached) since the file was last written. The file is then overwritten '
+                                  '(or --feature-cache written instead, if given) with the refreshed full '
+                                  'set. If the path does not exist yet, this is just a normal first '
+                                  'extraction that creates it. Mutually exclusive with --use-cache (that one '
+                                  'skips the DB scan needed to discover what is new).')
         parser.add_argument('--include-multi-character', action='store_true',
                              help='Also learn from multi-character items, but ONLY the ones a human has '
                                   'manually region-labeled (Item.character_regions — see module docstring). '
@@ -445,21 +475,55 @@ class Command(BaseCommand):
             )
 
         general_tag_names = None
-        if options['use_cache']:
-            self.stdout.write(f"Loading cached features from {options['use_cache']}...")
-            cache = joblib.load(options['use_cache'])
-            if cache.get('backend') != tagger_backend or cache.get('feature_source', 'tags') != feature_source:
+        use_cache_path = options['use_cache']
+        update_cache_path = options['update_cache']
+        if use_cache_path and update_cache_path:
+            raise CommandError(
+                '--use-cache と --update-cache は同時に指定できません(用途が異なります — '
+                'どちらか一方を選んでください)。'
+            )
+
+        # --use-cache always loads (file must exist, same as before).
+        # --update-cache loads only if a file already sits at that path —
+        # otherwise this is just a normal first extraction that creates one.
+        base_cache = None
+        if use_cache_path:
+            self.stdout.write(f"Loading cached features from {use_cache_path}...")
+            base_cache = joblib.load(use_cache_path)
+        elif update_cache_path and os.path.exists(update_cache_path):
+            self.stdout.write(f"Loading cached features from {update_cache_path} to reuse where possible...")
+            base_cache = joblib.load(update_cache_path)
+
+        if base_cache is not None:
+            if base_cache.get('backend') != tagger_backend or base_cache.get('feature_source', 'tags') != feature_source:
                 raise CommandError(
-                    f"Cache was extracted with backend={cache.get('backend')!r}/"
-                    f"feature_source={cache.get('feature_source', 'tags')!r}, but backend={tagger_backend!r}/"
+                    f"Cache was extracted with backend={base_cache.get('backend')!r}/"
+                    f"feature_source={base_cache.get('feature_source', 'tags')!r}, but backend={tagger_backend!r}/"
                     f"feature_source={feature_source!r} was requested — features aren't compatible."
                 )
-            raw_rows = cache['rows']  # [(item_id, character, feature_vector), ...]
-            general_tag_names = cache['general_tag_names']
+            general_tag_names = base_cache['general_tag_names']
+
+        # Keyed by each row's own stable image_key/region_key (see
+        # _extract_features/_get_manual_labeled_rows) so --update-cache can
+        # reuse an already-extracted feature by IDENTITY — rows from before
+        # that key existed have `None` here and are simply never reused.
+        cached_solo_features = {
+            key: feat for _item_id, _char, feat, key in (base_cache['rows'] if base_cache else []) if key is not None
+        }
+        cached_manual_features = {
+            key: feat for _char, feat, key in ((base_cache.get('manual_rows') or []) if base_cache else [])
+            if key is not None
+        }
+
+        if use_cache_path:
+            # Normalize pre-image-key cache files (plain 3-tuples) rather
+            # than requiring a fresh extraction just to read an old file.
+            raw_rows = [r if len(r) == 4 else (*r, None) for r in base_cache['rows']]
             self.stdout.write(f'Loaded {len(raw_rows)} cached (item, character, feature) rows.\n')
         else:
-            raw_rows, general_tag_names = self._extract_features(
+            raw_rows, general_tag_names, n_reused, n_new = self._extract_features(
                 min_images, tagger_backend, feature_source, options['max_images_per_character'],
+                cached_features=cached_solo_features, expected_general_tag_names=general_tag_names,
             )
             if raw_rows is None:
                 # _extract_features already wrote the specific reason via
@@ -467,18 +531,8 @@ class Command(BaseCommand):
                 # turn that into a nonzero exit (see the ImportError catch
                 # above for why a plain `return` isn't enough).
                 raise CommandError('特徴抽出に失敗しました(詳細は上記のログを確認してください)。')
-            default_cache_name = (
-                f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
-                else f'character_features_{backend_choice}_{feature_source}.joblib'
-            )
-            feature_cache_path = options['feature_cache'] or os.path.join(tagger._data_dir(), default_cache_name)
-            joblib.dump({'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
-                         'general_tag_names': general_tag_names},
-                        feature_cache_path)
-            self.stdout.write(self.style.SUCCESS(
-                f'\nCached {len(raw_rows)} extracted features to {feature_cache_path} '
-                '(reuse with --use-cache to skip re-extraction next time).\n'
-            ))
+            if cached_solo_features:
+                self.stdout.write(f'{n_reused} image(s) reused from cache, {n_new} newly extracted.\n')
 
         # An item with manual character_regions gets a reliable, human-drawn
         # crop fed straight in below when --include-multi-character is on —
@@ -504,7 +558,7 @@ class Command(BaseCommand):
         # applying it here, before that merge, would be wrong.
         by_char = defaultdict(list)
         skipped_annotated = 0
-        for item_id, char, feature in raw_rows:
+        for item_id, char, feature, _image_key in raw_rows:
             if char in exclude:
                 continue
             if item_id in annotated_item_ids:
@@ -542,9 +596,28 @@ class Command(BaseCommand):
         # printed tally reflects a character's TRUE total support (solo +
         # manual) and every included class gets a genuine holdout split.
         manual_counts = defaultdict(int)
+        # Saved into the cache file below alongside raw_rows whenever this
+        # run actually attempted manual-region extraction (see the write
+        # block's own comment on why NOT saving an empty/absent list are
+        # different things).
+        manual_rows = []
         if options['include_multi_character']:
-            manual_rows = self._get_manual_labeled_rows(tagger_backend, options['feature_source'], general_tag_names)
-            for char, feature in manual_rows:
+            if use_cache_path and base_cache.get('manual_rows') is not None:
+                manual_rows = base_cache['manual_rows']
+                self.stdout.write(f'Loaded {len(manual_rows)} cached manually-labeled region(s) (no DB scan).\n')
+            else:
+                if use_cache_path:
+                    self.stdout.write(self.style.WARNING(
+                        'このキャッシュには手動領域ラベルの分が含まれていないため、その部分だけDBを'
+                        'スキャンして抽出します(単体画像の特徴量はキャッシュのみで済んでいます)。'
+                    ))
+                manual_rows, n_manual_reused, n_manual_new = self._get_manual_labeled_rows(
+                    tagger_backend, options['feature_source'], general_tag_names,
+                    cached_features=cached_manual_features,
+                )
+                if cached_manual_features:
+                    self.stdout.write(f'{n_manual_reused} region(s) reused from cache, {n_manual_new} newly extracted.\n')
+            for char, feature, _region_key in manual_rows:
                 if char in exclude:
                     continue
                 by_char[char].append(feature)
@@ -553,6 +626,39 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(
                     'No manually-labeled regions found. (See RegionLabelQueueManager.jsx to label multi-character items.)'
                 ))
+
+        # Persist the (possibly refreshed) feature set for reuse next time.
+        # --use-cache deliberately never writes anything back (it trusts the
+        # file exactly as loaded, with no DB check at all); both a plain
+        # fresh run and --update-cache always do, so a first run already
+        # produces a file --update-cache can build on incrementally later.
+        if not use_cache_path:
+            default_cache_name = (
+                f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
+                else f'character_features_{backend_choice}_{feature_source}.joblib'
+            )
+            feature_cache_path = (
+                options['feature_cache'] or update_cache_path
+                or os.path.join(tagger._data_dir(), default_cache_name)
+            )
+            cache_payload = {'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
+                              'general_tag_names': general_tag_names}
+            # Only recorded when this run actually attempted manual-region
+            # extraction (--include-multi-character) — an omitted key means
+            # "not yet computed, scan the DB if asked for it later", while
+            # an empty list means "computed, and there were genuinely none
+            # at the time" — conflating the two would make a later
+            # --use-cache run silently skip real manual regions that this
+            # particular run just never looked for.
+            if options['include_multi_character']:
+                cache_payload['manual_rows'] = manual_rows
+            joblib.dump(cache_payload, feature_cache_path)
+            self.stdout.write(self.style.SUCCESS(
+                f'\nCached {len(raw_rows)} extracted feature(s)'
+                + (f' + {len(manual_rows)} manually-labeled region(s)' if options['include_multi_character'] else '')
+                + f' to {feature_cache_path} (reuse with --use-cache to skip re-extraction entirely next time, '
+                'or --update-cache to keep it fresh incrementally as the DB grows).\n'
+            ))
 
         eligible = {c: feats for c, feats in by_char.items() if len(feats) >= min_images}
         if len(eligible) < 2:
@@ -623,14 +729,24 @@ class Command(BaseCommand):
         }, output_path)
         self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
 
-    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names):
-        """[(character, feature), ...] for every human-labeled region across
-        all items with Item.character_regions set (see RegionAnnotator.jsx /
-        ItemViewSet.character_regions_view) — this is the ONLY source of
-        multi-character training data (see module docstring for why an
-        earlier automatic-detection-based approach was removed); a human
-        already drew the box and named it, so there's no confidence gate
-        to apply, just direct (character, feature) pairs to train on.
+    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names, cached_features=None):
+        """[(character, feature, region_key), ...] for every human-labeled
+        region across all items with Item.character_regions set (see
+        RegionAnnotator.jsx / ItemViewSet.character_regions_view) — this is
+        the ONLY source of multi-character training data (see module
+        docstring for why an earlier automatic-detection-based approach was
+        removed); a human already drew the box and named it, so there's no
+        confidence gate to apply, just direct (character, feature) pairs to
+        train on.
+
+        `region_key` identifies the exact crop a feature came from (item id
+        + image index + box coordinates) — stable as long as that region's
+        box isn't redrawn, so a later --update-cache run can reuse it via
+        `cached_features` ({region_key: feature_vector}, see handle()) and
+        skip re-running the tagger on it. A region's LABEL is always taken
+        fresh from the DB regardless (see the loop below), so relabeling an
+        already-cached box's identity still reuses its feature but reflects
+        the new label — only the pixels (the box itself) affect this key.
 
         A region can carry more than one character name for two very
         different reasons: person-detection sometimes merges two
@@ -660,6 +776,7 @@ class Command(BaseCommand):
         """
         from item.views import _select_image_bytes
 
+        cached_features = cached_features or {}
         linked_groups = {
             tuple(sorted(set(g.characters))): sorted(set(g.characters))
             for g in CharacterAliasGroup.objects.filter(linked=True)
@@ -670,6 +787,8 @@ class Command(BaseCommand):
         skipped_mismatch = 0
         skipped_multi_label = 0
         linked_alias_rows = 0
+        n_reused = 0
+        n_new = 0
         for item in items.iterator():
             regions = item.character_regions or []
             if not regions:
@@ -680,10 +799,7 @@ class Command(BaseCommand):
                 by_image[region.get('image_index')].append(region)
 
             for image_index, image_regions in by_image.items():
-                image_bytes, _resolved_index = _select_image_bytes(item, image_index)
-                if image_bytes is None:
-                    self.stderr.write(f'item {item.id}: no image available for its manual regions (image_index={image_index}), skipping')
-                    continue
+                image_bytes = None  # only fetched on demand (see below) — never needed at all if every region here is already cached
                 for region in image_regions:
                     box = region.get('box')
                     names = region.get('characters') or []
@@ -699,6 +815,21 @@ class Command(BaseCommand):
                         else:
                             skipped_multi_label += 1
                             continue
+
+                    region_key = f'{item.id}:{image_index}:{",".join(str(v) for v in box)}'
+                    cached_feature = cached_features.get(region_key)
+                    if cached_feature is not None:
+                        rows.append((label, cached_feature, region_key))
+                        n_reused += 1
+                        if len(names) > 1:
+                            linked_alias_rows += 1
+                        continue
+
+                    if image_bytes is None:
+                        image_bytes, _resolved_index = _select_image_bytes(item, image_index)
+                        if image_bytes is None:
+                            self.stderr.write(f'item {item.id}: no image available for its manual regions (image_index={image_index}), skipping')
+                            break  # no image means every region on it fails the same way
                     try:
                         crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
                         feature, feat_names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
@@ -710,7 +841,8 @@ class Command(BaseCommand):
                         continue
                     if len(names) > 1:
                         linked_alias_rows += 1
-                    rows.append((label, feature))
+                    n_new += 1
+                    rows.append((label, feature, region_key))
 
         if linked_alias_rows:
             self.stdout.write(f'{linked_alias_rows} region(s) trained via a confirmed CharacterAliasGroup (2+ names, same identity).')
@@ -724,7 +856,7 @@ class Command(BaseCommand):
                 'ambiguous identity, not used for single-label training).'
             ))
         self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {items.count()} annotated item(s).')
-        return rows
+        return rows, n_reused, n_new
 
     def _compute_feature(self, image_bytes, tagger_backend, feature_source):
         """(feature_vector, feature_names) for one image, dispatching on
@@ -743,14 +875,33 @@ class Command(BaseCommand):
         feature = np.asarray(preds, dtype=np.float32)[general_idx]
         return feature, [tag_names[i] for i in general_idx]
 
-    def _extract_features(self, min_images, tagger_backend, feature_source='tags', max_images_per_character=None):
+    def _extract_features(self, min_images, tagger_backend, feature_source='tags', max_images_per_character=None,
+                           cached_features=None, expected_general_tag_names=None):
         """Scans the DB for single-character items and runs the tagger's
-        forward pass once per image. Returns (rows, general_tag_names) where
-        rows is [(item_id, character, feature_vector), ...] for every
-        character with >= min_images single-character images — deliberately
-        NOT filtered by --exclude here, so the resulting feature-cache file
-        stays maximally reusable for a later run with a different --exclude
-        list (excluding is a cheap post-filter, see handle()).
+        forward pass once per image (unless already in `cached_features`,
+        see below). Returns (rows, general_tag_names, n_reused, n_new) where
+        rows is [(item_id, character, feature_vector, image_key), ...] for
+        every character with >= min_images single-character images —
+        deliberately NOT filtered by --exclude here, so the resulting
+        feature-cache file stays maximally reusable for a later run with a
+        different --exclude list (excluding is a cheap post-filter, see
+        handle()).
+
+        `image_key` is a stable identity for the exact image a row came from
+        (a PreviewImage's own id, or `item:<item id>` for the legacy
+        single-blob preview path — see below) — independent of this run's
+        --min-images/--exclude, and of any OTHER image the same item might
+        also have, so a later --update-cache run can look an image up by
+        this key regardless of what else changed around it.
+
+        `cached_features`: optional {image_key: feature_vector} from a
+        previous run (see handle()'s --update-cache handling) — an eligible
+        image whose key is already in here reuses that feature instead of
+        re-running the tagger on it. Only images that are genuinely new (or
+        weren't successfully cached before) actually get extracted, which is
+        the whole point of --update-cache: the DB still has to be scanned to
+        discover what's new, but the expensive part (the tagger forward
+        pass) is skipped for everything already known.
 
         `max_images_per_character` caps how many of each character's images
         actually get extracted (first N found, no special sampling) — the
@@ -760,7 +911,8 @@ class Command(BaseCommand):
         architecture comparison; a capped, smaller-but-still-real sample is
         far more useful than not comparing at all.
         """
-        by_char = defaultdict(list)  # character name -> [(item_id, image_bytes), ...]
+        cached_features = cached_features or {}
+        by_char = defaultdict(list)  # character name -> [(item_id, image_key, image_bytes), ...]
         items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
             'id', 'characters', 'preview_data',
         )
@@ -773,9 +925,9 @@ class Command(BaseCommand):
                 continue
             imgs = list(item.preview_images.all())
             if imgs:
-                by_char[char].extend((item.id, bytes(img.data)) for img in imgs)
+                by_char[char].extend((item.id, f'pi:{img.id}', bytes(img.data)) for img in imgs)
             elif item.preview_data:
-                by_char[char].append((item.id, bytes(item.preview_data)))
+                by_char[char].append((item.id, f'item:{item.id}', bytes(item.preview_data)))
             if max_images_per_character is not None:
                 by_char[char] = by_char[char][:max_images_per_character]
 
@@ -786,21 +938,31 @@ class Command(BaseCommand):
                 'need at least 2 distinct classes to train a classifier. Lower --min-images, or gather '
                 'more single-character-item data first (see character_image_stats).'
             ))
-            return None, None
+            return None, None, 0, 0
 
         self.stdout.write(f'{len(eligible)} characters qualify (>= {min_images} single-character images each):')
         for c, imgs in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
             self.stdout.write(f'  {len(imgs):>5}  {c}')
 
         total = sum(len(imgs) for imgs in eligible.values())
-        self.stdout.write(f'\nExtracting features for {total} images '
-                           f'(backend={tagger_backend}, feature_source={feature_source})...')
+        n_cached = sum(1 for imgs in eligible.values() for _iid, key, _b in imgs if key in cached_features)
+        self.stdout.write(
+            f'\nExtracting features for {total} images (backend={tagger_backend}, feature_source={feature_source})'
+            + (f' — {n_cached} already cached, {total - n_cached} to extract...' if cached_features else '...')
+        )
         rows = []
-        general_tag_names = None
+        general_tag_names = expected_general_tag_names
         t0 = time.time()
         done = 0
+        n_reused = 0
+        n_new = 0
         for char, imgs in eligible.items():
-            for item_id, image_bytes in imgs:
+            for item_id, image_key, image_bytes in imgs:
+                cached_feature = cached_features.get(image_key)
+                if cached_feature is not None:
+                    rows.append((item_id, char, cached_feature, image_key))
+                    n_reused += 1
+                    continue
                 try:
                     feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
                 except Exception as e:
@@ -808,12 +970,13 @@ class Command(BaseCommand):
                     continue
                 if general_tag_names is None:
                     general_tag_names = names
-                rows.append((item_id, char, feature))
+                rows.append((item_id, char, feature, image_key))
+                n_new += 1
                 done += 1
-                if done % 50 == 0 or done == total:
-                    self.stdout.write(f'  {done}/{total} ({time.time() - t0:.0f}s elapsed)')
+                if done % 50 == 0 or done == total - n_cached:
+                    self.stdout.write(f'  {done}/{total - n_cached} newly extracted ({time.time() - t0:.0f}s elapsed)')
 
         if len(rows) < 2:
             self.stderr.write(self.style.ERROR('Not enough successfully-extracted features.'))
-            return None, None
-        return rows, general_tag_names
+            return None, None, 0, 0
+        return rows, general_tag_names, n_reused, n_new
