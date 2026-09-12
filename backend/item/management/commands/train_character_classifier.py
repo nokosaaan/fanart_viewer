@@ -80,6 +80,18 @@ human has manually region-labeled (Item.character_regions, via
 RegionLabelQueueManager.jsx/RegionAnnotator.jsx), never from automatic
 person-detection alone.
 
+A not-yet-cached manual region is skipped entirely (no tagger call at all)
+when its character already clears --min-images from solo images alone —
+manual-region extraction (person-detection crop + tagger forward pass) costs
+exactly as much per-image as solo extraction, so a character that both
+appears alone often AND gets boxed often in group shots would otherwise
+spend a lot of that expensive extraction on data that was never strictly
+necessary. This is purely an extraction-time efficiency rule, not a
+data-quality filter: a region that's already sitting in the cache from an
+earlier run is still used as normal (see _get_manual_labeled_rows), and a
+character that DOESN'T clear --min-images from solo alone still gets every
+one of its manual regions extracted, same as before.
+
 An earlier version of this tried to bridge multi-character items WITHOUT
 manual labels via self-training: automatically detect person boxes, accept
 the item only when the detected box count happened to equal its confirmed
@@ -622,6 +634,16 @@ class Command(BaseCommand):
         # printed tally reflects a character's TRUE total support (solo +
         # manual) and every included class gets a genuine holdout split.
         manual_counts = defaultdict(int)
+        # Characters that already clear --min-images from solo images ALONE
+        # (i.e. before any manual-region data is even considered) — passed
+        # into _get_manual_labeled_rows below so it can skip running the
+        # tagger on a not-yet-cached region for one of these characters
+        # entirely (see that method's own docstring for why this only
+        # affects NEW extraction, never data that's already sitting in the
+        # cache for free). A character that ISN'T in this set may still
+        # need every one of its manual regions — it might only clear
+        # --min-images (or exist at all) BECAUSE of them.
+        solo_satisfied = {c for c, feats in by_char.items() if len(feats) >= min_images}
         # Saved into the cache file below alongside raw_rows whenever this
         # run actually attempted manual-region extraction (see the write
         # block's own comment on why NOT saving an empty/absent list are
@@ -637,12 +659,18 @@ class Command(BaseCommand):
                         'このキャッシュには手動領域ラベルの分が含まれていないため、その部分だけDBを'
                         'スキャンして抽出します(単体画像の特徴量はキャッシュのみで済んでいます)。'
                     ))
-                manual_rows, n_manual_reused, n_manual_new = self._get_manual_labeled_rows(
+                manual_rows, n_manual_reused, n_manual_new, n_manual_skipped = self._get_manual_labeled_rows(
                     tagger_backend, options['feature_source'], general_tag_names,
-                    cached_features=cached_manual_features,
+                    cached_features=cached_manual_features, solo_satisfied=solo_satisfied,
                 )
                 if cached_manual_features:
                     self.stdout.write(f'{n_manual_reused} region(s) reused from cache, {n_manual_new} newly extracted.\n')
+                if n_manual_skipped:
+                    self.stdout.write(
+                        f'{n_manual_skipped} not-yet-cached region(s) skipped entirely (their character already '
+                        f'has >= {min_images} single-character images on its own — see character_image_stats to '
+                        'double check, or lower --min-images if you specifically want these regions included).\n'
+                    )
             for char, feature, _region_key in manual_rows:
                 if char in exclude:
                     continue
@@ -750,7 +778,8 @@ class Command(BaseCommand):
         }, output_path)
         self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
 
-    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names, cached_features=None):
+    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names, cached_features=None,
+                                  solo_satisfied=None):
         """[(character, feature, region_key), ...] for every human-labeled
         region across all items with Item.character_regions set (see
         RegionAnnotator.jsx / ItemViewSet.character_regions_view) — this is
@@ -759,6 +788,21 @@ class Command(BaseCommand):
         removed); a human already drew the box and named it, so there's no
         confidence gate to apply, just direct (character, feature) pairs to
         train on.
+
+        `solo_satisfied`: characters that already clear `min_images` from
+        solo images alone (see handle()) — a region whose label is one of
+        these AND isn't already sitting in `cached_features` is skipped
+        entirely, WITHOUT running the tagger on it at all. This is a pure
+        extraction-time efficiency rule, not a data-quality filter: a region
+        that's already cached is still reused as usual (there is nothing to
+        save by throwing away a feature that cost nothing to include this
+        run), only a genuinely NEW crop's tagger pass gets skipped — for a
+        character that's already well past the threshold, this crop was
+        never going to be strictly needed, and manual-region extraction
+        (person-detection crop + tagger forward pass) is exactly as
+        expensive per-image as solo extraction, so skipping it is a real
+        time saving on any archive where a common character both appears
+        alone often AND gets manually boxed often in group shots.
 
         `region_key` identifies the exact crop a feature came from (item id
         + image index + box coordinates) — stable as long as that region's
@@ -798,6 +842,7 @@ class Command(BaseCommand):
         from item.views import _select_image_bytes
 
         cached_features = cached_features or {}
+        solo_satisfied = solo_satisfied or set()
         linked_groups = {
             tuple(sorted(set(g.characters))): sorted(set(g.characters))
             for g in CharacterAliasGroup.objects.filter(linked=True)
@@ -815,6 +860,7 @@ class Command(BaseCommand):
         rows = []
         skipped_mismatch = 0
         skipped_multi_label = 0
+        skipped_solo_satisfied = 0
         linked_alias_rows = 0
         n_reused = 0
         n_new = 0
@@ -861,6 +907,14 @@ class Command(BaseCommand):
                             linked_alias_rows += 1
                         continue
 
+                    # Not yet cached — worth actually running the tagger on
+                    # only if this character still needs the data (see this
+                    # method's own docstring on why an ALREADY-cached region
+                    # is kept above regardless of this check).
+                    if label in solo_satisfied:
+                        skipped_solo_satisfied += 1
+                        continue
+
                     if image_bytes is None:
                         image_bytes, _resolved_index = _select_image_bytes(item, image_index)
                         if image_bytes is None:
@@ -892,7 +946,7 @@ class Command(BaseCommand):
                 'ambiguous identity, not used for single-label training).'
             ))
         self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {len(items)} annotated item(s).')
-        return rows, n_reused, n_new
+        return rows, n_reused, n_new, skipped_solo_satisfied
 
     def _compute_feature(self, image_bytes, tagger_backend, feature_source):
         """(feature_vector, feature_names) for one image, dispatching on
