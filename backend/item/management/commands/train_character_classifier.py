@@ -514,6 +514,14 @@ class Command(BaseCommand):
                     f"feature_source={feature_source!r} was requested — features aren't compatible."
                 )
             general_tag_names = base_cache['general_tag_names']
+            # Normalize pre-image-key cache files (plain 3-tuples, from
+            # before --update-cache existed) to the current 4-tuple shape
+            # HERE — every other use of base_cache['rows'] below (both the
+            # cached_solo_features lookup dict and, for --use-cache, raw_rows
+            # itself) assumes 4 elements; doing this once right after
+            # loading means neither of those has to special-case the old
+            # shape again on its own.
+            base_cache['rows'] = [r if len(r) == 4 else (*r, None) for r in base_cache['rows']]
 
         # Keyed by each row's own stable image_key/region_key (see
         # _extract_features/_get_manual_labeled_rows) so --update-cache can
@@ -528,9 +536,7 @@ class Command(BaseCommand):
         }
 
         if use_cache_path:
-            # Normalize pre-image-key cache files (plain 3-tuples) rather
-            # than requiring a fresh extraction just to read an old file.
-            raw_rows = [r if len(r) == 4 else (*r, None) for r in base_cache['rows']]
+            raw_rows = base_cache['rows']  # already normalized to 4-tuples above
             self.stdout.write(f'Loaded {len(raw_rows)} cached (item, character, feature) rows.\n')
         else:
             raw_rows, general_tag_names, n_reused, n_new = self._extract_features(
