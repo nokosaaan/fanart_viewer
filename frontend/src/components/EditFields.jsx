@@ -122,7 +122,7 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
 // skip-to-next rather than close-a-modal — see fieldsRef/onSituationChange/
 // onDirtyChange/showOwnActions below, all added for that embedding).
 export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null,
-  fieldsRef = null, onSituationChange = null, onDirtyChange = null, showOwnActions = true }){
+  fieldsRef = null, onSituationChange = null, onTitlesChange = null, onDirtyChange = null, showOwnActions = true }){
   const [titleList, setTitleList] = useState(item.titles||[])
   const [charList,  setCharList]  = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
@@ -206,6 +206,15 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   useEffect(()=>{
     if(onSituationChange) onSituationChange(situation)
   }, [situation, onSituationChange])
+
+  // Same idea, for the live (unsaved) title list — lets an embedding parent
+  // hand it straight to RegionAnnotator so its own character-suggestion
+  // popover can scope to whichever title(s) are being typed right now,
+  // instead of only the item's last-saved titles (see RegionAnnotator's own
+  // `titles` prop / effectiveTitles).
+  useEffect(()=>{
+    if(onTitlesChange) onTitlesChange(titleList)
+  }, [titleList, onTitlesChange])
 
   // Sticky-true dirty notification, mirroring RegionAnnotator's own
   // onDirtyChange contract exactly (see that component) so ItemQueuePanel

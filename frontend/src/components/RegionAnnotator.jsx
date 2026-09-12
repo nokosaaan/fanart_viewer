@@ -33,7 +33,7 @@ function nextBoxId() { return `box-${++_boxIdCounter}` }
 // (matching tagger._detect_person_boxes/_crop_with_padding exactly, so no
 // translation is needed server-side) and only ever converted to/from the
 // image's on-screen CSS size at render time and on mouse events.
-export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef = null, showOwnActions = true }) {
+export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef = null, showOwnActions = true, titles = null }) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
@@ -52,24 +52,40 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
   // toggleBoxSelection).
   const [selectedBoxIds, setSelectedBoxIds] = useState(new Set())
   const [charQuery, setCharQuery] = useState('')
-  // Suggestion pool for the character-picker popover: this item's own
-  // characters PLUS every character registered in any CharacterGroup (the
-  // app-wide curated vocabulary, same source CharacterPicker.jsx uses
-  // elsewhere) — not just names already on this item, so a character who
-  // hasn't been added to charList yet can still be picked here directly.
-  const [groupCharNames, setGroupCharNames] = useState([])
+  // Raw CharacterGroup list — filtered by title below (mirroring
+  // CharacterPicker.jsx's own scoping exactly, see effectiveTitles/
+  // matchingGroups), rather than flattened into one unscoped name pool like
+  // this component used to do. That used to mean the popover suggested
+  // every character across every title in the whole DB regardless of which
+  // title(s) this item actually has, making manual typing the only practical
+  // way to narrow it down — the `titles` prop (falling back to the item's
+  // own `titles` field when not given an override) fixes that.
+  const [groups, setGroups] = useState([])
 
   useEffect(() => {
     fetch('/api/character-groups/')
       .then(r => r.json()).then(d => {
-        const list = Array.isArray(d) ? d : (d.results || [])
-        const names = new Set()
-        for (const g of list) {
-          for (const c of (g.characters || [])) if (c) names.add(c)
-        }
-        setGroupCharNames([...names])
+        setGroups(Array.isArray(d) ? d : (d.results || []))
       }).catch(() => {})
   }, [])
+
+  // `titles` lets an embedding parent (ItemQueuePanel) hand over the LIVE
+  // (unsaved) title list being edited in ItemEditForm right now, instead of
+  // only the item's last-saved `titles` field — same real-time-tracking
+  // idea as ItemQueuePanel's own situationDraft. Standalone usage (e.g. the
+  // mismatch tab's "ここで領域指定を続ける") passes nothing, so it just
+  // falls back to the item's own titles.
+  const effectiveTitles = (Array.isArray(titles) ? titles : (item.titles || [])).filter(Boolean)
+  const matchingGroups = effectiveTitles.length > 0
+    ? groups.filter(g => (g.titles || []).some(t => effectiveTitles.includes(t)))
+    : []
+  // Only actually restrict when it would narrow things down — same
+  // reasoning as CharacterPicker.jsx's own `scoped`: most existing groups
+  // haven't been retroactively linked to a title yet, so filtering to zero
+  // matches would just hide every known character instead of helping.
+  const scoped = effectiveTitles.length > 0 && matchingGroups.length > 0
+  const visibleGroups = scoped ? matchingGroups : groups
+  const groupCharNames = [...new Set(visibleGroups.flatMap(g => g.characters || []))]
 
   const imgRef = useRef(null)
   const containerRef = useRef(null)
@@ -311,6 +327,12 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
   )
   const activeBox = boxes.find(b => b.id === activeBoxId) || null
   const totalLabeled = boxes.filter(b => b.characters.length > 0).length
+  // Same hint text CharacterPicker.jsx shows for the identical situation —
+  // explains why the suggestion list is showing every known character
+  // instead of a title-scoped subset.
+  const scopeHint = effectiveTitles.length === 0
+    ? 'タイトル未選択のため全キャラを表示中'
+    : (!scoped ? 'このタイトルに紐づくグループがないため全キャラを表示中' : null)
 
   return (
     <div>
@@ -362,6 +384,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
               border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
             }}
           />
+          {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
             {charSuggestions.slice(0, 20).map(c => {
               const assigned = isAssignedToAllSelected(c)
@@ -464,6 +487,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
                       border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
                     }}
                   />
+                  {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
                   <div style={{ maxHeight: 140, overflowY: 'auto' }}>
                     {charSuggestions.slice(0, 20).map(c => {
                       const selected = b.characters.includes(c)

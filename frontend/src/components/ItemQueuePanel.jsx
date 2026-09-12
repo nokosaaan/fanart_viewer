@@ -17,6 +17,7 @@ import { saveItemFields, saveCharacterRegions } from '../lib/itemFieldsApi'
 // a save first just to see it.
 export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, closeLabel = 'スキップ（後で対応）', initialSuggestion = null }){
   const [situationDraft, setSituationDraft] = useState((item.situation || '').toUpperCase())
+  const [titlesDraft, setTitlesDraft] = useState(item.titles || [])
   const [fieldsDirty, setFieldsDirty] = useState(false)
   const [regionDirty, setRegionDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -97,6 +98,7 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
         showOwnActions={false}
         fieldsRef={fieldsRef}
         onSituationChange={setSituationDraft}
+        onTitlesChange={setTitlesDraft}
         onDirtyChange={setFieldsDirty}
       />
 
@@ -107,6 +109,7 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
           </label>
           <RegionAnnotator
             item={item}
+            titles={titlesDraft}
             showOwnActions={false}
             boxesRef={boxesRef}
             onDirtyChange={setRegionDirty}
