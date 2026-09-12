@@ -37,3 +37,16 @@ def train_classifier_start_view(request):
     except RuntimeError as e:
         return JsonResponse({'detail': str(e)}, status=409)
     return JsonResponse(classifier_training.get_status())
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def train_classifier_stop_view(request):
+    denied = _admin_only(request)
+    if denied:
+        return denied
+    try:
+        classifier_training.stop()
+    except RuntimeError as e:
+        return JsonResponse({'detail': str(e)}, status=409)
+    return JsonResponse(classifier_training.get_status())

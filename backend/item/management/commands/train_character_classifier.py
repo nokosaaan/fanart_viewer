@@ -534,6 +534,32 @@ class Command(BaseCommand):
             if cached_solo_features:
                 self.stdout.write(f'{n_reused} image(s) reused from cache, {n_new} newly extracted.\n')
 
+        # Computed once here (not just at the very end) so the checkpoint
+        # save right below and the final save after manual-region extraction
+        # both write to the exact same file.
+        default_cache_name = (
+            f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
+            else f'character_features_{backend_choice}_{feature_source}.joblib'
+        )
+        feature_cache_path = (
+            options['feature_cache'] or update_cache_path
+            or os.path.join(tagger._data_dir(), default_cache_name)
+        )
+
+        # Checkpoint the solo-image features to disk NOW, before manual-
+        # region extraction (--include-multi-character) even starts — that
+        # step can itself run for hours with NO progress output at all on a
+        # large labeled set (see _get_manual_labeled_rows), and it would be
+        # a real loss to make solo extraction's own many-hour run (the part
+        # that just finished) unrecoverable if the process is killed or
+        # crashes during the second, silent stretch. Written again below
+        # (with manual_rows folded in) once that part finishes too — this
+        # first write just protects against losing THIS part specifically.
+        if not use_cache_path:
+            joblib.dump({'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
+                         'general_tag_names': general_tag_names},
+                        feature_cache_path)
+
         # An item with manual character_regions gets a reliable, human-drawn
         # crop fed straight in below when --include-multi-character is on —
         # including its whole-image feature here too would train on the
@@ -627,20 +653,15 @@ class Command(BaseCommand):
                     'No manually-labeled regions found. (See RegionLabelQueueManager.jsx to label multi-character items.)'
                 ))
 
-        # Persist the (possibly refreshed) feature set for reuse next time.
-        # --use-cache deliberately never writes anything back (it trusts the
-        # file exactly as loaded, with no DB check at all); both a plain
-        # fresh run and --update-cache always do, so a first run already
-        # produces a file --update-cache can build on incrementally later.
+        # Persist the (possibly refreshed) feature set for reuse next time —
+        # same feature_cache_path already checkpointed with just the solo
+        # rows above, now overwritten once more with manual_rows folded in
+        # too. --use-cache deliberately never writes anything back (it
+        # trusts the file exactly as loaded, with no DB check at all); both
+        # a plain fresh run and --update-cache always do, so a first run
+        # already produces a file --update-cache can build on incrementally
+        # later.
         if not use_cache_path:
-            default_cache_name = (
-                f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
-                else f'character_features_{backend_choice}_{feature_source}.joblib'
-            )
-            feature_cache_path = (
-                options['feature_cache'] or update_cache_path
-                or os.path.join(tagger._data_dir(), default_cache_name)
-            )
             cache_payload = {'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
                               'general_tag_names': general_tag_names}
             # Only recorded when this run actually attempted manual-region
@@ -782,14 +803,26 @@ class Command(BaseCommand):
             for g in CharacterAliasGroup.objects.filter(linked=True)
         }
 
-        items = Item.objects.exclude(character_regions=[]).only('id', 'character_regions')
+        # Materialized (not .iterator()'d) so it can be counted up front for
+        # progress logging below without a second DB round-trip — this is
+        # just id + a JSON field, not the image bytes, so holding the whole
+        # list in memory is cheap even for a large archive.
+        items = list(Item.objects.exclude(character_regions=[]).only('id', 'character_regions'))
+        total_regions = sum(
+            1 for item in items for region in (item.character_regions or [])
+            if region.get('box') and region.get('characters')
+        )
         rows = []
         skipped_mismatch = 0
         skipped_multi_label = 0
         linked_alias_rows = 0
         n_reused = 0
         n_new = 0
-        for item in items.iterator():
+        processed = 0
+        t0 = time.time()
+        if total_regions:
+            self.stdout.write(f'\nProcessing {total_regions} manually-labeled region(s)...')
+        for item in items:
             regions = item.character_regions or []
             if not regions:
                 continue
@@ -805,6 +838,9 @@ class Command(BaseCommand):
                     names = region.get('characters') or []
                     if not box or not names:
                         continue
+                    processed += 1
+                    if processed % 50 == 0 or processed == total_regions:
+                        self.stdout.write(f'  {processed}/{total_regions} ({time.time() - t0:.0f}s elapsed)')
                     label = None
                     if len(names) == 1:
                         label = names[0]
@@ -855,7 +891,7 @@ class Command(BaseCommand):
                 f'{skipped_multi_label} manually-labeled region(s) skipped (2+ characters on one box — '
                 'ambiguous identity, not used for single-label training).'
             ))
-        self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {items.count()} annotated item(s).')
+        self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {len(items)} annotated item(s).')
         return rows, n_reused, n_new
 
     def _compute_feature(self, image_bytes, tagger_backend, feature_source):

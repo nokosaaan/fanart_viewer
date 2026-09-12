@@ -25,6 +25,7 @@ export default function TrainClassifierManager({ onClose }) {
   const [status, setStatus] = useState(null)
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
+  const [stopping, setStopping] = useState(false)
 
   const [minImages, setMinImages] = useState('15')
   const [exclude, setExclude] = useState('')
@@ -95,6 +96,34 @@ export default function TrainClassifierManager({ onClose }) {
       setError(e.message)
     } finally {
       setStarting(false)
+    }
+  }
+
+  // A real, hard-to-reverse action — killing the subprocess loses whatever
+  // progress the CURRENT phase hasn't checkpointed yet (see
+  // train_character_classifier.py's own comment on why the solo-image
+  // feature cache is saved before manual-region extraction starts, but
+  // that second phase itself has no partial-progress save) — confirm
+  // before sending it, same as other destructive actions elsewhere in this
+  // app (e.g. BackupManager's overwrite confirmation).
+  async function stop() {
+    if (!window.confirm(
+      '実行中の学習を中止します。今のフェーズで未保存の進捗は失われます'
+      + '(直前の特徴抽出フェーズ分は既にキャッシュ済みです)。よろしいですか？'
+    )) return
+    setStopping(true)
+    setError('')
+    try {
+      const r = await fetch('/api/train_classifier/stop/', {
+        method: 'POST', headers: HEADERS, credentials: 'same-origin',
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) { setError(j.detail || `中止に失敗しました (${r.status})`); return }
+      setStatus(j)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setStopping(false)
     }
   }
 
@@ -181,11 +210,17 @@ export default function TrainClassifierManager({ onClose }) {
               )}
 
               {running && (
-                <div style={{ fontSize: 13, color: '#93c5fd', marginBottom: 10 }}>
-                  学習中… (経過 {formatElapsed(status.started_at)})
-                  {status.args?.length > 0 && (
-                    <span style={{ color: '#64748b', marginLeft: 8 }}>{status.args.join(' ')}</span>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 13, color: '#93c5fd' }}>
+                    学習中… (経過 {formatElapsed(status.started_at)})
+                    {status.args?.length > 0 && (
+                      <span style={{ color: '#64748b', marginLeft: 8 }}>{status.args.join(' ')}</span>
+                    )}
+                  </div>
+                  <button className="btn" style={{ background: '#7f1d1d', color: '#fff', fontSize: 12, padding: '5px 12px' }}
+                    onClick={stop} disabled={stopping}>
+                    {stopping ? '中止しています…' : '学習を中止'}
+                  </button>
                 </div>
               )}
 

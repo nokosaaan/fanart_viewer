@@ -48,6 +48,11 @@ _state = {
     'returncode': None,
     'start_error': None,
 }
+# The live subprocess handle, kept OUTSIDE _state deliberately — get_status()
+# returns _state as-is to be JSON-serialized straight into the HTTP
+# response, and a Popen object isn't serializable. Only ever read/written
+# under _lock, same as _state itself.
+_proc = None
 
 
 def is_available() -> bool:
@@ -137,6 +142,7 @@ def start(options: dict):
     not available / failed to launch) — never starts a second concurrent
     run, since two simultaneous fits would both be writing the same
     character_classifier_<backend>.joblib output path."""
+    global _proc
     if not is_available():
         raise RuntimeError('この機能はビルド済みexe版でのみ利用できます')
     with _lock:
@@ -161,6 +167,7 @@ def start(options: dict):
             logger.exception('Failed to start train_character_classifier subprocess')
             raise RuntimeError(f'学習プロセスの起動に失敗しました: {e}')
 
+        _proc = proc
         _state['running'] = True
         _state['args'] = argv
         _state['started_at'] = time.time()
@@ -169,6 +176,28 @@ def start(options: dict):
         _state['start_error'] = None
 
         threading.Thread(target=_watch, args=(proc,), daemon=True).start()
+
+
+def stop():
+    """Terminates the running subprocess, if any — a real, hard-to-reverse
+    action (any not-yet-saved progress in the CURRENT phase is lost; see
+    train_character_classifier.py's own checkpointing for what already
+    survives: the solo-image feature cache is written before manual-region
+    extraction starts, so killing mid-manual-extraction still keeps that
+    part). Raises RuntimeError if nothing is running. _watch (already
+    running on its own thread for this subprocess) picks up the exit on its
+    own and flips `running` back to False — this function doesn't touch
+    _state itself beyond reading it.
+    """
+    with _lock:
+        if not _state['running'] or _proc is None:
+            raise RuntimeError('現在実行中の学習はありません')
+        proc = _proc
+    try:
+        proc.terminate()
+    except Exception as e:
+        logger.exception('Failed to terminate train_character_classifier subprocess')
+        raise RuntimeError(f'学習プロセスの停止に失敗しました: {e}')
 
 
 # Cap how much of training.log a single status poll reads back — this can
