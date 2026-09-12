@@ -1,11 +1,7 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import CharacterPicker from './CharacterPicker'
 import { getPlatformIcon } from '../lib/platformIcon'
-
-function getCookie(name){
-  const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
-  return match ? match.pop() : ''
-}
+import { saveItemFields } from '../lib/itemFieldsApi'
 
 const SECTION = {
   label: { color:'#94a3b8', fontSize:11, fontWeight:600, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6, display:'block' },
@@ -119,11 +115,14 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
   )
 }
 
-// The actual edit form, with no modal chrome of its own — reused both by
+// The actual edit form, with no modal chrome of its own — reused by
 // EditFields (wraps it in a fixed-position modal, for the per-row ✎ button)
-// and EditQueueManager (embeds it directly in a mailbox-style bulk review
-// panel, where "cancel" means skip-to-next rather than close-a-modal).
-export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null }){
+// and ItemQueuePanel (embeds it directly, alongside RegionAnnotator, in
+// ItemQueueManager's mailbox-style bulk review panel, where "cancel" means
+// skip-to-next rather than close-a-modal — see fieldsRef/onSituationChange/
+// onDirtyChange/showOwnActions below, all added for that embedding).
+export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null,
+  fieldsRef = null, onSituationChange = null, onDirtyChange = null, showOwnActions = true }){
   const [titleList, setTitleList] = useState(item.titles||[])
   const [charList,  setCharList]  = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
@@ -199,6 +198,43 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     fetch(`/api/items/${item.id}/previews/`)
       .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setImages(d) }).catch(()=>{})
   }, [item.id])
+
+  // Publishes the live (unsaved) situation value up to an embedding parent
+  // (ItemQueuePanel) so it can decide whether to show the region-labeling
+  // section in real time, without waiting for a save — see this component's
+  // own onSituationChange prop.
+  useEffect(()=>{
+    if(onSituationChange) onSituationChange(situation)
+  }, [situation, onSituationChange])
+
+  // Sticky-true dirty notification, mirroring RegionAnnotator's own
+  // onDirtyChange contract exactly (see that component) so ItemQueuePanel
+  // can combine both into one "has unsaved changes" flag. Skips the very
+  // first commit (mount) so simply opening an item doesn't itself count as
+  // a change — a subsequent state update (manual edit OR an auto-applied AI
+  // suggestion, see applySuggestion) does.
+  const skipFirstDirtyRef = useRef(true)
+  useEffect(()=>{
+    if(skipFirstDirtyRef.current){ skipFirstDirtyRef.current = false; return }
+    if(onDirtyChange) onDirtyChange(true)
+  }, [titleList, charList, situation, tags, artist, onDirtyChange])
+
+  // Publishes the exact payload save() would send, for ItemQueuePanel's own
+  // combined save orchestration to read at save time only — a plain mutable
+  // ref, not forwardRef/useImperativeHandle (this codebase's own established
+  // idiom for this — see RegionAnnotator's boxesRef for the same pattern).
+  useEffect(()=>{
+    if(!fieldsRef) return
+    fieldsRef.current = {
+      getPayload: () => ({
+        titles: titleList,
+        characters: charList,
+        situation,
+        tags: tags.trim()==='' ? [] : parseList(tags),
+        artist: artist.trim(),
+      }),
+    }
+  })
 
   function parseList(str){
     if(str == null) return []
@@ -326,7 +362,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     return hasNormal ? 'mixed' : 'low_only'
   }
 
-  // If EditQueueManager already ran bulk suggestion for this item, apply the
+  // If ItemQueueManager already ran bulk suggestion for this item, apply the
   // cached result immediately instead of re-running inference (~5s+/image).
   useEffect(()=>{
     if(initialSuggestion) applySuggestion(initialSuggestion)
@@ -367,15 +403,8 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     }
     setLoading(true)
     try{
-      const resp = await fetch(`/api/items/${item.id}/update_fields/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
-        credentials: 'same-origin',
-        body: JSON.stringify(payload)
-      })
-      const j = await resp.json().catch(()=>({}))
+      const j = await saveItemFields(item.id, payload)
       setLoading(false)
-      if(!resp.ok){ alert('Save failed: ' + (j.detail || JSON.stringify(j))); return }
       // Backend auto-creates a CharacterGroup the moment a save first
       // introduces both a brand-new title and a brand-new character
       // together (see views._maybe_autocreate_character_group) — surfaced
@@ -392,6 +421,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       if(j.auto_assigned_to_character_group){
         alert(`新しいキャラクターをキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
       }
+      if(onDirtyChange) onDirtyChange(false)
       if(onSaved) onSaved(j.item)
     }catch(e){
       setLoading(false)
@@ -718,13 +748,15 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         />
       </div>
 
-      <div style={{display:'flex', gap:8, marginTop:4}}>
-        <button className="btn" style={{background:'#3b82f6', color:'#fff', padding:'10px 24px', fontSize:14, fontWeight:600}}
-          onClick={save} disabled={loading}>
-          {loading ? '保存中…' : '保存'}
-        </button>
-        <button className="btn" style={{padding:'10px 16px'}} onClick={onClose}>{closeLabel}</button>
-      </div>
+      {showOwnActions && (
+        <div style={{display:'flex', gap:8, marginTop:4}}>
+          <button className="btn" style={{background:'#3b82f6', color:'#fff', padding:'10px 24px', fontSize:14, fontWeight:600}}
+            onClick={save} disabled={loading}>
+            {loading ? '保存中…' : '保存'}
+          </button>
+          <button className="btn" style={{padding:'10px 16px'}} onClick={onClose}>{closeLabel}</button>
+        </div>
+      )}
     </div>
   )
 }

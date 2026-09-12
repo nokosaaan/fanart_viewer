@@ -92,8 +92,8 @@ export function buildTourStepsB(){
     },
     {
       title: 'アイテムを編集する',
-      body: 'タイトル・キャラクター・タグ・シチュエーション・作者を編集します。データが増えると、AIがスコア付きの候補(最大3件)を提案するようになります。どの根拠(ハッシュタグ・作家履歴・画像解析・Danbooru照合など)から来た提案かも表示されます。',
-      targetId: 'menu-edit-queue',
+      body: 'タイトル・キャラクター・タグ・シチュエーション・作者を編集します。データが増えると、AIがスコア付きの候補(最大3件)を提案するようになります。どの根拠(ハッシュタグ・作家履歴・画像解析・Danbooru照合など)から来た提案かも表示されます。1枚に複数のキャラが写っている画像は、同じ画面でどの領域が誰かも矩形指定でき、ここでラベル付けしたデータは学習時の確実な教師データとして使われます。',
+      targetId: 'menu-item-queue',
       needsHeaderMenu: true,
     },
     {
@@ -108,12 +108,6 @@ export function buildTourStepsB(){
       body: '画像解析(タガー)はDanbooru由来のタグしか認識できないため、キャラ名とDanbooruタグを紐付けておくと認識精度が大きく上がります。カタカナ名でDanbooruでの綴りが分からない場合は、そのまま入力すると別表記(other_names)から候補を探して表示します。',
       groupToggleId: 'menu-group-character',
       targetId: 'menu-character-danbooru-link',
-      needsHeaderMenu: true,
-    },
-    {
-      title: '複数キャラの領域ラベル付け',
-      body: '1枚に複数のキャラが写っている画像は、どの領域が誰かを手動で矩形指定できます。ここでラベル付けしたデータは学習時の確実な教師データとして使われます。',
-      targetId: 'menu-region-queue',
       needsHeaderMenu: true,
     },
     {

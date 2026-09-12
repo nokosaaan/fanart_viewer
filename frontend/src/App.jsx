@@ -10,8 +10,7 @@ import TitleDanbooruLinkManager from './components/TitleDanbooruLinkManager'
 import BackupManager from './components/BackupManager'
 import TrainClassifierManager from './components/TrainClassifierManager'
 import FetchQueueManager from './components/FetchQueueManager'
-import EditQueueManager from './components/EditQueueManager'
-import RegionLabelQueueManager from './components/RegionLabelQueueManager'
+import ItemQueueManager from './components/ItemQueueManager'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
 import TwitterFetchManager from './components/TwitterFetchManager'
@@ -24,7 +23,7 @@ import Tour from './components/Tour'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { notify } from './lib/crossWindowSync'
 import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
-import { ReloadIcon, FetchQueueIcon, EditQueueIcon, RegionQueueIcon, SwipeIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
+import { ReloadIcon, FetchQueueIcon, ItemQueueIcon, SwipeIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
 import { buildTourStepsA, buildTourStepsB } from './lib/tourSteps'
 
 // Platform badge/icon + text for a header-menu label — see HeaderMenu.jsx's
@@ -74,20 +73,17 @@ function AppMain({ role, onLogout }){
     setPreviewOpen(false)
     setPreviewInitialItemId(null)
   }
-  // editQueueOpen/regionQueueOpen only ever control visibility, not
-  // whether the component is mounted at all (see editQueueMounted/
-  // regionQueueMounted below) — closing either queue used to fully unmount
-  // it, throwing away everything (which item was selected, any characters
-  // typed into ItemEditForm but not yet saved) the moment you closed it to
-  // go check something else, like the original source link, and forcing a
-  // separate popped-out window to become the only way to avoid that. Once
-  // opened, the panel now just gets hidden on close and keeps its state for
-  // the rest of the session, so "close briefly, come back, keep going" no
-  // longer needs a whole other window.
-  const [editQueueOpen, setEditQueueOpen] = useState(false)
-  const [editQueueMounted, setEditQueueMounted] = useState(false)
-  const [regionQueueOpen, setRegionQueueOpen] = useState(false)
-  const [regionQueueMounted, setRegionQueueMounted] = useState(false)
+  // itemQueueOpen only ever controls visibility, not whether the component
+  // is mounted at all (see itemQueueMounted below) — closing the queue used
+  // to fully unmount it, throwing away everything (which item was selected,
+  // any characters typed into ItemEditForm but not yet saved) the moment
+  // you closed it to go check something else, like the original source
+  // link, and forcing a separate popped-out window to become the only way
+  // to avoid that. Once opened, the panel now just gets hidden on close and
+  // keeps its state for the rest of the session, so "close briefly, come
+  // back, keep going" no longer needs a whole other window.
+  const [itemQueueOpen, setItemQueueOpen] = useState(false)
+  const [itemQueueMounted, setItemQueueMounted] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
@@ -711,8 +707,7 @@ function AppMain({ role, onLogout }){
                 badge: fetchQueue.length > 0 ? fetchQueue.length : null,
                 tourId: 'menu-fetch-queue',
               },
-              { label: <MenuIconLabel iconNode={<EditQueueIcon />} text="編集キュー" />, onClick: () => { setEditQueueMounted(true); setEditQueueOpen(true) }, tourId: 'menu-edit-queue' },
-              { label: <MenuIconLabel iconNode={<RegionQueueIcon />} text="領域ラベル付けキュー" />, onClick: () => { setRegionQueueMounted(true); setRegionQueueOpen(true) }, tourId: 'menu-region-queue' },
+              { label: <MenuIconLabel iconNode={<ItemQueueIcon />} text="編集キュー" />, onClick: () => { setItemQueueMounted(true); setItemQueueOpen(true) }, tourId: 'menu-item-queue' },
               { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true), tourId: 'menu-manual-add' },
               { divider: true },
               {
@@ -822,24 +817,14 @@ function AppMain({ role, onLogout }){
           onCancelBulkFetch={cancelBulkFetch}
         />
       )}
-      {editQueueMounted && (
-        <EditQueueManager
-          hidden={!editQueueOpen}
-          onClose={()=>setEditQueueOpen(false)}
+      {itemQueueMounted && (
+        <ItemQueueManager
+          hidden={!itemQueueOpen}
+          onClose={()=>setItemQueueOpen(false)}
           allItems={filtered}
           pageSize={PAGE_SIZE}
           initialPage={pageIndex}
-          onPopOut={() => { popOutQueue('editQueue', filtered, PAGE_SIZE, pageIndex); setEditQueueOpen(false) }}
-        />
-      )}
-      {regionQueueMounted && (
-        <RegionLabelQueueManager
-          hidden={!regionQueueOpen}
-          onClose={()=>setRegionQueueOpen(false)}
-          allItems={filtered}
-          pageSize={PAGE_SIZE}
-          initialPage={pageIndex}
-          onPopOut={() => { popOutQueue('regionQueue', filtered, PAGE_SIZE, pageIndex); setRegionQueueOpen(false) }}
+          onPopOut={() => { popOutQueue('itemQueue', filtered, PAGE_SIZE, pageIndex); setItemQueueOpen(false) }}
         />
       )}
       {charGroupOpen && <CharacterGroupManager onClose={()=>setCharGroupOpen(false)} />}
@@ -945,7 +930,7 @@ export default function App() {
   // none is present (e.g. this URL was opened directly, with no opener), the
   // queue managers themselves fall back to querying the server unscoped.
   const standalonePanel = new URLSearchParams(window.location.search).get('panel')
-  if (standalonePanel === 'editQueue' || standalonePanel === 'regionQueue') {
+  if (standalonePanel === 'itemQueue') {
     let handoff = null
     try {
       const raw = localStorage.getItem(`fv-queue-handoff-${standalonePanel}`)
@@ -956,15 +941,15 @@ export default function App() {
     } catch (e) {
       console.error('Failed to read queue page handoff', e)
     }
-    const commonProps = {
-      standalone: true,
-      onClose: () => window.close(),
-      allItems: handoff ? handoff.allItems : null,
-      pageSize: (handoff && handoff.pageSize) || 50,
-      initialPage: (handoff && handoff.initialPage) || 0,
-    }
-    if (standalonePanel === 'editQueue') return <EditQueueManager {...commonProps} />
-    return <RegionLabelQueueManager {...commonProps} />
+    return (
+      <ItemQueueManager
+        standalone={true}
+        onClose={() => window.close()}
+        allItems={handoff ? handoff.allItems : null}
+        pageSize={(handoff && handoff.pageSize) || 50}
+        initialPage={(handoff && handoff.initialPage) || 0}
+      />
+    )
   }
 
   return <AppMain role={role} onLogout={handleLogout} />

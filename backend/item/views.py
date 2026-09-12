@@ -893,6 +893,18 @@ def _select_image_bytes(item, image_index=None):
     return None, None
 
 
+def _is_field_missing(item, field):
+    """Mirrors ItemQueueManager.jsx's own `isFieldMissing` exactly — kept as
+    a small module-level helper (rather than inlined Q() logic, like
+    `incomplete`'s queryset filter) since `needs_attention_queue` needs it
+    per-already-fetched-item, not as a DB-level filter.
+    """
+    if field in ('situation', 'artist'):
+        return not getattr(item, field)
+    v = getattr(item, field)
+    return not isinstance(v, list) or len(v) == 0
+
+
 def _char_diff_signature(region_chars, item_chars):
     """Content fingerprint of a (region-derived characters, item.characters)
     pair — see Item.character_regions_ack_signature's own docstring for why
@@ -2950,6 +2962,83 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = self.get_serializer(batch, many=True)
         return Response({
             'results': serializer.data,
+            'count': total_count,
+            'has_more': has_more,
+            'next_before_id': batch[-1].id if (has_more and batch) else None,
+        })
+
+    @action(detail=False, methods=['get'], url_path='needs_attention_queue')
+    def needs_attention_queue(self, request):
+        """Items that need SOME kind of human attention — either missing
+        metadata (see `incomplete`'s own docstring) OR eligible for
+        multi-character region labeling but never touched yet (see
+        `region_label_queue`'s own docstring) — feeds ItemQueueManager.jsx's
+        unified '編集キュー' (the two used to be worked as separate queues,
+        forcing the same image open twice; see that component's own
+        top-level comment). Server-cursor mode only (see `incomplete` for
+        why `before_id`, not page-number pagination); the ordinary
+        allItems-scoped mode filters client-side instead, mirroring this
+        exact OR of the two underlying predicates.
+
+        Deliberately does NOT fold in region_mismatch_queue's condition —
+        that stays its own separate tab/queue (see ItemQueueManager.jsx's
+        'mismatch' mode and this class's region_mismatch_queue action),
+        since it's a fundamentally different follow-up task (reconciling
+        two already-recorded answers that disagree) rather than "nothing
+        has been recorded yet".
+
+        Query param `missing`: same comma-separated subset of
+        titles,characters,tags,situation,artist as `incomplete` — also
+        controls which fields are reported per result in `missing_fields`.
+        """
+        valid_fields = ('titles', 'characters', 'tags', 'situation', 'artist')
+        requested = (request.GET.get('missing') or ','.join(valid_fields)).split(',')
+        fields = [f.strip() for f in requested if f.strip() in valid_fields] or list(valid_fields)
+
+        missing_q = Q()
+        for f in fields:
+            if f in ('situation', 'artist'):
+                missing_q |= Q(**{f: ''}) | Q(**{f'{f}__isnull': True})
+            else:
+                missing_q |= Q(**{f: []}) | Q(**{f'{f}__isnull': True})
+
+        region_q = (
+            Q(character_regions=[])
+            & ~Q(situation__in=['SOLO', 'R18'])
+            & ~(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
+        )
+
+        queryset = Item.objects.filter(missing_q | region_q).order_by('-id').distinct()
+        total_count = queryset.count()
+
+        before_id = request.GET.get('before_id')
+        if before_id:
+            try:
+                queryset = queryset.filter(id__lt=int(before_id))
+            except (TypeError, ValueError):
+                pass
+
+        page_size = 50
+        batch = list(queryset[:page_size + 1])
+        has_more = len(batch) > page_size
+        batch = batch[:page_size]
+
+        serializer = self.get_serializer(batch, many=True)
+        results = serializer.data
+        for entry, item in zip(results, batch):
+            entry['missing_fields'] = [f for f in fields if _is_field_missing(item, f)]
+            # Re-derive from the already-serialized `has_preview` rather than
+            # re-querying preview existence — keeps this in exact lockstep
+            # with region_q's own preview-existence condition above without
+            # a second DB hit per item.
+            entry['needs_region'] = (
+                item.situation not in ('SOLO', 'R18')
+                and not item.character_regions
+                and bool(entry.get('has_preview'))
+            )
+
+        return Response({
+            'results': results,
             'count': total_count,
             'has_more': has_more,
             'next_before_id': batch[-1].id if (has_more and batch) else None,

@@ -60,27 +60,17 @@ export function FetchQueueIcon() {
   )
 }
 
-// Same glyph ScrollList.jsx's own "Edit fields" button uses (see its title="Edit fields")
-// — reused here rather than redrawn, so the same action reads as the same icon everywhere.
-export function EditQueueIcon() {
+// Same pencil-on-page glyph ScrollList.jsx's own "Edit fields" button uses
+// (see its title="Edit fields"), PLUS a small dashed corner-handle in the
+// bottom-left — the bounding-box annotation motif RegionAnnotator.jsx draws
+// over an image, in miniature — since this one menu entry now opens the
+// combined field-editing + region-labeling queue (see ItemQueueManager.jsx).
+export function ItemQueueIcon() {
   return (
     <WithQueueBadge>
       <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
       <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-    </WithQueueBadge>
-  )
-}
-
-// A dashed rect with corner-handle dots — the bounding-box annotation
-// motif RegionAnnotator.jsx itself draws over an image, in miniature.
-export function RegionQueueIcon() {
-  return (
-    <WithQueueBadge>
-      <rect x="4" y="4" width="16" height="16" rx="1" strokeDasharray="3 3" />
-      <circle cx="4" cy="4" r="1.4" fill="currentColor" stroke="none" />
-      <circle cx="20" cy="4" r="1.4" fill="currentColor" stroke="none" />
-      <circle cx="4" cy="20" r="1.4" fill="currentColor" stroke="none" />
-      <circle cx="20" cy="20" r="1.4" fill="currentColor" stroke="none" />
+      <path d="M7 15v3h3" strokeDasharray="2 2" />
     </WithQueueBadge>
   )
 }

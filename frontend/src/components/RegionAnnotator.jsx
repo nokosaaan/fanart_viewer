@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { saveCharacterRegions } from '../lib/itemFieldsApi'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -32,7 +33,7 @@ function nextBoxId() { return `box-${++_boxIdCounter}` }
 // (matching tagger._detect_person_boxes/_crop_with_padding exactly, so no
 // translation is needed server-side) and only ever converted to/from the
 // image's on-screen CSS size at render time and on mouse events.
-export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
+export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef = null, showOwnActions = true }) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
@@ -270,20 +271,31 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
     if (onDirtyChange) onDirtyChange(true)
   }
 
+  // Only the labeled (has at least one character) boxes are ever sent —
+  // unfinished/blank boxes just stay in local `boxes` state as a reminder,
+  // never persisted. Shared by save() and boxesRef's getPayload() (for
+  // ItemQueuePanel's own combined save orchestration) so both always agree
+  // on exactly what "the regions to save" means.
+  function labeledRegionsPayload() {
+    return boxes.filter(b => b.characters.length > 0)
+      .map(b => ({ image_index: b.imageIndex, box: b.box, characters: b.characters }))
+  }
+
+  // Publishes the save-ready payload for an embedding parent (ItemQueuePanel)
+  // to read at save time only — a plain mutable ref, not forwardRef/
+  // useImperativeHandle (this codebase's own established idiom for this —
+  // see EditFields.jsx's ItemEditForm's own fieldsRef for the same pattern).
+  useEffect(() => {
+    if (!boxesRef) return
+    boxesRef.current = { getPayload: labeledRegionsPayload }
+  })
+
   async function save() {
-    const labeled = boxes.filter(b => b.characters.length > 0)
     setSaving(true)
     setError('')
     setNotice('')
     try {
-      const resp = await fetch(`/api/items/${item.id}/character_regions/`, {
-        method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({
-          regions: labeled.map(b => ({ image_index: b.imageIndex, box: b.box, characters: b.characters })),
-        }),
-      })
-      const j = await resp.json().catch(() => ({}))
-      if (!resp.ok) throw new Error(j.detail || `保存に失敗しました (${resp.status})`)
+      const j = await saveCharacterRegions(item.id, labeledRegionsPayload())
       if (onDirtyChange) onDirtyChange(false)
       if (onSaved) onSaved(j.item)
     } catch (e) {
@@ -500,10 +512,12 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange }) {
       </div>
 
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '8px 20px', fontWeight: 600 }}
-          onClick={save} disabled={saving}>
-          {saving ? '保存中…' : '保存(全画像分をまとめて保存)'}
-        </button>
+        {showOwnActions && (
+          <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '8px 20px', fontWeight: 600 }}
+            onClick={save} disabled={saving}>
+            {saving ? '保存中…' : '保存(全画像分をまとめて保存)'}
+          </button>
+        )}
         <span style={{ fontSize: 12, color: '#94a3b8' }}>
           {boxes.length === 0 ? '矩形がありません' : `全${images.length || 1}枚中 ${totalLabeled}/${boxes.length}件の矩形にキャラ名を割り当て済み(未割当の矩形は保存されません)`}
         </span>
