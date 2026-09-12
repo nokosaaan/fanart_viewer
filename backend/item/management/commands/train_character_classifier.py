@@ -481,24 +481,27 @@ class Command(BaseCommand):
             ))
 
         # An item with manual character_regions gets a reliable, human-drawn
-        # crop fed straight in via _get_manual_labeled_rows below when
-        # --include-multi-character is on — including its whole-image
-        # feature here too would train on the SAME image/character twice
-        # (once on the full frame, once on the region crop), for no
-        # benefit, since the crop already supersedes the noisier
-        # whole-image signal. Only excluded when that replacement is
-        # actually going to run this pass; raw_rows/the feature cache
-        # itself stays untouched (deliberately -- see _extract_features'
-        # own docstring on staying reusable across differently-flagged
-        # runs), this just skips folding those specific rows into X/y.
+        # crop fed straight in below when --include-multi-character is on —
+        # including its whole-image feature here too would train on the
+        # SAME image/character twice (once on the full frame, once on the
+        # region crop), for no benefit, since the crop already supersedes
+        # the noisier whole-image signal. Only excluded when that
+        # replacement is actually going to run this pass; raw_rows/the
+        # feature cache itself stays untouched (deliberately -- see
+        # _extract_features' own docstring on staying reusable across
+        # differently-flagged runs), this just skips folding those specific
+        # rows into X/y.
         annotated_item_ids = (
             set(Item.objects.exclude(character_regions=[]).values_list('id', flat=True))
             if options['include_multi_character'] else set()
         )
 
-        # Apply --exclude and --min-images as filters on whatever rows we now have
-        # (freshly extracted or loaded from cache) — this is the cheap part, so
-        # changing these two never requires touching the tagger/DB again.
+        # Apply --exclude as a filter on whatever rows we now have (freshly
+        # extracted or loaded from cache) — this is the cheap part, so
+        # changing it never requires touching the tagger/DB again.
+        # --min-images is applied further below, AFTER manual region rows
+        # (if any) are merged in — see that block's own comment for why
+        # applying it here, before that merge, would be wrong.
         by_char = defaultdict(list)
         skipped_annotated = 0
         for item_id, char, feature in raw_rows:
@@ -507,13 +510,51 @@ class Command(BaseCommand):
             if item_id in annotated_item_ids:
                 skipped_annotated += 1
                 continue
-            by_char[char].append((item_id, feature))
+            by_char[char].append(feature)
         if skipped_annotated:
             self.stdout.write(
                 f'Skipped {skipped_annotated} whole-image feature(s) for region-annotated items '
                 '(their manually-labeled crop is used instead — see below).'
             )
-        eligible = {c: rows for c, rows in by_char.items() if len(rows) >= min_images}
+
+        # Manual region labels (see Item.character_regions, populated via
+        # RegionLabelQueueManager.jsx/RegionAnnotator.jsx) are ground truth
+        # — a human already said "this box is character X" — so they're
+        # used directly, with no confidence gate or automatic person-
+        # detection step of any kind (see module docstring for why an
+        # earlier automatic-bootstrap approach was removed: it re-ran the
+        # same person detector human reviewers already have to correct, so
+        # a coincidental box-count match proved nothing). An item with 2+
+        # characters and no region labels at all contributes nothing here
+        # — it's skipped, never guessed at.
+        #
+        # Merged into `by_char` HERE, before --min-images is applied and
+        # before the train/test split, rather than tacked onto X_train
+        # unconditionally afterward (the previous design): a character that
+        # never appears alone — only in region-labeled CP/MULTIPLE images —
+        # used to never be counted in the "characters qualify" tally at all
+        # (that was computed from solo images only), NOR get any chance to
+        # clear --min-images, yet its manual rows still got added to
+        # training completely unconditionally regardless of that gate —
+        # and, since they were added after the stratified split, NEVER once
+        # ended up in the held-out test set either, so the per-class holdout
+        # report silently never assessed them. Merging first means the
+        # printed tally reflects a character's TRUE total support (solo +
+        # manual) and every included class gets a genuine holdout split.
+        manual_counts = defaultdict(int)
+        if options['include_multi_character']:
+            manual_rows = self._get_manual_labeled_rows(tagger_backend, options['feature_source'], general_tag_names)
+            for char, feature in manual_rows:
+                if char in exclude:
+                    continue
+                by_char[char].append(feature)
+                manual_counts[char] += 1
+            if not manual_rows:
+                self.stdout.write(self.style.WARNING(
+                    'No manually-labeled regions found. (See RegionLabelQueueManager.jsx to label multi-character items.)'
+                ))
+
+        eligible = {c: feats for c, feats in by_char.items() if len(feats) >= min_images}
         if len(eligible) < 2:
             raise CommandError(
                 f'Only {len(eligible)} character(s) have >= {min_images} images after applying --exclude — '
@@ -522,17 +563,20 @@ class Command(BaseCommand):
 
         self.stdout.write(f'{len(eligible)} characters included after filtering (>= {min_images} images, '
                            f'excluding {sorted(exclude) or "none"}):')
-        for c, rows in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
-            self.stdout.write(f'  {len(rows):>5}  {c}')
+        for c, feats in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
+            manual_n = manual_counts.get(c, 0)
+            suffix = f'  ({manual_n} from manual regions)' if manual_n else ''
+            self.stdout.write(f'  {len(feats):>5}  {c}{suffix}')
 
-        X = np.stack([f for rows in eligible.values() for _id, f in rows])
-        y = np.array([c for c, rows in eligible.items() for _row in rows])
+        X = np.stack([f for feats in eligible.values() for f in feats])
+        y = np.array([c for c, feats in eligible.items() for _f in feats])
 
         # Train/holdout split — class_weight='balanced' so the smallest
-        # included classes aren't drowned out by the largest ones. This
-        # holdout is the ONE evaluation ground truth used throughout,
-        # including after --include-multi-character adds manually-labeled
-        # region data.
+        # included classes aren't drowned out by the largest ones. Solo and
+        # manually-labeled-region rows are already merged into X/y by this
+        # point (see above), so every included class — regardless of which
+        # source(s) it drew from — gets a genuine, stratified holdout split
+        # instead of manual-only classes bypassing it entirely.
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=options['test_size'], random_state=options['random_state'], stratify=y,
         )
@@ -547,46 +591,9 @@ class Command(BaseCommand):
             self.stdout.write(classification_report(y_test, clf.predict(X_test), zero_division=0))
             return clf, train_acc, test_acc
 
-        teacher, final_train_acc, final_test_acc = fit_and_report(X_train, y_train, 'single-character only')
-        final_clf = teacher
-        used_manual_regions = False
-
-        if options['include_multi_character']:
-            # Manual region labels (see Item.character_regions, populated via
-            # RegionLabelQueueManager.jsx/RegionAnnotator.jsx) are ground
-            # truth — a human already said "this box is character X" — so
-            # they're used directly, with no confidence gate or automatic
-            # person-detection step of any kind (see module docstring for
-            # why an earlier automatic-bootstrap approach was removed: it
-            # re-ran the same person detector human reviewers already have
-            # to correct, so a coincidental box-count match proved nothing).
-            # An item with 2+ characters and no region labels at all
-            # contributes nothing here — it's skipped, never guessed at.
-            manual_rows = self._get_manual_labeled_rows(tagger_backend, options['feature_source'], general_tag_names)
-
-            if manual_rows:
-                X_extra = np.stack([f for _c, f in manual_rows])
-                y_extra = np.array([c for c, _f in manual_rows])
-                X_combined = np.concatenate([X_train, X_extra])
-                y_combined = np.concatenate([y_train, y_extra])
-                self.stdout.write(
-                    f'\nAdding {len(manual_rows)} manually-labeled crops to the {len(X_train)} '
-                    f'single-character training examples...'
-                )
-                manual_only_test_acc = final_test_acc
-                final_clf, final_train_acc, final_test_acc = fit_and_report(
-                    X_combined, y_combined, 'single-character + manual regions',
-                )
-                used_manual_regions = True
-                self.stdout.write(self.style.SUCCESS(
-                    f'\nHoldout accuracy: {manual_only_test_acc:.1%} (single-character only) -> '
-                    f'{final_test_acc:.1%} (with manual region crops)'
-                ))
-            else:
-                self.stdout.write(self.style.WARNING(
-                    '\nNo manually-labeled regions found — keeping the single-character-only classifier. '
-                    '(See RegionLabelQueueManager.jsx to label multi-character items.)'
-                ))
+        used_manual_regions = bool(manual_counts)
+        fit_label = 'solo + manual regions (combined)' if used_manual_regions else 'single-character only'
+        final_clf, final_train_acc, final_test_acc = fit_and_report(X_train, y_train, fit_label)
 
         # Save — self-contained: records which backend/tag ordering produced
         # these features, so a later inference-side integration doesn't have
