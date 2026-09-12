@@ -159,6 +159,14 @@ const CARD_WIDTH = 320
 const CARD_HEIGHT_ESTIMATE = 200 // rough; only used to keep the card on-screen vertically, not for layout
 const MARGIN = 20
 const ARROW_SIZE = 9 // speech-bubble tail (see arrowStyle) — MARGIN already leaves it room
+// Matches .header-menu-item's own `padding: 9px 10px` (styles.css) — a menu
+// item button is `width:100%` (spans the whole dropdown column), but its
+// actual icon+label content is left-aligned starting at this inset, not
+// centered across the button. Pointing the arrow at rect.left+rect.width/2
+// (the button's true horizontal center) lands it in the empty space to the
+// right of a short label instead of near the visible content — this lines
+// it up with where the item's content actually starts instead.
+const MENU_ITEM_LEFT_INSET = 10
 
 const CARD_BASE = {
   position: 'fixed', zIndex: 5001,
@@ -244,10 +252,16 @@ function computeCardPlacement(rect, dropdownRect){
   const left = clamp(clearance.left, MARGIN, vw - width - MARGIN)
   const spaceBelow = vh - clearance.bottom
   const spaceAbove = clearance.top
-  // Arrow offset (distance right from the card's own left edge) pointing
-  // at the ACTUAL target's horizontal center (not the whole dropdown's),
-  // clamped to stay within the card's own width.
-  const belowAboveArrowOffset = clamp(rect.left + rect.width / 2 - left, ARROW_SIZE * 2, width - ARROW_SIZE * 2)
+  // Arrow offset (distance right from the card's own left edge), clamped to
+  // stay within the card's own width. Points at the ACTUAL target's own
+  // horizontal position (not the whole dropdown's) — but "the target's own
+  // position" means its left-aligned CONTENT (see MENU_ITEM_LEFT_INSET)
+  // when it's a menu item inside a dropdown (full-width button, content
+  // starts near the left edge), and its true center otherwise (e.g. the
+  // search bar's own targets, whose visible content really does span their
+  // whole width).
+  const targetAnchorX = dropdownRect ? rect.left + MENU_ITEM_LEFT_INSET : rect.left + rect.width / 2
+  const belowAboveArrowOffset = clamp(targetAnchorX - left, ARROW_SIZE * 2, width - ARROW_SIZE * 2)
 
   if (spaceBelow >= CARD_HEIGHT_ESTIMATE + MARGIN) {
     return {
