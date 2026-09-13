@@ -125,6 +125,19 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
     if poipiku_jsessionid:
         cookie_parts.append(f'JSESSIONID={poipiku_jsessionid}')
     if cookie_parts:
+        # Being logged in isn't enough for R18/R15 works: Poipiku also gates
+        # them behind a separate "are you 18+?" confirmation
+        # (showSwitchContentsViewModeDlg() in common-*.js), which just sets
+        # this cookie via POST /f/SwitchContentsViewModeF.jsp {MD: 1} and
+        # reloads. It's a plain site-wide preference flag (not a per-account
+        # secret, no signature), so sending it directly skips needing to
+        # replay that call. Without it, IllustItemThumbImg (and the
+        # ShowIllustDetailF/ShowAppendFileF AJAX responses) all keep
+        # returning the generic https://cdn.poipiku.com/img/R-18.png
+        # placeholder graphic instead of the real per-work image, even with
+        # valid login cookies — confirmed by comparing an authenticated
+        # fetch with and without this cookie against a real R18 post.
+        cookie_parts.append('POIPIKU_CONTENTS_VIEW_MODE=1')
         session.headers['Cookie'] = '; '.join(cookie_parts)
 
     # Extract user_id / illust_id from URL.
