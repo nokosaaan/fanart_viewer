@@ -3,12 +3,15 @@
 Fetches all images from a Poipiku work URL (https://poipiku.com/{user_id}/{illust_id}/).
 - Parses IllustItemThumbImg from the initial page HTML.
 - Calls the ShowAppendFile AJAX endpoint to retrieve images not yet in the DOM.
-- For the FIRST image only, also tries the work-detail lightbox's own
-  <img class="DetailIllustItemImage"> src — a signed CloudFront URL
-  Poipiku already serves at full resolution, present directly in the
-  server-rendered page (see _collect_detail_image_url) — before falling
-  back to guessing the original URL by stripping the _640.jpg thumbnail
-  suffix, same as every other image.
+- Strips the _640.jpg thumbnail suffix to get original-resolution URLs.
+
+NOTE: the work-detail lightbox's <img class="DetailIllustItemImage"> (a
+signed CloudFront URL, seen in browser devtools once a thumbnail is
+clicked) is NOT present in the plain server-rendered HTML this module
+fetches — confirmed via a raw `curl`/view-source dump, which showed no such
+element at all. It's populated by JavaScript after the click (likely its
+own AJAX call, not yet identified), so a plain requests+BeautifulSoup fetch
+can't reach it and this module doesn't try to.
 
 Cookie authentication (for R15/R18/follower-only works):
   POIPIKU_LK         → sent as Cookie: POIPIKU_LK=<value>   (long-lived login key)
@@ -52,33 +55,6 @@ def _collect_from_soup(container) -> list[str]:
             urls.append(src)
             seen.add(src)
     return urls
-
-
-def _collect_detail_image_url(soup) -> str | None:
-    """The work-detail lightbox's own <img class="DetailIllustItemImage">
-    src, when the page was fetched with a session that's actually allowed
-    to see it — a signed CloudFront URL (?Expires=...&Key-Pair-Id=...) that
-    Poipiku already serves at full resolution, unlike the public
-    IllustItemThumbImg src (always a _640.jpg-suffixed thumbnail). Confirmed
-    present directly in the server-rendered page HTML (not injected by JS
-    afterward) via manual devtools inspection, so a plain requests+
-    BeautifulSoup fetch can read it with no extra AJAX call needed.
-
-    Only ever reflects whichever ONE image is showing in the lightbox by
-    default for this fetch — for a multi-image post, the other images'
-    equivalent signed URLs aren't confirmed reachable without further
-    per-image interaction (unlike IllustItemThumbImg, where ALL of a post's
-    thumbnails already appear in the static HTML, or via
-    ShowAppendFileF.jsp for the rest — see _fetch_append_file). Callers
-    should treat this as a best-quality candidate for the FIRST image only,
-    keeping the existing thumbnail-based pipeline as-is for every other
-    image and as this one's own fallback (see fetch_poipiku_media).
-    """
-    img = soup.find('img', class_='DetailIllustItemImage')
-    if img is None:
-        return None
-    src = img.get('src', '')
-    return src if src and 'cdn.poipiku.com' in src else None
 
 
 def _fetch_append_file(session, user_id: str, illust_id: str, referer: str,
@@ -209,26 +185,8 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
     else:
         _add(_collect_from_soup(soup))
 
-    # Only confirmed to reflect the FIRST image of a post (see
-    # _collect_detail_image_url's own docstring) — used as an extra, tried-
-    # first candidate for thumb_urls[0] below. Computed BEFORE the
-    # `not thumb_urls` bail-out below: a standalone work-detail page
-    # (https://poipiku.com/{user_id}/{illust_id}.html) can render ONLY the
-    # #DetailOverlay/DetailIllustItemImage structure with no
-    # IllustItemThumbImg anywhere on it at all (that class is a listing-page
-    # construct) — bailing out on empty thumb_urls before ever looking here
-    # meant this fetcher returned nothing whatsoever for such a page, even
-    # though the real image was sitting right there in the HTML.
-    detail_img_url = _collect_detail_image_url(soup)
-
     if not thumb_urls:
-        if detail_img_url:
-            thumb_urls = [detail_img_url]
-            # Prevent the loop below from ALSO adding it a second time as
-            # thumb_urls[0]'s "extra" candidate.
-            detail_img_url = None
-        else:
-            return []
+        return []
 
     # A "tap to reveal"/access-warning placeholder graphic Poipiku serves in
     # place of real content (no session cookie, insufficient permission,
@@ -247,9 +205,9 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
         """First candidate that both responds 200 with an image content-type
         AND looks big enough to be real artwork, not a placeholder — see
         _MIN_REAL_IMAGE_BYTES above. Falling through to the next candidate
-        (rather than stopping at the first 200) is what lets a signed
-        detail-image URL that turns out to be a warning graphic still fall
-        back to the existing thumbnail-based candidates below it."""
+        (rather than stopping at the first 200) is what lets a 403/warning
+        response on the guessed original URL still fall back to the
+        always-public _640.jpg thumbnail."""
         for cand_url in candidate_urls:
             try:
                 r = session.get(cand_url, timeout=30, headers=dl_headers)
@@ -266,20 +224,12 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
             return r.content, ct
         return None
 
-    # Download images.  For the first image, try the confirmed-full-
-    # resolution detail-lightbox URL first (when found), then the guessed
-    # "_640.jpg suffix stripped" original (accessible when authenticated —
-    # POIPIKU_LK set), then the always-public _640.jpg thumbnail as the
-    # final fallback. Every other image only has the latter two candidates
-    # (see detail_img_url's own docstring for why).
+    # Download images.  Try the guessed "_640.jpg suffix stripped" original
+    # first (accessible when authenticated — POIPIKU_LK set), then the
+    # always-public _640.jpg thumbnail as the final fallback.
     results: list[tuple[bytes, str]] = []
-    for idx, thumb_url in enumerate(thumb_urls):
-        candidates = []
-        if idx == 0 and detail_img_url:
-            candidates.append(detail_img_url)
-        candidates.append(_thumb_to_original(thumb_url))
-        candidates.append(thumb_url)
-
+    for thumb_url in thumb_urls:
+        candidates = [_thumb_to_original(thumb_url), thumb_url]
         downloaded = _try_download(candidates)
         if downloaded:
             results.append(downloaded)
