@@ -209,13 +209,26 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
     else:
         _add(_collect_from_soup(soup))
 
-    if not thumb_urls:
-        return []
-
     # Only confirmed to reflect the FIRST image of a post (see
     # _collect_detail_image_url's own docstring) — used as an extra, tried-
-    # first candidate for thumb_urls[0] only, below.
+    # first candidate for thumb_urls[0] below. Computed BEFORE the
+    # `not thumb_urls` bail-out below: a standalone work-detail page
+    # (https://poipiku.com/{user_id}/{illust_id}.html) can render ONLY the
+    # #DetailOverlay/DetailIllustItemImage structure with no
+    # IllustItemThumbImg anywhere on it at all (that class is a listing-page
+    # construct) — bailing out on empty thumb_urls before ever looking here
+    # meant this fetcher returned nothing whatsoever for such a page, even
+    # though the real image was sitting right there in the HTML.
     detail_img_url = _collect_detail_image_url(soup)
+
+    if not thumb_urls:
+        if detail_img_url:
+            thumb_urls = [detail_img_url]
+            # Prevent the loop below from ALSO adding it a second time as
+            # thumb_urls[0]'s "extra" candidate.
+            detail_img_url = None
+        else:
+            return []
 
     # A "tap to reveal"/access-warning placeholder graphic Poipiku serves in
     # place of real content (no session cookie, insufficient permission,
