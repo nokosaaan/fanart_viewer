@@ -120,6 +120,13 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .timeline-thumb:hover{ opacity:1 }
 .timeline-thumb.selected{ border-color:#fff; opacity:1 }
 .timeline-empty{ color:#cbd5e1 }
+/* Same footprint as .timeline-thumb (own slot, no reflow) but marks it as
+   gone instead of showing an image — see deletedPreviewIds in PreviewPane.jsx */
+.timeline-thumb-deleted{ flex:0 0 auto; width:100px; height:68px; border-radius:5px; box-sizing:border-box;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  background:rgba(255,255,255,0.04); border:1px dashed rgba(255,255,255,0.25);
+  color:rgba(255,255,255,0.4); font-size:11px; line-height:1.2 }
+.preview-modal-all-deleted{ color:rgba(255,255,255,0.6); font-size:14px; padding:40px 20px }
 .preview-thumb-btn{ background:transparent; border:0; padding:0; cursor:pointer }
 
 .modal-close{ position:absolute; top:12px; right:12px; background:rgba(255,255,255,0.06); color:#fff; border:0; width:38px; height:38px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-size:18px; cursor:pointer; z-index:1420 }

@@ -58,6 +58,19 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
+  // Ids deleted from THIS item's own filmstrip but not yet reflected by a
+  // fresh fetch — see deleteCurrentPreview. Deleting one image used to
+  // immediately refetch/replace `previews`, which reindexes every later
+  // image down by one and visually shifts every thumbnail after the
+  // deleted one into a new slot — data-wise the right one was gone, but
+  // with several images on screen at once it reads as "the wrong (last)
+  // one disappeared", since that's the slot whose content visibly changed.
+  // Marking the id here instead, and rendering that one slot as a
+  // "deleted" placeholder without touching any other slot's position,
+  // makes it visually unambiguous which image was actually removed. This
+  // resets (and the array actually compacts) the next time this item's
+  // previews are freshly loaded — see loadPreviewsForItem.
+  const [deletedPreviewIds, setDeletedPreviewIds] = useState(() => new Set())
   const currentPreviewIdxRef = useRef(0)
   const mountedRef = useRef(false)
   const previewPaneRef = useRef(null)
@@ -183,6 +196,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     setPreviews([])
     setCurrentPreviewIdx(0)
     setSelectedPreviewId(null)
+    setDeletedPreviewIds(new Set())
     currentPreviewIdxRef.current = 0
     if(!item) return
     try{
@@ -221,12 +235,20 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   // over "next item".
   function nextPreviewImage(){
     if(!previews || previews.length === 0) return
-    selectPreviewIndex((currentPreviewIdxRef.current + 1) % previews.length)
+    let idx = currentPreviewIdxRef.current
+    for(let step=0; step<previews.length; step++){
+      idx = (idx + 1) % previews.length
+      if(!deletedPreviewIds.has(previews[idx].id)){ selectPreviewIndex(previews[idx].index); return }
+    }
   }
 
   function prevPreviewImage(){
     if(!previews || previews.length === 0) return
-    selectPreviewIndex((currentPreviewIdxRef.current - 1 + previews.length) % previews.length)
+    let idx = currentPreviewIdxRef.current
+    for(let step=0; step<previews.length; step++){
+      idx = (idx - 1 + previews.length) % previews.length
+      if(!deletedPreviewIds.has(previews[idx].id)){ selectPreviewIndex(previews[idx].index); return }
+    }
   }
 
   function selectPreviewIndex(idx){
@@ -238,6 +260,29 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     }catch(e){
       setSelectedPreviewId(null)
     }
+  }
+
+  // Marks `deletedId` as gone WITHOUT touching any other entry's position —
+  // see deletedPreviewIds' own comment for why. Also moves the "currently
+  // viewed" image off the now-deleted one, onto the nearest still-alive
+  // one (preferring the next one after it, wrapping around, falling back
+  // to whichever is first) — so the viewer isn't left staring at a
+  // placeholder for the very image they just deleted.
+  function markPreviewDeletedLocally(deletedId){
+    const deletedArrIdx = previews.findIndex(p => p.id === deletedId)
+    const alive = previews.filter(p => p.id !== deletedId && !deletedPreviewIds.has(p.id))
+    setDeletedPreviewIds(prev => {
+      const next = new Set(prev)
+      next.add(deletedId)
+      return next
+    })
+    if(alive.length === 0){
+      setCurrentPreviewIdx(0)
+      setSelectedPreviewId(null)
+      return
+    }
+    const forward = alive.find(p => previews.findIndex(x => x.id === p.id) > deletedArrIdx)
+    selectPreviewIndex((forward || alive[0]).index)
   }
 
   async function deleteCurrentPreview(){
@@ -262,11 +307,18 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
         alert('Failed to delete preview: '+(j.detail||j.error||resp.status))
         return
       }
-      // Refresh THIS item's own filmstrip immediately — no need to wait for
-      // the item-preview-updated roundtrip below, which is what keeps
-      // App.jsx's (and thus this pane's) item list in sync, not the
-      // filmstrip itself.
-      await loadPreviewsForItem(it)
+      if(pid){
+        // Tombstone locally — see markPreviewDeletedLocally/deletedPreviewIds.
+        // The array only actually compacts the next time this item's
+        // previews are freshly loaded (switching to another item and back,
+        // or reopening the pane).
+        markPreviewDeletedLocally(pid)
+      } else {
+        // No stable id to tombstone by (shouldn't normally happen — every
+        // preview the server returns carries one) — fall back to a full
+        // reload of this item's filmstrip, same as before.
+        await loadPreviewsForItem(it)
+      }
       notify('item-preview-updated', { id: it.id })
       alert('Preview deleted.')
     }catch(e){ console.error(e); alert('Failed to delete preview') }
@@ -380,13 +432,28 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 // with whichever page of a multi-image item is on screen
                 // (currentPreviewIdx) so it's never just "the first page"
                 // regardless of what's actually being looked at.
-                const previewImgSrc = (previews && previews.length>0)
+                const hasAnyPreview = (previews && previews.length>0)
+                const aliveCount = (previews || []).filter(p => !deletedPreviewIds.has(p.id)).length
+                const previewImgSrc = hasAnyPreview
                   ? `/api/items/${previewItems[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
                   : `/api/items/${previewItems[selectedIndex].id}/preview/`
+                // hasAnyPreview && aliveCount===0 means every one of this
+                // item's images was just tombstoned in this same session —
+                // currentPreviewIdx still points at a now-deleted entry
+                // (nothing left to move onto, see markPreviewDeletedLocally),
+                // so requesting it would just 404. Show a plain notice
+                // instead until the next reload closes this modal for real
+                // (the item itself will drop out of previewItems once
+                // item-preview-updated's has_preview flip lands).
+                const allDeleted = hasAnyPreview && aliveCount===0
                 return (
               <div className="modal-top">
                 <div className="modal-main">
-                  <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
+                  {allDeleted ? (
+                    <div className="preview-modal-all-deleted">この投稿の画像はすべて削除されました</div>
+                  ) : (
+                    <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
+                  )}
                 </div>
                 <div className="modal-meta">
                   <div className="preview-title">{(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].titles || previewItems[selectedIndex].title || ''}</div>
@@ -437,11 +504,24 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                     // every later one's index down (see item/views.py's
                     // preview_delete_by_id, which reindexes the remainder
                     // contiguously), so a positional key made React keep
-                    // reusing DOM nodes by their OLD slot and only ever
-                    // drop the last one, regardless of which image was
-                    // actually deleted -- the thumbnail that visually
-                    // disappeared was almost never the one just removed.
-                    <img key={p.id} src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index)} />
+                    // reusing DOM nodes by their OLD slot rather than
+                    // tracking the actual image across the reindex.
+                    //
+                    // A deleted one renders as its own placeholder, in its
+                    // OWN slot, instead of being removed from `previews`
+                    // outright (see deletedPreviewIds/markPreviewDeletedLocally)
+                    // -- every other thumbnail then stays exactly where it
+                    // was, so there's never any ambiguity about which one
+                    // was actually removed regardless of how many are on
+                    // screen at once.
+                    deletedPreviewIds.has(p.id) ? (
+                      <div key={p.id} className="timeline-thumb-deleted" title="削除済み">
+                        <span aria-hidden="true">🗑</span>
+                        <span>削除済み</span>
+                      </div>
+                    ) : (
+                      <img key={p.id} src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index)} />
+                    )
                   )) : (
                     <div className="timeline-empty">No previews</div>
                   )}
