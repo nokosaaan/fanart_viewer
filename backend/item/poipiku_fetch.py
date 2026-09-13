@@ -33,6 +33,15 @@ _HEADERS = {
 
 _CDN_SKIP = ('/profile_', 'warning.png', '/assets/', '/img/warning')
 
+# Generic "click to reveal" graphics Poipiku serves as IllustItemThumbImg in
+# place of the real image — for R18/R15 works pending the site's own age
+# gate (/img/R-18.png) as well as e.g. "AI学習禁止" (AI-training-opt-out)
+# works (/img/warning.png) — regardless of login/cookie state. A real
+# browser reveals the actual image by calling showIllustDetail() on click
+# (see _fetch_illust_detail below); a plain fetch of these placeholder URLs
+# just returns the small generic graphic itself.
+_PLACEHOLDER_THUMB_RE = re.compile(r'/img/(?:r-18|warning)\.png', re.IGNORECASE)
+
 
 def _thumb_to_original(thumb_url: str) -> str:
     # https://cdn.poipiku.com/UUUU/IIII_hash.png_640.jpg → …/IIII_hash.png
@@ -43,6 +52,32 @@ def _is_artwork_img(src: str) -> bool:
     if not src or 'cdn.poipiku.com' not in src:
         return False
     return not any(skip in src for skip in _CDN_SKIP)
+
+
+def _is_placeholder_thumb(src: str) -> bool:
+    return bool(_PLACEHOLDER_THUMB_RE.search(src or ''))
+
+
+def _collect_gated_ad_indices(container) -> list[int]:
+    """Find placeholder-gated IllustItemThumbImg elements in a BeautifulSoup
+    node and return the distinct `AD` index (the 3rd arg of the enclosing
+    <a onclick="showIllustDetail(UID, IID, AD)">) each needs, so the real
+    image behind each can be fetched via ShowIllustDetailF.jsp."""
+    indices: list[int] = []
+    seen: set[int] = set()
+    for img in container.find_all('img', class_='IllustItemThumbImg'):
+        if not _is_placeholder_thumb(img.get('src', '')):
+            continue
+        link = img.find_parent('a', class_='IllustItemThumb')
+        ad = -1
+        if link:
+            m = re.search(r'showIllustDetail\(\s*\d+\s*,\s*\d+\s*,\s*(-?\d+)\s*\)', link.get('onclick', ''))
+            if m:
+                ad = int(m.group(1))
+        if ad not in seen:
+            indices.append(ad)
+            seen.add(ad)
+    return indices
 
 
 def _collect_from_soup(container) -> list[str]:
@@ -57,17 +92,16 @@ def _collect_from_soup(container) -> list[str]:
     return urls
 
 
-def _fetch_append_file(session, user_id: str, illust_id: str, referer: str,
-                        pas: str = '') -> list[str]:
-    """Call the generateShowAppendFile AJAX endpoint and return thumbnail URLs.
+def _fetch_append_file_html(session, user_id: str, illust_id: str, referer: str,
+                             pas: str = '') -> str:
+    """Call the generateShowAppendFile AJAX endpoint and return the raw HTML
+    fragment of additional thumbnails it reveals (caller parses it).
 
     Endpoint discovered from /assets/js/common-134.js:
       POST /f/ShowAppendFileF.jsp  {UID, IID, PAS, MD, TWF}
     Response JSON: {result_num: N, html: '<img ...>...'}
     """
     try:
-        from bs4 import BeautifulSoup
-
         resp = session.post(
             'https://poipiku.com/f/ShowAppendFileF.jsp',
             data={'UID': user_id, 'IID': illust_id, 'PAS': pas, 'MD': '0', 'TWF': '-1'},
@@ -80,18 +114,51 @@ def _fetch_append_file(session, user_id: str, illust_id: str, referer: str,
         )
         if resp.status_code != 200:
             logger.debug('poipiku ShowAppendFileF HTTP %s', resp.status_code)
+            return ''
+        try:
+            data = resp.json()
+        except Exception:
+            return ''
+        return data.get('html') or ''
+    except Exception as exc:
+        logger.warning('poipiku ShowAppendFileF failed: %s', exc)
+        return ''
+
+
+def _fetch_illust_detail(session, user_id: str, illust_id: str, referer: str,
+                          ad: int, pas: str = '') -> list[str]:
+    """Call the showIllustDetail() AJAX endpoint (fired on a real thumbnail
+    click) and return the real, signed CDN image URL(s) it reveals.
+
+    Endpoint discovered from /assets/js/common-*.js (same place as
+    ShowAppendFileF, see module docstring):
+      POST /f/ShowIllustDetailF.jsp  {ID, TD, AD, PAS}
+    Response JSON: {result: 1, html: '<img class="DetailIllustItemImage" src="...signed...">'}
+    """
+    try:
+        resp = session.post(
+            'https://poipiku.com/f/ShowIllustDetailF.jsp',
+            data={'ID': user_id, 'TD': illust_id, 'AD': ad, 'PAS': pas},
+            headers={
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'Referer': referer,
+            },
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            logger.debug('poipiku ShowIllustDetailF HTTP %s (AD=%s)', resp.status_code, ad)
             return []
         try:
             data = resp.json()
         except Exception:
             return []
-        html_frag = data.get('html') or ''
-        if not html_frag:
+        if data.get('result') != 1:
             return []
-        soup = BeautifulSoup(html_frag, 'html.parser')
-        return _collect_from_soup(soup)
+        html_frag = data.get('html') or ''
+        return re.findall(r'DetailIllustItemImage"\s+src="([^"]+)"', html_frag)
     except Exception as exc:
-        logger.warning('poipiku ShowAppendFileF failed: %s', exc)
+        logger.warning('poipiku ShowIllustDetailF failed (AD=%s): %s', ad, exc)
         return []
 
 
@@ -186,6 +253,24 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
                 thumb_urls.append(u)
                 seen.add(u)
 
+    # Real image URLs revealed via ShowIllustDetailF (see below) — already
+    # signed CDN URLs, so downloaded as-is with no _thumb_to_original guessing.
+    detail_urls: list[str] = []
+
+    def _reveal_gated(container, pas: str):
+        gated_ads = _collect_gated_ad_indices(container)
+        if not gated_ads or not user_id:
+            return
+        logger.info('poipiku: %d placeholder-gated thumbnail(s) found, AD index(es)=%s — calling ShowIllustDetailF',
+                    len(gated_ads), gated_ads)
+        for ad in gated_ads:
+            revealed = _fetch_illust_detail(session, user_id, illust_id, page_url, ad, pas=pas)
+            logger.info('poipiku: ShowIllustDetailF(AD=%s) revealed %d real image URL(s): %s',
+                        ad, len(revealed), revealed)
+            for u in revealed:
+                if u not in detail_urls:
+                    detail_urls.append(u)
+
     if illust_id:
         item_div = soup.find(id=f'IllustItem_{illust_id}')
         logger.info('poipiku: IllustItem_%s div %s', illust_id, 'found' if item_div else 'NOT FOUND')
@@ -194,16 +279,23 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
             logger.info('poipiku: %d thumbnail(s) found directly in IllustItem div: %s',
                         len(thumb_urls), thumb_urls)
 
+            pas_input = item_div.find('input', attrs={'name': 'PAS'})
+            pas = (pas_input.get('value') or '') if pas_input else ''
+
+            _reveal_gated(item_div, pas)
+
             # Check for ShowAppendFile button (may have display:none in static HTML)
             expand_btn = item_div.find('a', class_='IllustItemExpandBtn')
             if expand_btn and user_id:
-                pas_input = item_div.find('input', attrs={'name': 'PAS'})
-                pas = (pas_input.get('value') or '') if pas_input else ''
                 logger.info('poipiku: IllustItemExpandBtn found, calling ShowAppendFileF (PAS=%r)', pas)
-                appended = _fetch_append_file(session, user_id, illust_id, page_url, pas=pas)
-                logger.info('poipiku: ShowAppendFileF returned %d additional thumbnail(s): %s',
-                            len(appended), appended)
-                _add(appended)
+                appended_html = _fetch_append_file_html(session, user_id, illust_id, page_url, pas=pas)
+                if appended_html:
+                    appended_soup = BeautifulSoup(appended_html, 'html.parser')
+                    appended = _collect_from_soup(appended_soup)
+                    logger.info('poipiku: ShowAppendFileF returned %d additional thumbnail(s): %s',
+                                len(appended), appended)
+                    _add(appended)
+                    _reveal_gated(appended_soup, pas)
             else:
                 logger.info('poipiku: no IllustItemExpandBtn found (single-image post, or button missing)')
         else:
@@ -216,7 +308,7 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
         logger.info('poipiku: no illust_id parsed from URL; whole-page scan found %d thumbnail(s): %s',
                     len(thumb_urls), thumb_urls)
 
-    if not thumb_urls:
+    if not thumb_urls and not detail_urls:
         logger.warning('poipiku: no thumbnail URLs found at all for %s — returning empty', page_url)
         return []
 
@@ -271,7 +363,15 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
         downloaded = _try_download(candidates)
         if downloaded:
             results.append(downloaded)
-    logger.info('poipiku: fetch_poipiku_media(%s) -> %d image(s) downloaded successfully out of %d thumbnail(s) found',
-                url, len(results), len(thumb_urls))
+
+    # detail_urls are already the real, signed image URL ShowIllustDetailF
+    # handed back — no guessing/fallback needed, just download as-is.
+    for detail_url in detail_urls:
+        downloaded = _try_download([detail_url])
+        if downloaded:
+            results.append(downloaded)
+
+    logger.info('poipiku: fetch_poipiku_media(%s) -> %d image(s) downloaded successfully out of %d candidate(s) found',
+                url, len(results), len(thumb_urls) + len(detail_urls))
 
     return results
