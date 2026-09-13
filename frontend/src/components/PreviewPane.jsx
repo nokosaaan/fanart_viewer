@@ -4,35 +4,55 @@ import { getPlatformIcon } from '../lib/platformIcon'
 
 const PANE_PAGE_SIZE = 50
 
+// This pane used to run its own separate fetch pipeline (its own
+// /api/items/?page_size=1000 pagination, following every `next` link before
+// showing anything) just to re-derive "which items have a preview" — but
+// `filteredItems` (App.jsx's own `filtered`) is ALREADY the complete,
+// up-to-date, fully-loaded set of items the main list itself is showing
+// (same search/situation/other filters), so re-fetching it here was pure
+// duplicated network work, and following every pagination page before
+// rendering anything is exactly why opening this pane used to take a long
+// time. Deriving `previewItems` as a plain in-memory filter of
+// `filteredItems` makes opening instant (no network round-trip at all for
+// the list itself) and keeps "still respects the current search/situation
+// filters" for free, since that's exactly what `filteredItems` already is.
+//
+// Staying in sync with the rest of the app also comes for free: any
+// `item-preview-updated`/`item-updated` event anywhere (a fetch queue, a
+// manual upload, ScrollList's own preview actions, or this pane's own
+// delete below) is already handled by App.jsx's own listeners, which patch
+// its `items` state in place — that flows straight through to `filtered` /
+// `filteredItems` / `previewItems` on its own, without this component
+// needing its OWN separate listener or reload (it used to have one; see
+// git history for the older, more complex version this replaced).
 export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId}){
-  const [items, setItems] = useState([])
-  const allLoadedRef = useRef([]) // full unfiltered set fetched from API
-  const [loading, setLoading] = useState(false)
+  const previewItems = useMemo(() => (
+    (filteredItems || []).filter(it => it && (it.has_preview === true || it.has_preview === 'true'))
+  ), [filteredItems])
+
   // Which item's enlarged view is open, tracked by STABLE id rather than a
-  // plain positional index into `items` — `items` itself gets fully
-  // replaced after basically any preview mutation (delete/clear -- see the
-  // item-preview-updated listener and deleteCurrentPreview/clearAllPreviews
-  // below, both of which trigger a full reload), and a positional index
-  // into a freshly-replaced array can point at the wrong item, or (worse)
-  // silently render nothing once the array shrinks, closing the enlarged
-  // view entirely right when the user was mid-review of exactly that item.
-  // Deriving `selectedIndex` by re-locating this id in the CURRENT `items`
-  // on every render keeps the same item open across any reload, and only
-  // actually closes when that item is genuinely no longer present (e.g.
-  // its last preview was just deleted, so it dropped out of this pane's
-  // own has_preview-filtered list) -- which is the one case where closing
-  // is actually correct.
+  // plain positional index into `previewItems` — that array gets a new
+  // reference (and can reorder/shrink/grow) on essentially any preview
+  // mutation app-wide (see the module comment above), and a positional
+  // index into a freshly-replaced array can point at the wrong item, or
+  // (worse) silently render nothing once the array shrinks, closing the
+  // enlarged view entirely right when the user was mid-review of exactly
+  // that item. Deriving `selectedIndex` by re-locating this id in the
+  // CURRENT `previewItems` on every render keeps the same item open across
+  // any such reference change, and only actually closes when that item is
+  // genuinely no longer present (its last preview was just deleted, or it
+  // stopped matching the active filter) — which is the one case where
+  // closing is actually correct.
   const [selectedItemId, setSelectedItemId] = useState(null)
   const selectedIndex = useMemo(() => {
     if (selectedItemId == null) return null
-    const idx = items.findIndex(it => it && it.id === selectedItemId)
+    const idx = previewItems.findIndex(it => it && it.id === selectedItemId)
     return idx === -1 ? null : idx
-  }, [items, selectedItemId])
+  }, [previewItems, selectedItemId])
   // Guards the initialItemId auto-jump below so it fires exactly once per
-  // "open" — without it, a later `items` refresh (lazy pagination, an
-  // item-preview-updated resync) would re-run the jump and yank the user
-  // back to the originally-clicked item even after they'd navigated
-  // elsewhere with prev()/next().
+  // "open" — without it, a later `previewItems` refresh would re-run the
+  // jump and yank the user back to the originally-clicked item even after
+  // they'd navigated elsewhere with prev()/next().
   const jumpedItemIdRef = useRef(null)
   const [panePageIndex, setPanePageIndex] = useState(0)
   const [previews, setPreviews] = useState([]) // per-item preview list
@@ -40,8 +60,6 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
   const currentPreviewIdxRef = useRef(0)
   const mountedRef = useRef(false)
-  const [nextPageUrl, setNextPageUrl] = useState(null)
-  const [loadingMore, setLoadingMore] = useState(false)
   const previewPaneRef = useRef(null)
 
   useEffect(()=>{
@@ -49,134 +67,49 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     return ()=>{ mountedRef.current = false }
   }, [])
 
-  function normalizeNext(next){
-    if(!next) return null
-    try{ const u = new URL(next); return u.pathname + (u.search || '') }catch(e){ return next }
-  }
-
-  function parsePageData(data){
-    if(Array.isArray(data)) return { list: data, next: null }
-    if(Array.isArray(data.results)) return { list: data.results, next: normalizeNext(data.next || null) }
-    return { list: [], next: null }
-  }
-
-  // load items with optional pagination.
-  // - replace=true, maxPages=Infinity (default): follows all API `next` links
-  //   so the full set is loaded in one go — used to resync after a mutation
-  //   (deleteCurrentPreview / clearAllPreviews) so we never end up with FEWER
-  //   items loaded than before the resync.
-  // - replace=true, maxPages=N: stops after N chunks and wires the remainder
-  //   into nextPageUrl, so the existing scroll-triggered lazy loader (see the
-  //   onScroll effect below) picks up the rest as the user scrolls — used for
-  //   the initial "pane just opened" load so it doesn't have to fetch the
-  //   entire dataset before showing anything.
-  async function loadItems(url='/api/items/?page_size=1000', replace=true, maxPages=Infinity){
-    try{
-      if(replace){ setLoading(true); setNextPageUrl(null) }
-      else { setLoadingMore(true) }
-
-      if(replace){
-        // fetch up to maxPages chunks and accumulate before updating state
-        let accumulated = []
-        let currentUrl = url
-        let pages = 0
-        while(currentUrl && mountedRef.current && pages < maxPages){
-          const r = await fetch(currentUrl)
-          if(!r.ok) break
-          const { list, next } = parsePageData(await r.json())
-          accumulated = accumulated.concat(
-            list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
-          )
-          currentUrl = next
-          pages += 1
-        }
-        if(!mountedRef.current) return accumulated
-        allLoadedRef.current = accumulated
-        let have = accumulated
-        // No `.length > 0` guard here on purpose: a filter that legitimately
-        // matches zero items (e.g. a situation filter with no results) must
-        // show an empty timeline, not silently fall back to every loaded
-        // item just because the intersection happened to be empty.
-        if(Array.isArray(filteredItems)){
-          const allowedIds = new Set(filteredItems.map(it => it.id))
-          have = have.filter(it => allowedIds.has(it.id))
-        }
-        setItems(have)
-        setNextPageUrl(currentUrl)
-        // clamp panePageIndex so we never show an empty page after a reload
-        const maxPage = Math.max(0, Math.ceil(have.length / PANE_PAGE_SIZE) - 1)
-        setPanePageIndex(prev => Math.min(prev, maxPage))
-        return have
-      } else {
-        // lazy append: load one more page
-        const r = await fetch(url)
-        if(!r.ok) return []
-        const { list, next } = parsePageData(await r.json())
-        const withPreview = list.filter(it => it && (it.has_preview===true || it.has_preview==='true'))
-        if(!mountedRef.current) return withPreview
-        allLoadedRef.current = (allLoadedRef.current || []).concat(withPreview)
-        let have = allLoadedRef.current
-        // No `.length > 0` guard here on purpose: a filter that legitimately
-        // matches zero items (e.g. a situation filter with no results) must
-        // show an empty timeline, not silently fall back to every loaded
-        // item just because the intersection happened to be empty.
-        if(Array.isArray(filteredItems)){
-          const allowedIds = new Set(filteredItems.map(it => it.id))
-          have = have.filter(it => allowedIds.has(it.id))
-        }
-        setItems(have)
-        setNextPageUrl(next)
-        return have
-      }
-    }catch(e){
-      console.error('Failed to load preview items', e)
-      if(mountedRef.current && replace) setItems([])
-      return []
-    }finally{
-      if(replace){ if(mountedRef.current) setLoading(false) }
-      else { if(mountedRef.current) setLoadingMore(false) }
-    }
-  }
-
-  // Runs on open AND on every filteredItems change (search/situation filter
-  // toggled, title/preview-missing toggled, etc. — anything App.jsx's
-  // `filtered` memo depends on) while the pane is open. This used to only
-  // RE-FILTER whatever had already been loaded (allLoadedRef.current) —
-  // the initial open only fetched the first page_size=1000 items up front
-  // (newest-first; the rest loaded lazily as the user scrolled THIS pane),
-  // so switching to a filter matching mostly-older items (e.g. a less
-  // common situation than whatever's newest) could show "No previews
-  // available" even though matching items with previews genuinely exist,
-  // simply because this pane had never fetched them yet. A full reload
-  // (following every `next` link) guarantees every match is actually
-  // found, at the cost of the old "fast path" partial-load optimization.
+  // Reset selection only on a genuine open transition (closed -> open), not
+  // on every `previewItems` reference change while already open — that
+  // distinction is exactly what used to close the modal out from under the
+  // user after an unrelated (or even their own) preview mutation elsewhere
+  // caused `filteredItems` to get a new array identity. The initialItemId
+  // jump effect below runs right after this one and overrides it when a
+  // specific item was requested.
+  const wasOpenRef = useRef(false)
   useEffect(()=>{
-    if(!open) return
-    setSelectedItemId(null)
-    setPanePageIndex(0)
-    loadItems('/api/items/?page_size=1000', true, Infinity)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, filteredItems])
+    if(open && !wasOpenRef.current){
+      setSelectedItemId(null)
+      setPanePageIndex(0)
+    }
+    wasOpenRef.current = open
+  }, [open])
+
+  // Keep the current page in range as previewItems grows/shrinks (a filter
+  // change, a background item-list load finishing, etc.) instead of
+  // silently landing on a page with nothing on it.
+  useEffect(()=>{
+    const maxPage = Math.max(0, Math.ceil(previewItems.length / PANE_PAGE_SIZE) - 1)
+    setPanePageIndex(prev => Math.min(prev, maxPage))
+  }, [previewItems.length])
 
   // Jump straight to a specific item's enlarged view — set when the pane is
   // opened via ScrollList's preview thumbnail (see App.jsx's
   // openPreviewForItem) rather than the plain header-menu toggle. Matches
-  // by item id, not array index — PreviewPane's own `items` is built from a
-  // separate fetch+filter pipeline (see loadItems above) whose order/length
-  // doesn't correspond to ScrollList's paginatedItems array position, so an
-  // index handed in from there would point at the wrong item.
+  // by item id, not array index — this pane's own `previewItems` ordering
+  // doesn't necessarily correspond to ScrollList's paginatedItems array
+  // position, so an index handed in from there would point at the wrong
+  // item.
   useEffect(()=>{
     if(!open){ jumpedItemIdRef.current = null; return }
     if(initialItemId == null) return
     if(jumpedItemIdRef.current === initialItemId) return
-    if(!items || items.length === 0) return
-    const idx = items.findIndex(it => it && it.id === initialItemId)
+    if(!previewItems || previewItems.length === 0) return
+    const idx = previewItems.findIndex(it => it && it.id === initialItemId)
     if(idx !== -1){
       jumpedItemIdRef.current = initialItemId
       setPanePageIndex(Math.floor(idx / PANE_PAGE_SIZE))
       setSelectedItemId(initialItemId)
     }
-  }, [open, initialItemId, items])
+  }, [open, initialItemId, previewItems])
 
   // close preview pane when clicking outside it (but not when clicking the modal)
   useEffect(()=>{
@@ -210,7 +143,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     }
     window.addEventListener('keydown', onKey)
     return ()=> window.removeEventListener('keydown', onKey)
-  }, [selectedIndex, items, previews])
+  }, [selectedIndex, previewItems, previews])
 
   // wheel navigation: accumulate deltas to avoid accidental small scrolls
   const wheelAccRef = useRef(0)
@@ -234,27 +167,29 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     // attach to window to capture wheel inside modal
     window.addEventListener('wheel', handleWheel, {passive: true})
     return ()=> window.removeEventListener('wheel', handleWheel)
-  }, [selectedIndex, items])
+  }, [selectedIndex, previewItems])
 
   function openLarge(i){
-    const it = items[i]
+    const it = previewItems[i]
     if(it) setSelectedItemId(it.id)
   }
 
-  // when selectedIndex changes, fetch the preview list for that item
-  // load previews for a specific selected index (reusable)
-  async function loadPreviewsForIndex(idx){
+  // Loads the previews for whichever item `selectedItemId` names, looked up
+  // fresh in `previewItems` at call time — keyed ONLY on selectedItemId
+  // (see the effect below), not on previewItems itself, so a mere array
+  // reference/position change (the item's id staying the same) never
+  // re-triggers this fetch; only actually selecting a different item does.
+  async function loadPreviewsForItem(item){
     setPreviews([])
     setCurrentPreviewIdx(0)
     setSelectedPreviewId(null)
     currentPreviewIdxRef.current = 0
-    if(idx===null || idx===undefined) return
-    const it = items[idx]
-    if(!it) return
+    if(!item) return
     try{
-      const r = await fetch(`/api/items/${it.id}/previews/`)
+      const r = await fetch(`/api/items/${item.id}/previews/`)
       if(!r.ok) return
       const j = await r.json()
+      if(!mountedRef.current) return
       if(Array.isArray(j)){
         setPreviews(j)
         setCurrentPreviewIdx(0)
@@ -267,9 +202,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }
 
   useEffect(()=>{
-    loadPreviewsForIndex(selectedIndex)
+    const it = selectedItemId != null ? previewItems.find(x => x && x.id === selectedItemId) : null
+    loadPreviewsForItem(it)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIndex, items])
+  }, [selectedItemId])
 
   useEffect(()=>{
     currentPreviewIdxRef.current = currentPreviewIdx
@@ -306,7 +242,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
 
   async function deleteCurrentPreview(){
     if(selectedIndex===null) return
-    const it = items[selectedIndex]
+    const it = previewItems[selectedIndex]
     if(!it) return
     const pid = selectedPreviewId || ((previews && previews[currentPreviewIdx]) ? previews[currentPreviewIdx].id : null)
     const ok = window.confirm('Delete this preview image? This cannot be undone.')
@@ -326,8 +262,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
         alert('Failed to delete preview: '+(j.detail||j.error||resp.status))
         return
       }
-      // reload previews for this item and refresh items list
-      await loadPreviewsForIndex(selectedIndex)
+      // Refresh THIS item's own filmstrip immediately — no need to wait for
+      // the item-preview-updated roundtrip below, which is what keeps
+      // App.jsx's (and thus this pane's) item list in sync, not the
+      // filmstrip itself.
+      await loadPreviewsForItem(it)
       notify('item-preview-updated', { id: it.id })
       alert('Preview deleted.')
     }catch(e){ console.error(e); alert('Failed to delete preview') }
@@ -336,7 +275,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
 
   async function clearAllPreviews(){
     if(selectedIndex===null) return
-    const it = items[selectedIndex]
+    const it = previewItems[selectedIndex]
     if(!it) return
     const ok = window.confirm('Clear all previews for this item? This will remove all preview images.')
     if(!ok) return
@@ -344,65 +283,27 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     try{
       const resp = await fetch(`/api/items/${it.id}/previews/`, {method: 'DELETE'})
       if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to clear previews: '+(j.detail||j.error||resp.status)); return }
-      // refresh items and previews
-      await loadItems('/api/items/?page_size=1000', true)
       setPreviews([])
       setCurrentPreviewIdx(0)
+      // item-preview-updated below refreshes has_preview via App.jsx's own
+      // listener, which will drop this item out of previewItems on its own
+      // (it now has zero previews) — that naturally closes this modal via
+      // the selectedIndex derivation above, no direct action needed here.
       notify('item-preview-updated', { id: it.id })
       alert('All previews cleared.')
     }catch(e){ console.error(e); alert('Failed to clear previews') }
     finally{ setDeleting(false) }
   }
 
-  // listen for external updates (e.g. when a preview is fetched elsewhere in the UI)
-  useEffect(()=>{
-    function onItemPreviewUpdated(e){
-      const id = e && e.detail && e.detail.id
-      // refresh the first page so thumbnails / has_preview flags are up-to-date
-      if(open){
-        const openedId = (selectedIndex !== null && items[selectedIndex]) ? items[selectedIndex].id : null
-        loadItems('/api/items/?page_size=1000', true).then((loaded)=>{
-          if(!mountedRef.current) return
-          // if the modal was open on the updated item, reload its previews using the new index
-          if(id!=null && openedId === id){
-            const newIndex = (loaded || []).findIndex(it => it && it.id === id)
-            if(newIndex !== -1){
-              loadPreviewsForIndex(newIndex)
-            } else if(selectedIndex !== null){
-              loadPreviewsForIndex(selectedIndex)
-            }
-          }
-        }).catch(()=>{})
-      }
-    }
-    window.addEventListener('item-preview-updated', onItemPreviewUpdated)
-    return ()=> window.removeEventListener('item-preview-updated', onItemPreviewUpdated)
-  }, [open, selectedIndex, items])
-
-  // lazy-load more items when the preview pane is scrolled near the bottom
-  useEffect(()=>{
-    const el = previewPaneRef.current
-    if(!el) return
-    function onScroll(){
-      if(!nextPageUrl || loadingMore) return
-      const scrollBottom = el.scrollTop + el.clientHeight
-      if(el.scrollHeight - scrollBottom < 240){
-        loadItems(nextPageUrl, false)
-      }
-    }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return ()=> el.removeEventListener('scroll', onScroll)
-  }, [nextPageUrl, loadingMore, previewPaneRef.current])
-
   function prev(){
-    if(selectedIndex===null) return
-    const it = items[(selectedIndex - 1 + items.length) % items.length]
+    if(selectedIndex===null || previewItems.length===0) return
+    const it = previewItems[(selectedIndex - 1 + previewItems.length) % previewItems.length]
     if(it) setSelectedItemId(it.id)
   }
 
   function next(){
-    if(selectedIndex===null) return
-    const it = items[(selectedIndex + 1) % items.length]
+    if(selectedIndex===null || previewItems.length===0) return
+    const it = previewItems[(selectedIndex + 1) % previewItems.length]
     if(it) setSelectedItemId(it.id)
   }
 
@@ -416,17 +317,16 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
           </div>
         </div>
         <div className="preview-body">
-          {loading && <div className="preview-loading">Loading…</div>}
-          {!loading && items.length===0 && (
+          {previewItems.length===0 && (
             <div className="preview-empty">No previews available</div>
           )}
           <div className="preview-list">
-            {items.slice(panePageIndex*PANE_PAGE_SIZE, (panePageIndex+1)*PANE_PAGE_SIZE).map((it, localIdx) => {
+            {previewItems.slice(panePageIndex*PANE_PAGE_SIZE, (panePageIndex+1)*PANE_PAGE_SIZE).map((it, localIdx) => {
               const globalIdx = panePageIndex * PANE_PAGE_SIZE + localIdx
               return (
                 <div className="preview-item" key={it.id}>
                   <button className="preview-thumb-btn" onClick={()=>openLarge(globalIdx)}>
-                    <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} />
+                    <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} loading="lazy" />
                   </button>
                   <div className="preview-meta">
                     <div className="preview-item-id">#{it.id}</div>
@@ -437,29 +337,29 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               )
             })}
           </div>
-          {items.length > PANE_PAGE_SIZE && (
+          {previewItems.length > PANE_PAGE_SIZE && (
             <div className="pane-pagination">
               <button className="btn" onClick={()=>setPanePageIndex(p=>Math.max(0,p-1))} disabled={panePageIndex===0}>Prev</button>
               <span>Page</span>
               <input
                 type="number"
                 min={1}
-                max={Math.ceil(items.length/PANE_PAGE_SIZE)}
+                max={Math.ceil(previewItems.length/PANE_PAGE_SIZE)}
                 value={panePageIndex+1}
                 onChange={e=>{
                   const v = parseInt(e.target.value,10)
-                  if(!isNaN(v)) setPanePageIndex(Math.max(0, Math.min(Math.ceil(items.length/PANE_PAGE_SIZE)-1, v-1)))
+                  if(!isNaN(v)) setPanePageIndex(Math.max(0, Math.min(Math.ceil(previewItems.length/PANE_PAGE_SIZE)-1, v-1)))
                 }}
                 style={{width:48, textAlign:'center'}}
               />
-              <span>/ {Math.ceil(items.length/PANE_PAGE_SIZE)}</span>
-              <button className="btn" onClick={()=>setPanePageIndex(p=>Math.min(Math.ceil(items.length/PANE_PAGE_SIZE)-1,p+1))} disabled={panePageIndex>=Math.ceil(items.length/PANE_PAGE_SIZE)-1}>Next</button>
+              <span>/ {Math.ceil(previewItems.length/PANE_PAGE_SIZE)}</span>
+              <button className="btn" onClick={()=>setPanePageIndex(p=>Math.min(Math.ceil(previewItems.length/PANE_PAGE_SIZE)-1,p+1))} disabled={panePageIndex>=Math.ceil(previewItems.length/PANE_PAGE_SIZE)-1}>Next</button>
             </div>
           )}
         </div>
       </div>
 
-      {selectedIndex!==null && items[selectedIndex] && (
+      {selectedIndex!==null && previewItems[selectedIndex] && (
         <div className="preview-modal-backdrop" onClick={()=>setSelectedItemId(null)}>
           <div className="preview-modal">
               {/* Left/right full-height edge zones for consistent click areas */}
@@ -481,19 +381,19 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 // (currentPreviewIdx) so it's never just "the first page"
                 // regardless of what's actually being looked at.
                 const previewImgSrc = (previews && previews.length>0)
-                  ? `/api/items/${items[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
-                  : `/api/items/${items[selectedIndex].id}/preview/`
+                  ? `/api/items/${previewItems[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
+                  : `/api/items/${previewItems[selectedIndex].id}/preview/`
                 return (
               <div className="modal-top">
                 <div className="modal-main">
-                  <img className="preview-modal-img" src={previewImgSrc} alt={(items[selectedIndex].titles && items[selectedIndex].titles[0])||items[selectedIndex].title||''} />
+                  <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
                 </div>
                 <div className="modal-meta">
-                  <div className="preview-title">{(items[selectedIndex].titles && items[selectedIndex].titles[0]) || items[selectedIndex].titles || items[selectedIndex].title || ''}</div>
-                  <div className="preview-artist">{items[selectedIndex].artist || ''}</div>
-                  <a className="link-text" href={items[selectedIndex].link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                  <div className="preview-title">{(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].titles || previewItems[selectedIndex].title || ''}</div>
+                  <div className="preview-artist">{previewItems[selectedIndex].artist || ''}</div>
+                  <a className="link-text" href={previewItems[selectedIndex].link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
                     {(() => {
-                      const platform = getPlatformIcon(items[selectedIndex].link)
+                      const platform = getPlatformIcon(previewItems[selectedIndex].link)
                       return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
                     })()}
                     Open source
@@ -541,7 +441,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                     // drop the last one, regardless of which image was
                     // actually deleted -- the thumbnail that visually
                     // disappeared was almost never the one just removed.
-                    <img key={p.id} src={`/api/items/${items[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index, p.id)} />
+                    <img key={p.id} src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index)} />
                   )) : (
                     <div className="timeline-empty">No previews</div>
                   )}

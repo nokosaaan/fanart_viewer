@@ -455,10 +455,12 @@ function AppMain({ role, onLogout }){
   // e.g. "SOLO" only ever filtered whatever pages happened to already be
   // loaded — anything past that point (not yet paged/scrolled into `items`)
   // silently never appeared as a match, in both the main list AND
-  // PreviewPane (which intersects its own broader fetch against this same
-  // `filtered` array's id set — see App.jsx's <PreviewPane filteredItems=...>
-  // and PreviewPane.jsx's own loadItems/effect), which is exactly what made
-  // Preview Timeline look like it wasn't honoring the current filter.
+  // PreviewPane (which derives its own list as a plain in-memory filter of
+  // this `filtered` array — see App.jsx's <PreviewPane filteredItems=...>
+  // and PreviewPane.jsx's own `previewItems` memo — so it depends entirely
+  // on `items` here being complete, with no fetch of its own to fall back
+  // on), which is exactly what made Preview Timeline look like it wasn't
+  // honoring the current filter.
   useEffect(()=>{
     const searching = query.trim() !== '' || filters.length > 0 ||
       situationFilter !== 'ALL' || titleMissingOnly || previewMissingOnly
