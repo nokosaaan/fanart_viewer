@@ -155,8 +155,13 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
         f'https://poipiku.com/{user_id}/' if user_id else url
     )
 
+    logger.info('poipiku: fetching %s (user_id=%s illust_id=%s, cookies=%s)',
+                page_url, user_id, illust_id,
+                'yes' if cookie_parts else 'no')
+
     page_resp = session.get(page_url, timeout=20, headers={'Referer': 'https://poipiku.com/'})
     page_resp.raise_for_status()
+    logger.info('poipiku: page fetch HTTP %s, %d bytes', page_resp.status_code, len(page_resp.content))
     soup = BeautifulSoup(page_resp.text, 'html.parser')
 
     thumb_urls: list[str] = []
@@ -170,22 +175,36 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
 
     if illust_id:
         item_div = soup.find(id=f'IllustItem_{illust_id}')
+        logger.info('poipiku: IllustItem_%s div %s', illust_id, 'found' if item_div else 'NOT FOUND')
         if item_div:
             _add(_collect_from_soup(item_div))
+            logger.info('poipiku: %d thumbnail(s) found directly in IllustItem div: %s',
+                        len(thumb_urls), thumb_urls)
 
             # Check for ShowAppendFile button (may have display:none in static HTML)
             expand_btn = item_div.find('a', class_='IllustItemExpandBtn')
             if expand_btn and user_id:
                 pas_input = item_div.find('input', attrs={'name': 'PAS'})
                 pas = (pas_input.get('value') or '') if pas_input else ''
-                _add(_fetch_append_file(session, user_id, illust_id, page_url, pas=pas))
+                logger.info('poipiku: IllustItemExpandBtn found, calling ShowAppendFileF (PAS=%r)', pas)
+                appended = _fetch_append_file(session, user_id, illust_id, page_url, pas=pas)
+                logger.info('poipiku: ShowAppendFileF returned %d additional thumbnail(s): %s',
+                            len(appended), appended)
+                _add(appended)
+            else:
+                logger.info('poipiku: no IllustItemExpandBtn found (single-image post, or button missing)')
         else:
             # IllustItem div not found on page; collect all artwork imgs as fallback
             _add(_collect_from_soup(soup))
+            logger.info('poipiku: fallback whole-page scan found %d thumbnail(s): %s',
+                        len(thumb_urls), thumb_urls)
     else:
         _add(_collect_from_soup(soup))
+        logger.info('poipiku: no illust_id parsed from URL; whole-page scan found %d thumbnail(s): %s',
+                    len(thumb_urls), thumb_urls)
 
     if not thumb_urls:
+        logger.warning('poipiku: no thumbnail URLs found at all for %s — returning empty', page_url)
         return []
 
     # A "tap to reveal"/access-warning placeholder graphic Poipiku serves in
@@ -214,14 +233,20 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
             except Exception as exc:
                 logger.warning('poipiku: failed to download %s: %s', cand_url, exc)
                 continue
-            if r.status_code != 200:
-                continue
             ct = r.headers.get('content-type', 'image/jpeg').split(';', 1)[0].lower()
+            if r.status_code != 200:
+                logger.info('poipiku: candidate %s -> HTTP %s, trying next candidate', cand_url, r.status_code)
+                continue
             if not ct.startswith('image') or ct == 'image/svg+xml' or not r.content:
+                logger.info('poipiku: candidate %s -> HTTP 200 but content-type=%s (not usable), trying next', cand_url, ct)
                 continue
             if len(r.content) < _MIN_REAL_IMAGE_BYTES:
+                logger.info('poipiku: candidate %s -> HTTP 200 but only %d byte(s) (< %d, likely a placeholder), trying next',
+                            cand_url, len(r.content), _MIN_REAL_IMAGE_BYTES)
                 continue
+            logger.info('poipiku: candidate %s -> HTTP 200, %s, %d byte(s) — accepted', cand_url, ct, len(r.content))
             return r.content, ct
+        logger.warning('poipiku: no candidate succeeded out of %s', candidate_urls)
         return None
 
     # Download images.  Try the guessed "_640.jpg suffix stripped" original
@@ -233,5 +258,7 @@ def fetch_poipiku_media(url: str) -> list[tuple[bytes, str]]:
         downloaded = _try_download(candidates)
         if downloaded:
             results.append(downloaded)
+    logger.info('poipiku: fetch_poipiku_media(%s) -> %d image(s) downloaded successfully out of %d thumbnail(s) found',
+                url, len(results), len(thumb_urls))
 
     return results

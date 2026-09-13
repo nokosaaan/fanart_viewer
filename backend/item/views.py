@@ -2116,14 +2116,23 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             # generic scraper only picks up the first thumbnail at _640 size.
             if HAVE_POIPIKU and 'poipiku.com' in target_url:
                 try:
+                    logging.info('poipiku: invoking fetch_poipiku_media for %s (generic scrape so far: %d candidate(s))',
+                                 target_url, len(candidates))
                     poipiku_results = fetch_poipiku_media(target_url)
+                    logging.info('poipiku: fetch_poipiku_media returned %d image(s), sizes=%s',
+                                 len(poipiku_results), [len(b) for b, _ in poipiku_results])
                     if poipiku_results:
                         candidates = []  # replace generic results with poipiku-specific ones
                         for (img_bytes, mime) in poipiku_results:
                             if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
                                 candidates.append((target_url, img_bytes, mime))
+                            else:
+                                logging.info('poipiku: dropping a %d-byte image (< MIN_IMAGE_FETCH_BYTES=%d)',
+                                             len(img_bytes or b''), MIN_IMAGE_FETCH_BYTES)
                         if candidates:
                             used_method = 'poipiku'
+                    logging.info('poipiku: after poipiku-specific handling, %d candidate(s) remain (used_method=%s)',
+                                 len(candidates), used_method)
                 except Exception:
                     logging.exception('Poipiku fetch failed for %s', target_url)
 
