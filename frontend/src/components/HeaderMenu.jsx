@@ -78,18 +78,22 @@ function MenuEntry({ item, onAction }){
 // state exactly as before. The tour needs to force this open (and keep it
 // open across several steps that each spotlight a different menu item)
 // from OUTSIDE this component, which plain internal state can't support.
-export default function HeaderMenu({ items, open: openProp, onOpenChange }){
+export default function HeaderMenu({ items, open: openProp, onOpenChange, suppressOutsideClose }){
   const [openState, setOpenState] = useState(false)
   const open = openProp !== undefined ? openProp : openState
   const setOpen = onOpenChange || setOpenState
   const rootRef = useRef(null)
 
   useEffect(() => {
-    // In controlled mode (Tour.jsx), the controller decides when this
-    // closes — an outside click during the tour is most likely on the
-    // tour's own overlay/tooltip (rendered outside rootRef), which would
-    // otherwise close the menu out from under it mid-tour.
-    if (!open || openProp !== undefined) return
+    // App.jsx always runs this in controlled mode (Tour.jsx needs to force
+    // the menu open/closed from outside), so gating outside-click purely on
+    // "is this controlled" would disable it all the time, not just during
+    // an actual tour. suppressOutsideClose is the real signal: App.jsx only
+    // passes it while a tour is active, since an outside click during a
+    // tour is most likely on the tour's own overlay/tooltip (rendered
+    // outside rootRef), which would otherwise close the menu out from
+    // under it mid-tour.
+    if (!open || suppressOutsideClose) return
     function onDocClick(e){
       if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
     }
@@ -100,7 +104,7 @@ export default function HeaderMenu({ items, open: openProp, onOpenChange }){
       document.removeEventListener('mousedown', onDocClick)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open, openProp])
+  }, [open, suppressOutsideClose])
 
   return (
     <div className="header-menu" ref={rootRef}>

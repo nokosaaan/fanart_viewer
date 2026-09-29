@@ -4,6 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fanart Viewer</title>
+    <script>
+      // Applies the theme before first paint (mirrors lib/theme.js's
+      // computeEffectiveTheme) so switching themes never flashes the old
+      // one for a frame while React/main.jsx are still loading.
+      (function () {
+        try {
+          var useSystem = localStorage.getItem('fv_theme_use_system') === 'true'
+          var choice = localStorage.getItem('fv_theme_choice') === 'dark' ? 'dark' : 'light'
+          var dark = useSystem
+            ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+            : choice === 'dark'
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+        } catch (_) {}
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

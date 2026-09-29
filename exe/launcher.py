@@ -431,7 +431,12 @@ if __name__ == '__main__':
 
         window = webview.create_window('fanart_viewer', html=_LOADING_HTML, width=1280, height=860)
         window.events.closed += _on_window_closed
-        webview.start(_start_backend, args=(window,))
+        # private_mode defaults to True in pywebview, which wipes the
+        # WebView2 profile (and with it localStorage — auth token, tour
+        # "don't show again" flags, etc.) on every close. Without this, the
+        # frontend's own "ask once, remember forever" gates re-trigger on
+        # every single launch instead of actually remembering anything.
+        webview.start(_start_backend, args=(window,), private_mode=False)
         # webview.start() blocks until the window is closed. It returning
         # here should end the process on its own (every background thread
         # started in _start_backend is a daemon) -- but _on_window_closed

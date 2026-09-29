@@ -125,7 +125,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
                   key={entry.id}
                   onClick={()=>openEntryFor(entry)}
                   style={{
-                    padding:'10px 12px', cursor:'pointer',
+                    position:'relative', padding:'10px 34px 10px 12px', cursor:'pointer',
                     background: entry.id===openId ? '#eff6ff' : 'transparent',
                     borderBottom:'1px solid #f3f4f6',
                   }}
@@ -136,7 +136,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
                     className="cgm-icon-btn cgm-icon-delete"
                     title="キューから削除"
                     onClick={e=>{ e.stopPropagation(); onRemove(entry.id); if(entry.id===openId){ const rest = queue.filter(q=>q.id!==entry.id); setOpenId(rest.length>0?rest[0].id:null) } }}
-                    style={{float:'right', marginTop:-2}}
+                    style={{position:'absolute', top:8, right:8}}
                   >🗑</button>
                 </div>
               ))}

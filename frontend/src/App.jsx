@@ -25,6 +25,8 @@ import { notify } from './lib/crossWindowSync'
 import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
 import { ReloadIcon, FetchQueueIcon, ItemQueueIcon, SwipeIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
 import { buildTourStepsA, buildTourStepsB } from './lib/tourSteps'
+import ThemeSettings from './components/ThemeSettings'
+import { getThemeChoice, getUseSystem, saveThemeChoice, saveUseSystem, computeEffectiveTheme, applyTheme } from './lib/theme'
 
 // Platform badge/icon + text for a header-menu label — see HeaderMenu.jsx's
 // MenuEntry, which renders `label` as-is (plain string or JSX both work).
@@ -101,6 +103,38 @@ function AppMain({ role, onLogout }){
   // say so once and never be asked again (re-triggering later is still
   // always available via the header menu's own 💡 entry).
   const [tourPrompt, setTourPrompt] = useState(null)
+
+  const [themeOpen, setThemeOpen] = useState(false)
+  const [themeChoice, setThemeChoice] = useState(getThemeChoice)
+  const [themeUseSystem, setThemeUseSystem] = useState(getUseSystem)
+
+  // Re-applies on every choice/useSystem change, and — while useSystem is
+  // on — also whenever the OS setting itself changes, so switching Windows
+  // into/out of dark mode updates the app immediately instead of only on
+  // next launch (index.html's own inline copy of this logic only covers
+  // the initial paint, before this effect exists).
+  useEffect(() => {
+    applyTheme(computeEffectiveTheme(themeChoice, themeUseSystem))
+    if (!themeUseSystem || !window.matchMedia) return
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = () => applyTheme(computeEffectiveTheme(themeChoice, themeUseSystem))
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [themeChoice, themeUseSystem])
+
+  function chooseTheme(choice) {
+    setThemeChoice(choice)
+    saveThemeChoice(choice)
+    // Picking a theme directly is a clearer signal than a separate toggle
+    // flip — same as the "選択した瞬間に手動モードへ" behavior in most
+    // apps' own Default/Dark/Use-system pickers.
+    setThemeUseSystem(false)
+    saveUseSystem(false)
+  }
+  function setThemeUseSystemAndSave(v) {
+    setThemeUseSystem(v)
+    saveUseSystem(v)
+  }
 
   function startTour(group){
     // Whether the menu should be open is decided per-step from here on
@@ -680,6 +714,7 @@ function AppMain({ role, onLogout }){
           <HeaderMenu
             open={headerMenuOpen}
             onOpenChange={setHeaderMenuOpen}
+            suppressOutsideClose={tourActive != null}
             items={[
             { label: <MenuIconLabel iconNode={<SwipeIcon />} text="Preview Timeline" />, onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen, tourId: 'menu-preview-timeline' },
             // exe版はブラウザではなくpywebviewの専用ウィンドウなので、F5/Ctrl+Rの
@@ -687,6 +722,7 @@ function AppMain({ role, onLogout }){
             // サーバー側で状態が変わった(認証情報を保存した、他のウィンドウで
             // データを更新した等)後に最新の状態を確実に反映させるため。
             { label: <MenuIconLabel iconNode={<ReloadIcon />} text="再読み込み" />, onClick: () => window.location.reload() },
+            { label: <MenuIconLabel iconNode="🌓" text="表示設定" />, onClick: () => setThemeOpen(true) },
             ...(readOnly ? [] : [
               { divider: true },
               {
@@ -834,6 +870,15 @@ function AppMain({ role, onLogout }){
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {titleLinkOpen && <TitleDanbooruLinkManager onClose={()=>setTitleLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
+      {themeOpen && (
+        <ThemeSettings
+          choice={themeChoice}
+          useSystem={themeUseSystem}
+          onChoice={chooseTheme}
+          onUseSystemChange={setThemeUseSystemAndSave}
+          onClose={() => setThemeOpen(false)}
+        />
+      )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
       {tourPrompt && (
         <div className="cgm-panel-backdrop" onClick={() => setTourPrompt(null)}>

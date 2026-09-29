@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 
 // Generic spotlight/tooltip walkthrough engine — see lib/tourSteps.js for
 // the actual step content (App.jsx wires the two together). Deliberately
@@ -28,6 +28,18 @@ import React, { useState, useEffect, useRef } from 'react'
 export default function Tour({ steps, onClose, onMenuNeed }){
   const [idx, setIdx] = useState(0)
   const [rect, setRect] = useState(null) // DOMRect | 'not-found' | null (centered)
+  const cardRef = useRef(null)
+  // Real rendered card height, not a guess — several tourSteps.js bodies
+  // run to 8-10+ wrapped lines (e.g. buildTourStepsB's "アイテムを編集する"
+  // step), which CARD_HEIGHT_ESTIMATE badly undershoots. Placement math
+  // that assumed the fixed estimate instead of this could clamp the card
+  // to a `top` that then let the ACTUAL (taller) card overflow past the
+  // bottom of the viewport — worse on shorter windows/screens, which is
+  // what made it look "resolution-dependent" even though the real
+  // variable is available height vs. this step's own text length.
+  // Starts at the estimate so the very first paint (before layout effect
+  // below can measure anything) still has a sane fallback.
+  const [cardHeight, setCardHeight] = useState(CARD_HEIGHT_ESTIMATE)
   // The target's own containing dropdown (see HeaderMenu.jsx's
   // .header-menu-dropdown), when there is one — cardStyle's fallback
   // placement (neither side has room, e.g. a narrower/non-maximized
@@ -99,9 +111,23 @@ export default function Tour({ steps, onClose, onMenuNeed }){
   function back(){ setIdx(i => Math.max(0, i - 1)) }
   function skip(){ onClose('skipped') }
 
+  // Re-measure whenever the card's own content/width could have changed
+  // its wrapped height: a step change (different body text), AND a window
+  // resize (CARD_WIDTH itself shrinks below MARGIN*2 on narrow windows,
+  // which re-wraps the same text into more lines).
+  useLayoutEffect(() => {
+    function measure(){
+      const h = cardRef.current && cardRef.current.offsetHeight
+      if (h) setCardHeight(prev => (Math.abs(prev - h) > 0.5 ? h : prev))
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [idx, rect, dropdownRect])
+
   const hasSpotlight = rect && rect !== 'not-found'
   const PAD = 8
-  const placement = computeCardPlacement(rect, dropdownRect)
+  const placement = computeCardPlacement(rect, dropdownRect, cardHeight)
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 5000 }}>
@@ -134,7 +160,7 @@ export default function Tour({ steps, onClose, onMenuNeed }){
         <div style={dim(0, 0, '100%', '100%')} />
       )}
 
-      <div style={placement.style}>
+      <div ref={cardRef} style={placement.style}>
         {placement.arrow && <div style={arrowStyle(placement.arrow)} />}
         <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>{idx + 1} / {steps.length}</div>
         <div style={{ fontSize: 15, fontWeight: 700, color: '#f8fafc', marginBottom: 8 }}>{step.title}</div>
@@ -156,7 +182,7 @@ function dim(left, top, width, height){
 }
 
 const CARD_WIDTH = 320
-const CARD_HEIGHT_ESTIMATE = 200 // rough; only used to keep the card on-screen vertically, not for layout
+const CARD_HEIGHT_ESTIMATE = 200 // fallback only, before the real height is measured (see Tour's cardHeight state)
 const MARGIN = 20
 const ARROW_SIZE = 9 // speech-bubble tail (see arrowStyle) — MARGIN already leaves it room
 // Matches .header-menu-item's own `padding: 9px 10px` (styles.css) — a menu
@@ -183,7 +209,7 @@ const CARD_BASE = {
 // on. Returns `{ style, arrow: {side, offset} | null }` -- `arrow` is null
 // for the no-target (centered) card, and also as a last resort below when
 // no side has enough room to avoid the card overlapping the target itself.
-function computeCardPlacement(rect, dropdownRect){
+function computeCardPlacement(rect, dropdownRect, cardHeight = CARD_HEIGHT_ESTIMATE){
   if (!rect || rect === 'not-found') {
     return {
       style: { ...CARD_BASE, width: CARD_WIDTH, maxWidth: '90vw',
@@ -215,15 +241,15 @@ function computeCardPlacement(rect, dropdownRect){
   const spaceLeft = rect.left
   const spaceRight = vw - rect.right
   const centeredTop = clamp(
-    rect.top + rect.height / 2 - CARD_HEIGHT_ESTIMATE / 2,
-    MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN,
+    rect.top + rect.height / 2 - cardHeight / 2,
+    MARGIN, vh - cardHeight - MARGIN,
   )
   // Arrow offset (distance down from the card's own top edge) that points
   // at the target's vertical center, clamped so the tail never renders
   // outside the card's own edge even when the target sits far above/below
   // where centeredTop had to clamp the card to stay on-screen.
   const sideArrowOffset = clamp(
-    rect.top + rect.height / 2 - centeredTop, ARROW_SIZE * 2, CARD_HEIGHT_ESTIMATE - ARROW_SIZE * 2,
+    rect.top + rect.height / 2 - centeredTop, ARROW_SIZE * 2, cardHeight - ARROW_SIZE * 2,
   )
 
   if (spaceRight >= width + MARGIN * 2) {
@@ -263,15 +289,15 @@ function computeCardPlacement(rect, dropdownRect){
   const targetAnchorX = dropdownRect ? rect.left + MENU_ITEM_LEFT_INSET : rect.left + rect.width / 2
   const belowAboveArrowOffset = clamp(targetAnchorX - left, ARROW_SIZE * 2, width - ARROW_SIZE * 2)
 
-  if (spaceBelow >= CARD_HEIGHT_ESTIMATE + MARGIN) {
+  if (spaceBelow >= cardHeight + MARGIN) {
     return {
       style: { ...style, left, top: clearance.bottom + MARGIN },
       arrow: { side: 'top', offset: belowAboveArrowOffset }, // tail on the card's TOP edge, pointing up at the target
     }
   }
-  if (spaceAbove >= CARD_HEIGHT_ESTIMATE + MARGIN) {
+  if (spaceAbove >= cardHeight + MARGIN) {
     return {
-      style: { ...style, left, top: Math.max(clearance.top - CARD_HEIGHT_ESTIMATE - MARGIN, MARGIN) },
+      style: { ...style, left, top: Math.max(clearance.top - cardHeight - MARGIN, MARGIN) },
       arrow: { side: 'bottom', offset: belowAboveArrowOffset }, // tail on the card's BOTTOM edge, pointing down at the target
     }
   }
@@ -286,7 +312,7 @@ function computeCardPlacement(rect, dropdownRect){
     style: {
       ...style,
       left: clamp(vw / 2 - width / 2, MARGIN, vw - width - MARGIN),
-      top: clamp(vh / 2 - CARD_HEIGHT_ESTIMATE / 2, MARGIN, vh - CARD_HEIGHT_ESTIMATE - MARGIN),
+      top: clamp(vh / 2 - cardHeight / 2, MARGIN, vh - cardHeight - MARGIN),
     },
     arrow: null,
   }
