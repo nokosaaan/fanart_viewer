@@ -38,7 +38,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          # google.api_core drops new-release support for 3.10 once it hits
+          # EOL (2026-10-04) — 3.11 is the minimum it'll keep receiving
+          # updates on past that date.
+          python-version: 3.11
 
       - name: Install backend deps
         run: |
