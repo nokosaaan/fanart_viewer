@@ -282,6 +282,20 @@ class MetricLearningClassifier:
         n_classes = len(self.classes_)
         in_dim = X.shape[1]
 
+        # Same sklearn 'balanced' formula the default LogisticRegression
+        # head already uses (see make_classifier() below) — unlike that
+        # one, this custom training loop had no per-class weighting at all,
+        # so a character with far more single-character images than
+        # others got proportionally more gradient updates per epoch (both
+        # from appearing in more batches AND from cross_entropy weighting
+        # every sample equally), pulling the learned embedding space/
+        # prototypes toward separating it well at the expense of
+        # sparser classes. Weighting the loss (not just resampling
+        # batches) fixes this without throwing away any real data.
+        class_counts = np.bincount(y_idx, minlength=n_classes).astype(np.float64)
+        class_weights_np = len(y_idx) / (n_classes * class_counts)
+        class_weights = torch.from_numpy(class_weights_np.astype(np.float32))
+
         backbone = _build_arcface_backbone(in_dim, self.hidden_dim, self.embedding_dim)
         # ArcFace class weight vectors — one per class, in the same
         # embedding space, playing the role of a learned prototype.
@@ -325,7 +339,7 @@ class MetricLearningClassifier:
                 one_hot.scatter_(1, yb.view(-1, 1), 1.0)
                 logits = (one_hot * phi + (1.0 - one_hot) * cosine) * self.scale
 
-                loss = F.cross_entropy(logits, yb)
+                loss = F.cross_entropy(logits, yb, weight=class_weights)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
