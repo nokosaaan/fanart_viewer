@@ -11,9 +11,26 @@ import { getPlatformIcon } from '../lib/platformIcon'
 // in the same glance instead of a second lookup.
 function OpenLinkIcon({ link }) {
   const platform = getPlatformIcon(link)
-  return platform
-    ? <img src={platform.icon} alt={platform.label} style={{ width: 16, height: 16, borderRadius: 3 }} />
-    : <img src="/icons/export-link.svg" alt="Open" style={{ width: 16, height: 16 }} />
+  if (platform) return <img src={platform.icon} alt={platform.label} style={{ width: 16, height: 16, borderRadius: 3 }} />
+  // Inline (not <img src="/icons/export-link.svg">) so stroke="currentColor"
+  // actually picks up the surrounding button's text color — an <img>-loaded
+  // SVG renders in its own isolated document, where currentColor resolves
+  // to plain black regardless of theme (this stayed a hard-to-see black
+  // icon on a dark chip no matter what CSS variables the rest of the app
+  // used). Same fix applied to the copy-title icon below.
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <path d="M14 3h7v7" /><path d="M10 14L21 3" /><path d="M21 21H3V3" />
+    </svg>
+  )
+}
+
+function CopyIcon(){
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ display: 'block' }}>
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><rect x="2" y="2" width="13" height="13" rx="2" ry="2" />
+    </svg>
+  )
 }
 
 function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect }){
@@ -215,7 +232,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
                   <div key={i} style={{display:'inline-flex', alignItems:'center', marginRight:6}}>
                     <button className="chip" onClick={()=>onAddFilter && onAddFilter(t)} title="このタイトルで絞り込む" style={{paddingRight:8}}>{t}</button>
                       <button className="chip" onClick={async (e)=>{ e.stopPropagation(); try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} style={{marginLeft:4, padding:'6px'}} title="タイトルをコピー">
-                        <img src="/icons/copy.svg" alt="Copy title" style={{width:16, height:16}} />
+                        <CopyIcon />
                       </button>
                     {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" style={{marginLeft:4, padding:'6px'}} title="Open link"><OpenLinkIcon link={it.link} /></a>}
                   </div>
@@ -241,7 +258,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
                     >{t}</div>
                     <div style={{marginLeft:8, display:'flex', alignItems:'center', gap:6}}>
                         <button className="chip" onClick={async ()=>{ try{ await navigator.clipboard.writeText(t); }catch(_){ window.prompt('Copy title:', t) } }} title="タイトルをコピー" style={{padding:6}}>
-                        <img src="/icons/copy.svg" alt="Copy" style={{width:16, height:16}} />
+                        <CopyIcon />
                       </button>
                       {it.link && <a className="chip" href={it.link} target="_blank" rel="noopener noreferrer" title="Open link" style={{padding:6}}><OpenLinkIcon link={it.link} /></a>}
                     </div>

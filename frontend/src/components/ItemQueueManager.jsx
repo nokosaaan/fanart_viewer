@@ -516,17 +516,17 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       <div style={{ display: 'flex', gap: 6, padding: '8px 12px 0' }}>
         <button
           className="btn"
-          style={{ fontSize: 12, fontWeight: mode === 'attention' ? 700 : 400, background: mode === 'attention' ? '#eff6ff' : undefined }}
+          style={{ fontSize: 12, fontWeight: mode === 'attention' ? 700 : 400, background: mode === 'attention' ? 'var(--active-bg)' : undefined }}
           onClick={() => changeMode('attention')}
         >要対応</button>
         <button
           className="btn"
-          style={{ fontSize: 12, fontWeight: mode === 'mismatch' ? 700 : 400, background: mode === 'mismatch' ? '#fef2f2' : undefined }}
+          style={{ fontSize: 12, fontWeight: mode === 'mismatch' ? 700 : 400, background: mode === 'mismatch' ? 'rgba(239,68,68,0.15)' : undefined }}
           onClick={() => changeMode('mismatch')}
         >不整合あり</button>
       </div>
 
-      <div className="cgm-panel-search" style={{ fontSize: 12, color: '#6b7280' }}>
+      <div className="cgm-panel-search" style={{ fontSize: 12, color: 'var(--muted)' }}>
         {mode === 'mismatch'
           ? '一度は領域ラベルを保存したものの、編集キューのキャラ一覧と完全には一致していないアイテムです。両方の一覧を見比べて、どちらを採用するか・そのままでよいか・ここで矩形を追加して解決するかを選んでください。'
           : 'タイトル・キャラ・タグ・シチュエーション・作者のいずれかが未設定、または(SOLO・R18以外で)まだ領域ラベルを一度も保存していないアイテムが対象です。フィールドの編集と領域ラベル付けを1つの保存ボタンでまとめて行えます。'}
@@ -534,7 +534,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
 
       {mode === 'attention' && (
         <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:14}}>
-          <span style={{fontSize:12, color:'#6b7280'}}>未設定とみなす項目:</span>
+          <span style={{fontSize:12, color:'var(--muted)'}}>未設定とみなす項目:</span>
           {MISSING_FIELDS.map(f => (
             <label key={f.key} style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
               <input type="checkbox" checked={activeFields.has(f.key)} onChange={()=>toggleField(f.key)} />
@@ -546,7 +546,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
 
       {mode === 'attention' && (
         <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10}}>
-          <span style={{fontSize:12, color:'#6b7280'}}>提案モード:</span>
+          <span style={{fontSize:12, color:'var(--muted)'}}>提案モード:</span>
           <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
             <input type="radio" checked={suggestMode==='local'} onChange={()=>setSuggestMode('local')} disabled={bulkSuggesting} />
             ローカルのみ
@@ -557,7 +557,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
           </label>
           {haveTimm && (
             <>
-              <span style={{fontSize:12, color:'#6b7280', marginLeft:8}}>画像解析モデル:</span>
+              <span style={{fontSize:12, color:'var(--muted)', marginLeft:8}}>画像解析モデル:</span>
               <select value={suggestModel} onChange={e=>setSuggestModel(e.target.value)} disabled={bulkSuggesting} style={{fontSize:12}}>
                 <option value="default">標準(軽量・高速)</option>
                 <option value="canary">2026年学習の最新モデル(重い・初回は大きいダウンロード)</option>
@@ -582,14 +582,14 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
         </div>
       )}
       {mode === 'attention' && !bulkSuggesting && !bulkProgress && (
-        <div className="cgm-panel-search" style={{fontSize:11, color:'#6b7280'}}>
+        <div className="cgm-panel-search" style={{fontSize:11, color:'var(--muted)'}}>
           モードを選んで「提案を開始」を押すまで、AI提案(DBの傾向・必要なら画像解析)は実行されません。
         </div>
       )}
 
       {mode === 'attention' && (tagsOnlyReady.length > 0 || bulkSaving) && (
         <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
-          <span style={{fontSize:12, color: bulkSaving ? '#2563eb' : '#6b7280'}}>
+          <span style={{fontSize:12, color: bulkSaving ? '#2563eb' : 'var(--muted)'}}>
             {bulkSaving
               ? `💾 タグを一括保存中… (${bulkSaveProgress ? bulkSaveProgress.done : 0}/${bulkSaveProgress ? bulkSaveProgress.total : 0})`
               : `タグ以外は入力済み・タグ提案ありの項目が${tagsOnlyReady.length}件あります`}
@@ -604,7 +604,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       )}
 
       <div style={{ display: 'flex', minHeight: 0, flex: '1 1 auto' }}>
-        <div style={{ width: 260, borderRight: '1px solid #f3f4f6', overflowY: 'auto', flexShrink: 0 }}>
+        <div style={{ width: 260, borderRight: '1px solid var(--divider)', overflowY: 'auto', flexShrink: 0 }}>
           {loading && <div className="cgm-empty-hint" style={{ padding: 12 }}>読み込み中…</div>}
           {!loading && items.length === 0 && (
             <div className="cgm-empty-hint" style={{ padding: 12 }}>該当するアイテムはありません 🎉</div>
@@ -620,12 +620,12 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                   onClick={() => selectItem(it.id)}
                   style={{
                     padding: '10px 12px', cursor: 'pointer',
-                    background: it.id === selectedId ? '#eff6ff' : 'transparent',
-                    borderBottom: '1px solid #f3f4f6',
+                    background: it.id === selectedId ? 'var(--active-bg)' : 'transparent',
+                    borderBottom: '1px solid var(--divider)',
                   }}
                 >
                   <div style={{ fontSize: 13, fontWeight: 600 }}>#{it.id}</div>
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
                     situation: {it.situation || '—'} · キャラ{(it.characters || []).length}件
                   </div>
                   {diff.regionOnly.length > 0 && (
@@ -650,8 +650,8 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                 onClick={()=>selectItem(it.id)}
                 style={{
                   padding:'10px 12px', cursor:'pointer',
-                  background: it.id===selectedId ? '#eff6ff' : 'transparent',
-                  borderBottom:'1px solid #f3f4f6',
+                  background: it.id===selectedId ? 'var(--active-bg)' : 'transparent',
+                  borderBottom:'1px solid var(--divider)',
                 }}
               >
                 <div style={{fontSize:13, fontWeight:600}}>
@@ -671,11 +671,11 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                         {suggestions[it.id].source.includes('danbooru') && '🌐'}
                       </span>
                     ) : (
-                      <span title="確認済み・提案なし" style={{marginLeft:6, color:'#d1d5db', fontWeight:400}}>·</span>
+                      <span title="確認済み・提案なし" style={{marginLeft:6, color:'var(--text-faint)', fontWeight:400}}>·</span>
                     )
                   )}
                 </div>
-                <div style={{fontSize:12, color:'#6b7280'}}>
+                <div style={{fontSize:12, color:'var(--muted)'}}>
                   {missingLabels.length > 0 && <>不足: {missingLabels.join('・')}</>}
                   {missingLabels.length === 0 && !needsRegion && '—'}
                 </div>

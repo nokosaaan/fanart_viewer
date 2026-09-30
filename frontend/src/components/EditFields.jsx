@@ -772,7 +772,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
 
 export default function EditFields({ item, onClose, onSaved }){
   return (
-    <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1300}} onClick={onClose}>
+    // zIndex above .preview-modal-backdrop's 1400 (styles.css) — opening
+    // this from the gallery's lightbox (PreviewPane.jsx) used to render it
+    // fully hidden behind that still-open backdrop, since paint order
+    // follows z-index, not DOM order, for stacked position:fixed elements.
+    <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1500}} onClick={onClose}>
       <div
         style={{width:540, maxWidth:'92%', margin:'3% auto', background:'#1e293b',
           borderRadius:12, padding:'20px 24px', maxHeight:'92vh', overflowY:'auto',

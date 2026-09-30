@@ -70,9 +70,23 @@ function AppMain({ role, onLogout }){
   // the gallery view jumps straight to that item instead of wherever it
   // already was.
   const [galleryInitialItemId, setGalleryInitialItemId] = useState(null)
+  // True only while the current Gallery-mode visit was forced open by a
+  // List-view thumbnail click (never by the user actually picking Gallery
+  // themselves — see openPreviewForItem, the only place this is set) — so
+  // closing that lightbox (PreviewPane's onLightboxClose) can switch back
+  // to List instead of stranding the user in Gallery's grid, which is all
+  // they'd meant to open in the first place.
+  const [galleryEntryWasFromList, setGalleryEntryWasFromList] = useState(false)
   function openPreviewForItem(itemId){
+    setGalleryEntryWasFromList(true)
     setViewMode('gallery')
     setGalleryInitialItemId(itemId)
+  }
+  function onGalleryLightboxClose(){
+    if(galleryEntryWasFromList){
+      setGalleryEntryWasFromList(false)
+      setViewMode('list')
+    }
   }
   // itemQueueOpen only ever controls visibility, not whether the component
   // is mounted at all (see itemQueueMounted below) — closing the queue used
@@ -839,14 +853,14 @@ function AppMain({ role, onLogout }){
       <div className="view-mode-toggle">
         <button
           type="button" className={`view-mode-btn${viewMode === 'list' ? ' active' : ''}`}
-          onClick={() => setViewMode('list')} title="リスト表示" data-tour="view-mode-list"
+          onClick={() => { setGalleryEntryWasFromList(false); setViewMode('list') }} title="リスト表示" data-tour="view-mode-list"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
           リスト
         </button>
         <button
           type="button" className={`view-mode-btn${viewMode === 'gallery' ? ' active' : ''}`}
-          onClick={() => setViewMode('gallery')} title="ギャラリー表示" data-tour="view-mode-gallery"
+          onClick={() => { setGalleryEntryWasFromList(false); setViewMode('gallery') }} title="ギャラリー表示" data-tour="view-mode-gallery"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           ギャラリー
@@ -858,11 +872,13 @@ function AppMain({ role, onLogout }){
         // Gallery mode reuses PreviewPane itself (embedded as the page's own
         // main content, see its own `embedded` prop comment) rather than a
         // second parallel browse-every-preview implementation. Feeds it
-        // `filtered` (every page, not just this List view's current
-        // PAGE_SIZE slice) for a genuinely continuous feed; it has its own
-        // internal pagination for when that set is large.
+        // `paginatedItems` — the SAME page List mode shows — rather than the
+        // whole `filtered` set: PreviewPane has its own internal pagination
+        // (PANE_PAGE_SIZE), which duplicated the Pagination component below
+        // with an out-of-sync page number of its own. One page, one
+        // pagination control, shared by both view modes.
         <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
-          <PreviewPane embedded open readOnly={readOnly} filteredItems={filtered} initialItemId={galleryInitialItemId} onClose={()=>{}} />
+          <PreviewPane embedded open readOnly={readOnly} filteredItems={paginatedItems} initialItemId={galleryInitialItemId} onClose={()=>{}} onLightboxClose={onGalleryLightboxClose} />
         </React.Suspense>
       )}
       {nextPageUrl && (

@@ -32,7 +32,7 @@ const PANE_PAGE_SIZE = 50
 // same component — same masonry grid, same lightbox — since both are
 // fundamentally "browse every preview, click one for detail", just reached
 // from a different place in the app.
-export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId, embedded=false}){
+export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId, embedded=false, onLightboxClose}){
   const previewItems = useMemo(() => (
     (filteredItems || []).filter(it => it && (it.has_preview === true || it.has_preview === 'true'))
   ), [filteredItems])
@@ -153,7 +153,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   useEffect(()=>{
     function onKey(e){
       if(selectedIndex===null) return
-      if(e.key==='Escape') setSelectedItemId(null)
+      if(e.key==='Escape') closeLightbox()
       // Up/Down move to the prev/next ITEM, matching the mouse wheel below
       // (deltaY drives next()/prev()) — Left/Right instead page through
       // THIS item's own images. Keeping both input methods on the same
@@ -194,6 +194,17 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   function openLarge(i){
     const it = previewItems[i]
     if(it) setSelectedItemId(it.id)
+  }
+
+  // A genuine "I'm done looking at this" close (Escape/backdrop/✕/item
+  // deleted) — NOT the open-transition reset above, and not prev()/next()
+  // moving between items. onLightboxClose lets App.jsx know specifically
+  // so it can switch back out of Gallery mode when this lightbox was only
+  // opened because of a List-view thumbnail click (see App.jsx's
+  // openPreviewForItem) rather than the user actually choosing Gallery.
+  function closeLightbox(){
+    setSelectedItemId(null)
+    if(onLightboxClose) onLightboxClose()
   }
 
   // Loads the previews for whichever item `selectedItemId` names, looked up
@@ -373,7 +384,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       const resp = await fetch(`/api/items/${it.id}/delete_item/`, {method:'DELETE'})
       if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to delete item: '+(j.detail||j.error||resp.status)); return }
       notify('item-deleted', { id: it.id })
-      setSelectedItemId(null)
+      closeLightbox()
     }catch(e){ console.error(e); alert('Failed to delete item') }
     finally{ setDeletingItem(false) }
   }
@@ -419,7 +430,12 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               )
             })}
           </div>
-          {previewItems.length > PANE_PAGE_SIZE && (
+          {/* App.jsx already paginates `filteredItems` down to one page's
+              worth before handing it to an embedded PreviewPane (see its own
+              call site comment) — this pane's own paging would otherwise be
+              a second, out-of-sync page number sitting right above App.jsx's
+              own Pagination component for the exact same list. */}
+          {!embedded && previewItems.length > PANE_PAGE_SIZE && (
             <div className="pane-pagination">
               <button className="btn" onClick={()=>setPanePageIndex(p=>Math.max(0,p-1))} disabled={panePageIndex===0}>Prev</button>
               <span>Page</span>
@@ -442,14 +458,14 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       </div>
 
       {selectedIndex!==null && previewItems[selectedIndex] && (
-        <div className="preview-modal-backdrop" onClick={()=>setSelectedItemId(null)}>
+        <div className="preview-modal-backdrop" onClick={closeLightbox}>
           <div className="preview-modal">
               {/* Left/right full-height edge zones for consistent click areas */}
             <div className="modal-edge modal-edge-left" onClick={e=>{e.stopPropagation(); prev()}} aria-label="Previous" />
             <div className="modal-edge modal-edge-right" onClick={e=>{e.stopPropagation(); next()}} aria-label="Next" />
 
               {/* Close button (top-right) */}
-              <button className="modal-close" onClick={()=>setSelectedItemId(null)} aria-label="Close">✕</button>
+              <button className="modal-close" onClick={closeLightbox} aria-label="Close">✕</button>
 
             <div className="modal-content" onClick={e=>e.stopPropagation()}>
               {(() => {
