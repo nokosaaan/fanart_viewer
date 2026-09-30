@@ -128,19 +128,33 @@ export default function Tour({ steps, onClose, onMenuNeed }){
   const hasSpotlight = rect && rect !== 'not-found'
   const PAD = 8
   const placement = computeCardPlacement(rect, dropdownRect, cardHeight)
+  // The spotlight (dim/ring/click-catcher below) uses this instead of `rect`
+  // directly. Reason: a menu item nested inside an expanded submenu has
+  // `.header-menu-submenu`'s own `padding-left:14px` baked into its own
+  // rect.left (that's what visually indents its TEXT under its parent
+  // group) — highlighting THAT narrower rect made the ring look pinched in
+  // on the left relative to every top-level item's ring, unrelated to
+  // whether the item happened to have an icon (every nested child lacks
+  // one, which is what made it look icon-related). Widening left/right to
+  // the whole dropdown column's own bounds — vertical extent still the
+  // target's own — makes every item's ring land at the same x-coordinates
+  // regardless of nesting depth or icon.
+  const highlightRect = hasSpotlight && dropdownRect
+    ? { left: dropdownRect.left, right: dropdownRect.right, width: dropdownRect.right - dropdownRect.left, top: rect.top, bottom: rect.bottom, height: rect.height }
+    : rect
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 5000 }}>
       {hasSpotlight ? (
         <>
-          <div style={dim(0, 0, '100%', Math.max(0, rect.top - PAD))} />
-          <div style={dim(0, rect.bottom + PAD, '100%', `calc(100vh - ${rect.bottom + PAD}px)`)} />
-          <div style={dim(0, rect.top - PAD, Math.max(0, rect.left - PAD), rect.height + PAD * 2)} />
-          <div style={dim(rect.right + PAD, rect.top - PAD, `calc(100vw - ${rect.right + PAD}px)`, rect.height + PAD * 2)} />
+          <div style={dim(0, 0, '100%', Math.max(0, highlightRect.top - PAD))} />
+          <div style={dim(0, highlightRect.bottom + PAD, '100%', `calc(100vh - ${highlightRect.bottom + PAD}px)`)} />
+          <div style={dim(0, highlightRect.top - PAD, Math.max(0, highlightRect.left - PAD), highlightRect.height + PAD * 2)} />
+          <div style={dim(highlightRect.right + PAD, highlightRect.top - PAD, `calc(100vw - ${highlightRect.right + PAD}px)`, highlightRect.height + PAD * 2)} />
           {/* Highlight ring, purely visual */}
           <div style={{
-            position: 'fixed', left: rect.left - PAD, top: rect.top - PAD,
-            width: rect.width + PAD * 2, height: rect.height + PAD * 2,
+            position: 'fixed', left: highlightRect.left - PAD, top: highlightRect.top - PAD,
+            width: highlightRect.width + PAD * 2, height: highlightRect.height + PAD * 2,
             borderRadius: 8, boxShadow: '0 0 0 3px #3b82f6, 0 0 12px rgba(59,130,246,0.5)',
             pointerEvents: 'none', transition: 'all 0.15s ease',
           }} />
@@ -151,8 +165,8 @@ export default function Tour({ steps, onClose, onMenuNeed }){
               stepping through only ever happens via this panel's own
               buttons. */}
           <div style={{
-            position: 'fixed', left: rect.left - PAD, top: rect.top - PAD,
-            width: rect.width + PAD * 2, height: rect.height + PAD * 2,
+            position: 'fixed', left: highlightRect.left - PAD, top: highlightRect.top - PAD,
+            width: highlightRect.width + PAD * 2, height: highlightRect.height + PAD * 2,
             background: 'transparent', pointerEvents: 'auto',
           }} />
         </>

@@ -245,6 +245,20 @@ function AppMain({ role, onLogout }){
   const [bulkFetchProgress, setBulkFetchProgress] = useState(null) // {done, total}
   const [bulkFetchSummary, setBulkFetchSummary] = useState(null)
   const bulkFetchCancelledRef = useRef(false)
+  // Bulk fetch keeps running after FetchQueueManager's own panel is closed
+  // (see runBulkFetch's own comment on why) — without this, "見えて欲しい"
+  // (progress should stay visible) had nowhere to actually show once that
+  // panel was closed, only a badge count buried inside the still-closed
+  // header menu. Mirrors this same summary-then-fade pattern ScrollList's
+  // per-row toast already uses, just for the whole-app bulk run instead of
+  // one row.
+  const [showBulkSummaryToast, setShowBulkSummaryToast] = useState(false)
+  useEffect(() => {
+    if (bulkFetchRunning || !bulkFetchSummary) return
+    setShowBulkSummaryToast(true)
+    const t = setTimeout(() => setShowBulkSummaryToast(false), 6000)
+    return () => clearTimeout(t)
+  }, [bulkFetchRunning, bulkFetchSummary])
   const bulkFetchAbortRef = useRef(null)
 
   // Runs the exact same per-item fetch ScrollList's own "+" button does
@@ -880,6 +894,24 @@ function AppMain({ role, onLogout }){
         />
       )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
+      {/* Opposite corner from ScrollList/PreviewPane's own per-row .fv-toast
+          (bottom-right) so a bulk run finishing at the same moment as some
+          row's own fetch never overlaps it. */}
+      {bulkFetchRunning && (
+        <div className="fv-toast" style={{ left: 20, right: 'auto' }}>
+          <div className="fv-toast__spinner" />
+          <span className="fv-toast__msg">
+            取得キュー: 取得中… ({bulkFetchProgress ? bulkFetchProgress.done : 0}/{bulkFetchProgress ? bulkFetchProgress.total : '?'})
+          </span>
+        </div>
+      )}
+      {!bulkFetchRunning && showBulkSummaryToast && bulkFetchSummary && (
+        <div className="fv-toast fv-toast--success" style={{ left: 20, right: 'auto' }}>
+          <span className="fv-toast__icon">✓</span>
+          <span className="fv-toast__msg">取得キュー: {bulkFetchSummary}</span>
+          <button className="fv-toast__close" onClick={() => setShowBulkSummaryToast(false)}>✕</button>
+        </div>
+      )}
       {tourPrompt && (
         <div className="cgm-panel-backdrop" onClick={() => setTourPrompt(null)}>
           <div className="cgm-panel" style={{ width: 420 }} onClick={e => e.stopPropagation()}>

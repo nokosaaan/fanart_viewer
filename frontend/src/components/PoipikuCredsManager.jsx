@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import PollerSettingsPanel from './PollerSettingsPanel'
 import BrowserLoginPanel from './BrowserLoginPanel'
+import StatusLamp from './StatusLamp'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -30,6 +31,7 @@ export default function PoipikuCredsManager({ onClose }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [pollStatus, setPollStatus] = useState(null)
+  const [manualOpen, setManualOpen] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -88,7 +90,10 @@ export default function PoipikuCredsManager({ onClose }) {
     <div className="cgm-panel-backdrop" onClick={onClose}>
       <div className="cgm-panel" onClick={e => e.stopPropagation()}>
         <div className="cgm-panel-header">
-          <strong>Poipiku 認証情報</strong>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <strong>Poipiku 認証情報</strong>
+            {!loading && status && <StatusLamp active={!!status.configured} />}
+          </span>
           <button className="cgm-panel-close" onClick={onClose}>✕</button>
         </div>
 
@@ -96,15 +101,12 @@ export default function PoipikuCredsManager({ onClose }) {
           {error && <div style={{ color: '#f87171', marginBottom: 12 }}>{error}</div>}
           {notice && <div style={{ color: '#4ade80', marginBottom: 12 }}>{notice}</div>}
 
-          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
-            年齢制限/フォロワー限定作品の取得に使う認証情報です。
-            ブラウザでpoipiku.comにログインした状態でDevTools → Application → Cookiesから
-            <code style={{ margin: '0 4px' }}>POIPIKU_LK</code>（長期ログインキー、通常はこれだけで十分）と
-            <code style={{ margin: '0 4px' }}>JSESSIONID</code>（任意）をコピーしてください。
-            保存した値はサーバー側で暗号化して保存され、この画面を含めどこにも読み出し表示はされません(書き込み専用)。
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '0.04em', marginBottom: 8 }}>
+            手順 1 — ブラウザでログイン
           </div>
+          <BrowserLoginPanel platform="poipiku" onApplied={j => { setStatus(j); setNotice('ログインを検知し、認証情報を自動保存しました。次回のfetchから即座に使われます(再起動不要)。') }} />
 
-          <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', color: '#e2e8f0', borderRadius: 6 }}>
+          <div style={{ fontSize: 13, margin: '16px 0', padding: '8px 12px', background: '#0f172a', color: '#e2e8f0', borderRadius: 6 }}>
             {loading ? '状態を確認中…' : status ? (
               <>現在の設定: <strong>{status.configured ? '設定済み' : '未設定'}</strong>
                 {status.configured && <> ({SOURCE_LABELS[status.source] || status.source})</>}
@@ -115,8 +117,13 @@ export default function PoipikuCredsManager({ onClose }) {
             ) : '—'}
           </div>
 
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '0.04em', margin: '20px 0 8px' }}>
+            手順 2 — 自動取得の設定(任意)
+          </div>
+          <PollerSettingsPanel platform="poipiku" label="自動でお気に入りを取得する" />
+
           {pollStatus && (
-            <div style={{ fontSize: 13, marginBottom: 16, padding: '8px 12px', background: '#0f172a', color: '#e2e8f0', borderRadius: 6 }}>
+            <div style={{ fontSize: 13, margin: '12px 0 0', padding: '8px 12px', background: '#0f172a', color: '#e2e8f0', borderRadius: 6 }}>
               <div style={{ marginBottom: 4 }}>
                 お気に入り自動取得: 最終成功 {formatDate(pollStatus.last_success_at)}
                 {' '}— 未処理キュー {pollStatus.pending_count}件
@@ -129,40 +136,53 @@ export default function PoipikuCredsManager({ onClose }) {
             </div>
           )}
 
-          <PollerSettingsPanel platform="poipiku" label="自動でお気に入りを取得する" />
+          <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #334155' }}>
+            <button
+              type="button" className="btn" style={{ background: 'transparent', color: '#94a3b8', padding: '4px 0' }}
+              onClick={() => setManualOpen(o => !o)}
+            >
+              {manualOpen ? '▾' : '▸'} 手動で入力する場合(ブラウザログインが使えないとき)
+            </button>
 
-          <BrowserLoginPanel platform="poipiku" onApplied={j => { setStatus(j); setNotice('ログインを検知し、認証情報を自動保存しました。次回のfetchから即座に使われます(再起動不要)。') }} />
+            {manualOpen && (
+              <div style={{ marginTop: 12 }}>
+                <ul style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 16px', paddingLeft: 18, lineHeight: 1.7 }}>
+                  <li>ブラウザでpoipiku.comにログインした状態で、DevTools → Application → Cookiesを開く</li>
+                  <li><code>POIPIKU_LK</code>(長期ログインキー、通常はこれだけで十分)と<code>JSESSIONID</code>(任意)をコピーして下に貼り付ける</li>
+                  <li>保存した値はサーバー側で暗号化され、この画面を含めどこにも読み出し表示されません(書き込み専用)</li>
+                </ul>
 
-          <div style={{ fontSize: 12, color: '#64748b', margin: '4px 0 10px' }}>または手動で入力:</div>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>LK(推奨)</label>
+                  <input
+                    type="password" autoComplete="off"
+                    style={{ width: '100%', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
+                      borderRadius: 6, padding: '9px 12px', fontSize: 14, boxSizing: 'border-box' }}
+                    value={lk} onChange={e => setLk(e.target.value)}
+                    placeholder="新しい POIPIKU_LK"
+                  />
+                </div>
 
-          <div style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>LK(推奨)</label>
-            <input
-              type="password" autoComplete="off"
-              style={{ width: '100%', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
-                borderRadius: 6, padding: '9px 12px', fontSize: 14, boxSizing: 'border-box' }}
-              value={lk} onChange={e => setLk(e.target.value)}
-              placeholder="新しい POIPIKU_LK"
-            />
+                <div style={{ marginBottom: 18 }}>
+                  <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
+                    JSESSIONID(任意 — 未入力なら既存の設定を変更しません)
+                  </label>
+                  <input
+                    type="password" autoComplete="off"
+                    style={{ width: '100%', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
+                      borderRadius: 6, padding: '9px 12px', fontSize: 14, boxSizing: 'border-box' }}
+                    value={jsessionid} onChange={e => setJsessionid(e.target.value)}
+                    placeholder="新しい JSESSIONID"
+                  />
+                </div>
+
+                <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', fontSize: 14, fontWeight: 600 }}
+                  onClick={save} disabled={saving}>
+                  {saving ? '保存中…' : '保存'}
+                </button>
+              </div>
+            )}
           </div>
-
-          <div style={{ marginBottom: 18 }}>
-            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
-              JSESSIONID(任意 — 未入力なら既存の設定を変更しません)
-            </label>
-            <input
-              type="password" autoComplete="off"
-              style={{ width: '100%', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
-                borderRadius: 6, padding: '9px 12px', fontSize: 14, boxSizing: 'border-box' }}
-              value={jsessionid} onChange={e => setJsessionid(e.target.value)}
-              placeholder="新しい JSESSIONID"
-            />
-          </div>
-
-          <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '10px 24px', fontSize: 14, fontWeight: 600 }}
-            onClick={save} disabled={saving}>
-            {saving ? '保存中…' : '保存'}
-          </button>
         </div>
       </div>
     </div>
