@@ -1,6 +1,7 @@
 import React, {useEffect, useState, useMemo, useRef} from 'react'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
+import GalleryView from './components/GalleryView'
 import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
@@ -61,6 +62,16 @@ function AppMain({ role, onLogout }){
   const [includeCP, setIncludeCP] = useState(false)
   const [includeR18, setIncludeR18] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
+  // 'list' (ScrollList's cards) | 'gallery' (GalleryView's one-at-a-time
+  // full-screen browsing) — persisted so a reload keeps whichever the user
+  // last picked instead of always resetting to the card list.
+  const [viewMode, setViewMode] = useState(() => {
+    try { return localStorage.getItem('fv_view_mode') === 'gallery' ? 'gallery' : 'list' } catch (_) { return 'list' }
+  })
+  function changeViewMode(mode){
+    setViewMode(mode)
+    try { localStorage.setItem('fv_view_mode', mode) } catch (_) {}
+  }
   // Set by ScrollList's preview-thumbnail click (see openPreviewForItem) so
   // PreviewPane opens jumped straight to that item instead of the plain
   // timeline grid. Cleared whenever the pane closes so a later reopen via
@@ -831,7 +842,27 @@ function AppMain({ role, onLogout }){
         setPreviewMissingOnly={setPreviewMissingOnly}
         readOnly={readOnly}
       />
-      <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
+      <div className="view-mode-toggle">
+        <button
+          type="button" className={`view-mode-btn${viewMode === 'list' ? ' active' : ''}`}
+          onClick={() => changeViewMode('list')} title="リスト表示"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          リスト
+        </button>
+        <button
+          type="button" className={`view-mode-btn${viewMode === 'gallery' ? ' active' : ''}`}
+          onClick={() => changeViewMode('gallery')} title="ギャラリー表示"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          ギャラリー
+        </button>
+      </div>
+      {viewMode === 'list' ? (
+        <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
+      ) : (
+        <GalleryView items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
+      )}
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
           <button className="btn" onClick={loadNextPage} disabled={loadingPages}>{loadingPages ? 'Loading…' : 'Load more pages'}</button>

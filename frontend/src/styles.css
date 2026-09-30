@@ -337,3 +337,36 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
 .theme-system-row{ display:flex; align-items:flex-start; gap:8px; margin-top:16px; padding-top:16px; border-top:1px solid var(--divider) }
 .theme-system-row label{ display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; font-size:13px; color:var(--text) }
 .theme-system-hint{ font-size:12px; color:var(--muted); margin:2px 0 0 26px }
+
+/* Bulk-select checkboxes (ScrollList/FetchQueueManager) — 2x a plain
+   checkbox's usual ~13px so they're an easy click target in a dense list,
+   not just a decorative tick. */
+.fv-checkbox-lg{ width:26px; height:26px; cursor:pointer; flex-shrink:0 }
+
+/* List/Gallery view-mode toggle (App.jsx) */
+.view-mode-toggle{ display:flex; gap:8px; margin-bottom:10px }
+.view-mode-btn{
+	display:flex; flex-direction:column; align-items:center; gap:4px;
+	width:64px; padding:10px 6px; border-radius:8px; border:2px solid var(--border);
+	background:var(--card); color:var(--muted); cursor:pointer; font-size:11px;
+}
+.view-mode-btn.active{ border-color:#3b82f6; color:var(--text) }
+
+/* GalleryView (see GalleryView.jsx) — reuses ItemRow/.item entirely
+   unchanged; this only reflows the SAME elements (via grid-area, keyed off
+   the existing .titles-col/.artist-col/.tags-col/.preview-col classes) so
+   the image dominates and metadata stacks beside it, one item at a time,
+   instead of ItemRow's normal 4-column card row. */
+.gallery-view{ position:relative; min-height:70vh }
+.gallery-progress{ position:absolute; top:-28px; right:0; font-size:12px; color:var(--muted) }
+.gallery-mode .item{ border:none; background:transparent; padding:20px 50px }
+.gallery-mode .meta-grid{
+	grid-template-columns: 2fr 1fr; column-gap:24px;
+	grid-template-areas: "preview titles" "preview artist" "preview tags";
+}
+.gallery-mode .preview-col{ grid-area:preview }
+.gallery-mode .titles-col{ grid-area:titles }
+.gallery-mode .artist-col{ grid-area:artist }
+.gallery-mode .tags-col{ grid-area:tags }
+.gallery-mode .preview{ max-height:75vh; max-width:100%; width:auto; height:auto; border-radius:10px }
+.gallery-mode .preview-wrap{ justify-content:center }

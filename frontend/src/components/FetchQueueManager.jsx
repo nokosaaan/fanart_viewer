@@ -154,6 +154,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
               <div style={{display:'flex', alignItems:'center', gap:6, padding:'8px 12px', borderBottom:'1px solid #f3f4f6', flexShrink:0}}>
                 <label style={{display:'flex', alignItems:'center', gap:4, cursor:'pointer', fontSize:12, color:'#6b7280'}}>
                   <input
+                    className="fv-checkbox-lg"
                     type="checkbox"
                     checked={selectedEntryIds.size > 0 && selectedEntryIds.size === queue.length}
                     ref={el => { if(el) el.indeterminate = selectedEntryIds.size > 0 && selectedEntryIds.size < queue.length }}
@@ -179,6 +180,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
                   }}
                 >
                   <input
+                    className="fv-checkbox-lg"
                     type="checkbox" checked={selectedEntryIds.has(entry.id)}
                     onClick={e=>e.stopPropagation()}
                     onChange={()=>toggleEntrySelect(entry.id)}

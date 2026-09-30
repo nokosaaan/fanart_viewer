@@ -16,7 +16,7 @@ function OpenLinkIcon({ link }) {
     : <img src="/icons/export-link.svg" alt="Open" style={{ width: 16, height: 16 }} />
 }
 
-function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect }){
+export function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
@@ -200,8 +200,8 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
   return (
     <div className="item" key={it.id}>
       <div style={{display:'flex', alignItems:'center', gap:8}}>
-        {!readOnly && (
-          <input type="checkbox" checked={!!selected} onChange={()=>onToggleSelect(it.id)} title="選択" />
+        {!readOnly && onToggleSelect && (
+          <input className="fv-checkbox-lg" type="checkbox" checked={!!selected} onChange={()=>onToggleSelect(it.id)} title="選択" />
         )}
         <div className="item-id-badge">#{it.id}</div>
       </div>
@@ -538,6 +538,7 @@ export default function ScrollList({items, readOnly=false, onEnqueueFetch, onOpe
         <div className="options-panel" style={{flexDirection:'row', alignItems:'center', justifyContent:'flex-start', marginBottom:10}}>
           <label style={{display:'flex', alignItems:'center', gap:6, cursor:'pointer', fontSize:13}}>
             <input
+              className="fv-checkbox-lg"
               type="checkbox"
               checked={selectedIds.size > 0 && selectedIds.size === items.length}
               ref={el => { if(el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < items.length }}
