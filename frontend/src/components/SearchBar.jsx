@@ -1,6 +1,6 @@
 import React, {useState} from 'react'
 
-export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, previewOpen, setPreviewOpen, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, readOnly}){
+export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, readOnly}){
   const [open, setOpen] = useState(false)
 
   function onToggleCP(e){

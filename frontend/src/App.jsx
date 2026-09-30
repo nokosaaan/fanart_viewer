@@ -1,7 +1,6 @@
 import React, {useEffect, useState, useMemo, useRef} from 'react'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
-import GalleryView from './components/GalleryView'
 import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
@@ -24,10 +23,11 @@ import Tour from './components/Tour'
 import { loadCachedItems, saveCachedItems } from './lib/itemsCache'
 import { notify } from './lib/crossWindowSync'
 import { fetchPreviewCandidates, sleep, BULK_FETCH_DELAY_MS } from './lib/fetchCandidates'
-import { ReloadIcon, FetchQueueIcon, ItemQueueIcon, SwipeIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
+import { ReloadIcon, FetchQueueIcon, ItemQueueIcon, BackupIcon, BrainGearIcon } from './components/MenuIcons'
 import { buildTourStepsA, buildTourStepsB } from './lib/tourSteps'
 import ThemeSettings from './components/ThemeSettings'
 import { getThemeChoice, getUseSystem, saveThemeChoice, saveUseSystem, computeEffectiveTheme, applyTheme } from './lib/theme'
+import { getDefaultViewMode, saveDefaultViewMode } from './lib/viewModeSettings'
 
 // Platform badge/icon + text for a header-menu label — see HeaderMenu.jsx's
 // MenuEntry, which renders `label` as-is (plain string or JSX both work).
@@ -61,30 +61,18 @@ function AppMain({ role, onLogout }){
   const [filters, setFilters] = useState([])
   const [includeCP, setIncludeCP] = useState(false)
   const [includeR18, setIncludeR18] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  // 'list' (ScrollList's cards) | 'gallery' (GalleryView's one-at-a-time
-  // full-screen browsing) — persisted so a reload keeps whichever the user
-  // last picked instead of always resetting to the card list.
-  const [viewMode, setViewMode] = useState(() => {
-    try { return localStorage.getItem('fv_view_mode') === 'gallery' ? 'gallery' : 'list' } catch (_) { return 'list' }
-  })
-  function changeViewMode(mode){
-    setViewMode(mode)
-    try { localStorage.setItem('fv_view_mode', mode) } catch (_) {}
-  }
+  // 'list' (ScrollList's cards) | 'gallery' (PreviewPane embedded as the
+  // main view, image-grid-first) — the header toggle only changes THIS
+  // session's state; the persisted starting default lives in
+  // lib/viewModeSettings.js and is only changed from the 表示設定 panel.
+  const [viewMode, setViewMode] = useState(getDefaultViewMode)
   // Set by ScrollList's preview-thumbnail click (see openPreviewForItem) so
-  // PreviewPane opens jumped straight to that item instead of the plain
-  // timeline grid. Cleared whenever the pane closes so a later reopen via
-  // the header menu (not tied to any specific item) doesn't re-jump to a
-  // stale target.
-  const [previewInitialItemId, setPreviewInitialItemId] = useState(null)
+  // the gallery view jumps straight to that item instead of wherever it
+  // already was.
+  const [galleryInitialItemId, setGalleryInitialItemId] = useState(null)
   function openPreviewForItem(itemId){
-    setPreviewInitialItemId(itemId)
-    setPreviewOpen(true)
-  }
-  function closePreview(){
-    setPreviewOpen(false)
-    setPreviewInitialItemId(null)
+    setViewMode('gallery')
+    setGalleryInitialItemId(itemId)
   }
   // itemQueueOpen only ever controls visibility, not whether the component
   // is mounted at all (see itemQueueMounted below) — closing the queue used
@@ -145,6 +133,15 @@ function AppMain({ role, onLogout }){
   function setThemeUseSystemAndSave(v) {
     setThemeUseSystem(v)
     saveUseSystem(v)
+  }
+
+  // Reflects the PERSISTED default in the 表示設定 panel — separate from
+  // the live `viewMode` above, which the header toggle changes for just
+  // this session without touching this saved preference.
+  const [defaultViewModeSetting, setDefaultViewModeSetting] = useState(getDefaultViewMode)
+  function chooseDefaultViewMode(mode) {
+    setDefaultViewModeSetting(mode)
+    saveDefaultViewMode(mode)
   }
 
   function startTour(group){
@@ -741,7 +738,6 @@ function AppMain({ role, onLogout }){
             onOpenChange={setHeaderMenuOpen}
             suppressOutsideClose={tourActive != null}
             items={[
-            { label: <MenuIconLabel iconNode={<SwipeIcon />} text="Preview Timeline" />, onClick: () => { setPreviewOpen(p => !p); setPreviewInitialItemId(null) }, active: previewOpen, tourId: 'menu-preview-timeline' },
             // exe版はブラウザではなくpywebviewの専用ウィンドウなので、F5/Ctrl+Rの
             // ネイティブなショートカットに頼らず明示的な再読み込み手段を用意 —
             // サーバー側で状態が変わった(認証情報を保存した、他のウィンドウで
@@ -832,8 +828,6 @@ function AppMain({ role, onLogout }){
         setIncludeCP={setIncludeCP}
         includeR18={includeR18}
         setIncludeR18={setIncludeR18}
-        previewOpen={previewOpen}
-        setPreviewOpen={setPreviewOpen}
         situationFilter={situationFilter}
         setSituationFilter={setSituationFilter}
         titleMissingOnly={titleMissingOnly}
@@ -845,14 +839,14 @@ function AppMain({ role, onLogout }){
       <div className="view-mode-toggle">
         <button
           type="button" className={`view-mode-btn${viewMode === 'list' ? ' active' : ''}`}
-          onClick={() => changeViewMode('list')} title="リスト表示"
+          onClick={() => setViewMode('list')} title="リスト表示" data-tour="view-mode-list"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
           リスト
         </button>
         <button
           type="button" className={`view-mode-btn${viewMode === 'gallery' ? ' active' : ''}`}
-          onClick={() => changeViewMode('gallery')} title="ギャラリー表示"
+          onClick={() => setViewMode('gallery')} title="ギャラリー表示" data-tour="view-mode-gallery"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           ギャラリー
@@ -861,7 +855,15 @@ function AppMain({ role, onLogout }){
       {viewMode === 'list' ? (
         <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
       ) : (
-        <GalleryView items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
+        // Gallery mode reuses PreviewPane itself (embedded as the page's own
+        // main content, see its own `embedded` prop comment) rather than a
+        // second parallel browse-every-preview implementation. Feeds it
+        // `filtered` (every page, not just this List view's current
+        // PAGE_SIZE slice) for a genuinely continuous feed; it has its own
+        // internal pagination for when that set is large.
+        <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
+          <PreviewPane embedded open readOnly={readOnly} filteredItems={filtered} initialItemId={galleryInitialItemId} onClose={()=>{}} />
+        </React.Suspense>
       )}
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
@@ -880,11 +882,6 @@ function AppMain({ role, onLogout }){
           nextDisabled={pageIndex>=totalPages-1 && !nextPageUrl}
           resultsLabel={`${filtered.length} results`}
         />
-      )}
-      {previewOpen && (
-        <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
-          <PreviewPane open={previewOpen} onClose={closePreview} readOnly={readOnly} filteredItems={filtered} initialItemId={previewInitialItemId} />
-        </React.Suspense>
       )}
       {fetchQueueOpen && (
         <FetchQueueManager
@@ -921,6 +918,8 @@ function AppMain({ role, onLogout }){
           useSystem={themeUseSystem}
           onChoice={chooseTheme}
           onUseSystemChange={setThemeUseSystemAndSave}
+          defaultViewMode={defaultViewModeSetting}
+          onDefaultViewModeChange={chooseDefaultViewMode}
           onClose={() => setThemeOpen(false)}
         />
       )}

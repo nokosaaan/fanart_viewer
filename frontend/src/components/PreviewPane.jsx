@@ -1,6 +1,7 @@
 import React, {useEffect, useState, useRef, useMemo} from 'react'
 import { notify } from '../lib/crossWindowSync'
 import { getPlatformIcon } from '../lib/platformIcon'
+import EditFields from './EditFields'
 
 const PANE_PAGE_SIZE = 50
 
@@ -25,7 +26,13 @@ const PANE_PAGE_SIZE = 50
 // `filteredItems` / `previewItems` on its own, without this component
 // needing its OWN separate listener or reload (it used to have one; see
 // git history for the older, more complex version this replaced).
-export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId}){
+// `embedded`: renders as the normal in-flow "gallery" main view (App.jsx's
+// viewMode==='gallery') instead of the fixed-position "Preview Timeline"
+// overlay both panel chrome AND positioning differ, but it's the exact
+// same component — same masonry grid, same lightbox — since both are
+// fundamentally "browse every preview, click one for detail", just reached
+// from a different place in the app.
+export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId, embedded=false}){
   const previewItems = useMemo(() => (
     (filteredItems || []).filter(it => it && (it.has_preview === true || it.has_preview === 'true'))
   ), [filteredItems])
@@ -125,8 +132,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }, [open, initialItemId, previewItems])
 
   // close preview pane when clicking outside it (but not when clicking the modal)
+  // — doesn't apply when embedded: there's no floating pane to click "outside
+  // of", it's just the page's own main content.
   useEffect(()=>{
-    if(!open) return
+    if(!open || embedded) return
     function onDocMouseDown(e){
       const pane = previewPaneRef.current
       if(!pane) return
@@ -139,7 +148,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return ()=> document.removeEventListener('mousedown', onDocMouseDown)
-  }, [open, onClose])
+  }, [open, onClose, embedded])
 
   useEffect(()=>{
     function onKey(e){
@@ -226,6 +235,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }, [currentPreviewIdx])
 
   const [deleting, setDeleting] = useState(false)
+  const [deletingItem, setDeletingItem] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
 
   // Paging through THIS item's own images (e.g. a multi-page manga fetch)
   // is bound to Left/Right, not Up/Down — the mouse wheel already moves to
@@ -347,6 +358,26 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     finally{ setDeleting(false) }
   }
 
+  // Mirrors ScrollList.jsx's ItemRow "Delete item" button exactly (same
+  // endpoint, same confirm wording) — the gallery's lightbox is meant to
+  // cover the same curate-or-discard decisions the card list's own action
+  // row does, not a reduced read-only view.
+  async function deleteItem(){
+    if(selectedIndex===null) return
+    const it = previewItems[selectedIndex]
+    if(!it) return
+    const ok = window.confirm('Delete this item from the database? This will remove its previews too.')
+    if(!ok) return
+    setDeletingItem(true)
+    try{
+      const resp = await fetch(`/api/items/${it.id}/delete_item/`, {method:'DELETE'})
+      if(!resp.ok){ const j = await resp.json().catch(()=>({})); alert('Failed to delete item: '+(j.detail||j.error||resp.status)); return }
+      notify('item-deleted', { id: it.id })
+      setSelectedItemId(null)
+    }catch(e){ console.error(e); alert('Failed to delete item') }
+    finally{ setDeletingItem(false) }
+  }
+
   function prev(){
     if(selectedIndex===null || previewItems.length===0) return
     const it = previewItems[(selectedIndex - 1 + previewItems.length) % previewItems.length]
@@ -361,31 +392,30 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
 
   return (
     <>
-      <div className="preview-pane" ref={previewPaneRef}>
-        <div className="preview-header">
-          <strong>Preview Timeline</strong>
-          <div className="preview-controls">
-            <button className="btn" onClick={onClose}>Close</button>
+      <div className={embedded ? 'preview-pane preview-pane-embedded' : 'preview-pane'} ref={previewPaneRef}>
+        {!embedded && (
+          <div className="preview-header">
+            <strong>Preview Timeline</strong>
+            <div className="preview-controls">
+              <button className="btn" onClick={onClose}>Close</button>
+            </div>
           </div>
-        </div>
+        )}
         <div className="preview-body">
           {previewItems.length===0 && (
             <div className="preview-empty">No previews available</div>
           )}
-          <div className="preview-list">
+          {/* Image-only grid — no title/artist text on the cells themselves
+              (see .preview-grid's own comment in styles.css): the ask was
+              for a Pixiv-feed-style browse where nothing but the images
+              are visible until you actually click one. */}
+          <div className="preview-grid">
             {previewItems.slice(panePageIndex*PANE_PAGE_SIZE, (panePageIndex+1)*PANE_PAGE_SIZE).map((it, localIdx) => {
               const globalIdx = panePageIndex * PANE_PAGE_SIZE + localIdx
               return (
-                <div className="preview-item" key={it.id}>
-                  <button className="preview-thumb-btn" onClick={()=>openLarge(globalIdx)}>
-                    <img className="preview-thumb" src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} loading="lazy" />
-                  </button>
-                  <div className="preview-meta">
-                    <div className="preview-item-id">#{it.id}</div>
-                    <div className="preview-title">{(it.titles && it.titles[0]) || it.titles || it.title || ''}</div>
-                    <div className="preview-artist">{it.artist || ''}</div>
-                  </div>
-                </div>
+                <button className="preview-grid-cell" key={it.id} onClick={()=>openLarge(globalIdx)}>
+                  <img src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} loading="lazy" />
+                </button>
               )
             })}
           </div>
@@ -489,6 +519,17 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       <button className="btn" style={{marginLeft:8, background:'#ea580c', color:'#fff', padding:'7px 10px', lineHeight:1}} title="Clear all previews" onClick={clearAllPreviews} disabled={deleting}>
                         {deleting ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M4 6h16"/><path d="M4 6c0 2 1 3 3 3"/><path d="M20 6c0 2-1 3-3 3"/><line x1="12" y1="6" x2="12" y2="20"/></svg>}
                       </button>
+                      {/* Editing/whole-item delete were missing here before —
+                          this lightbox used to only manage preview IMAGES,
+                          so curating (retagging, or discarding a bad item
+                          entirely) meant leaving it for the List view's own
+                          card. Mirrors ScrollList's exact buttons/icons. */}
+                      <button className="btn" style={{marginLeft:8, padding:'7px 10px', lineHeight:1}} title="Edit fields" onClick={()=>setEditOpen(true)}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                      </button>
+                      <button className="btn" style={{marginLeft:8, background:'#a33', color:'#fff', padding:'7px 10px', lineHeight:1}} title="Delete item" onClick={deleteItem} disabled={deletingItem}>
+                        {deletingItem ? '…' : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>}
+                      </button>
                     </div>
                   )}
                 </div>
@@ -532,6 +573,17 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
             </div>
           </div>
         </div>
+      )}
+
+      {editOpen && selectedIndex!==null && previewItems[selectedIndex] && (
+        <EditFields
+          item={previewItems[selectedIndex]}
+          onClose={()=>setEditOpen(false)}
+          onSaved={(newItem)=>{
+            setEditOpen(false)
+            notify('item-updated', { id: previewItems[selectedIndex].id, item: newItem })
+          }}
+        />
       )}
     </>
   )

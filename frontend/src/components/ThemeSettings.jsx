@@ -5,7 +5,7 @@ import React from 'react'
 // actual effective-theme computation live in lib/theme.js (and index.html's
 // own copy, applied before this ever mounts) — this component only reads/
 // writes those same two localStorage-backed choices.
-export default function ThemeSettings({ choice, useSystem, onChoice, onUseSystemChange, onClose }) {
+export default function ThemeSettings({ choice, useSystem, onChoice, onUseSystemChange, defaultViewMode, onDefaultViewModeChange, onClose }) {
   return (
     <div className="cgm-panel-backdrop" onClick={onClose}>
       <div className="cgm-panel" style={{ width: 420 }} onClick={e => e.stopPropagation()}>
@@ -47,6 +47,31 @@ export default function ThemeSettings({ choice, useSystem, onChoice, onUseSystem
           </div>
           <div className="theme-system-hint">
             オンにすると、上の選択より端末(OS)のダーク/ライト設定を優先します。
+          </div>
+
+          <div className="theme-system-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+            <strong style={{ fontSize: 13 }}>起動時の表示形式</strong>
+            <div className="theme-options" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className={`theme-option${defaultViewMode === 'list' ? ' selected' : ''}`}
+                onClick={() => onDefaultViewModeChange('list')}
+              >
+                {defaultViewMode === 'list' && <span className="theme-option-check">✓</span>}
+                <span className="theme-option-label">リスト</span>
+              </button>
+              <button
+                type="button"
+                className={`theme-option${defaultViewMode === 'gallery' ? ' selected' : ''}`}
+                onClick={() => onDefaultViewModeChange('gallery')}
+              >
+                {defaultViewMode === 'gallery' && <span className="theme-option-check">✓</span>}
+                <span className="theme-option-label">ギャラリー</span>
+              </button>
+            </div>
+          </div>
+          <div className="theme-system-hint" style={{ margin: '8px 0 0' }}>
+            次回の起動時にどちらの表示形式で開くかを選べます(画面上部のリスト/ギャラリー切り替えは、この回だけの一時的な切り替えです)。
           </div>
         </div>
       </div>

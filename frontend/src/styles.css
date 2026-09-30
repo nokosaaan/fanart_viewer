@@ -135,6 +135,10 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
 
 /* Preview pane styles */
 .preview-pane{ position:fixed; right:20px; top:80px; width:360px; max-height:75vh; background:var(--card); border:1px solid var(--border); box-shadow:0 8px 30px var(--shadow); border-radius:10px; overflow:auto; z-index:1200 }
+/* App.jsx's viewMode==='gallery' (PreviewPane's `embedded` prop) — same
+   component, but as the page's own main content instead of a floating
+   overlay: back to normal in-flow sizing/position. */
+.preview-pane-embedded{ position:static; right:auto; top:auto; width:auto; max-height:none; background:none; border:0; box-shadow:none; border-radius:0; overflow:visible }
 .preview-header{ display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--divider) }
 .preview-body{ padding:10px }
 .preview-list{ display:flex; flex-direction:column; gap:10px }
@@ -352,21 +356,15 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
 }
 .view-mode-btn.active{ border-color:#3b82f6; color:var(--text) }
 
-/* GalleryView (see GalleryView.jsx) — reuses ItemRow/.item entirely
-   unchanged; this only reflows the SAME elements (via grid-area, keyed off
-   the existing .titles-col/.artist-col/.tags-col/.preview-col classes) so
-   the image dominates and metadata stacks beside it, one item at a time,
-   instead of ItemRow's normal 4-column card row. */
-.gallery-view{ position:relative; min-height:70vh }
-.gallery-progress{ position:absolute; top:-28px; right:0; font-size:12px; color:var(--muted) }
-.gallery-mode .item{ border:none; background:transparent; padding:20px 50px }
-.gallery-mode .meta-grid{
-	grid-template-columns: 2fr 1fr; column-gap:24px;
-	grid-template-areas: "preview titles" "preview artist" "preview tags";
-}
-.gallery-mode .preview-col{ grid-area:preview }
-.gallery-mode .titles-col{ grid-area:titles }
-.gallery-mode .artist-col{ grid-area:artist }
-.gallery-mode .tags-col{ grid-area:tags }
-.gallery-mode .preview{ max-height:75vh; max-width:100%; width:auto; height:auto; border-radius:10px }
-.gallery-mode .preview-wrap{ justify-content:center }
+/* Gallery grid (PreviewPane.jsx's `embedded` mode + its own "Preview
+   Timeline" overlay both use this) — Pixiv-feed style: image-only cells in
+   a multi-column masonry flow (CSS columns, not CSS grid — each image
+   keeps its own natural aspect ratio and the next one flows right under it
+   with no gap, rather than every row being forced to a uniform height).
+   column-width (not column-count) so the SAME rule adapts on its own
+   between the narrow "Preview Timeline" overlay and the full-width
+   embedded gallery, no separate layout needed for each. */
+.preview-grid{ columns: 220px; column-gap:10px }
+.preview-grid-cell{ display:block; width:100%; break-inside:avoid; margin-bottom:10px; border:0; padding:0; background:none; cursor:pointer; line-height:0 }
+.preview-grid-cell img{ width:100%; height:auto; display:block; border-radius:6px; transition:opacity 0.15s ease }
+.preview-grid-cell:hover img{ opacity:0.85 }

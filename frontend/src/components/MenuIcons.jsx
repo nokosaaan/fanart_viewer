@@ -75,19 +75,6 @@ export function ItemQueueIcon() {
   )
 }
 
-// A fingertip (rounded capsule) sliding along a dashed trail toward an
-// arrowhead — reads as "swipe" for Preview Timeline's item-to-item /
-// wheel/arrow-key navigation.
-export function SwipeIcon() {
-  return (
-    <Svg>
-      <path d="M3 12h7" strokeDasharray="2 3" />
-      <path d="M9 8l4 4-4 4" />
-      <rect x="15" y="7" width="5" height="10" rx="2.5" />
-    </Svg>
-  )
-}
-
 // Classic "database" cylinder with a download-style arrow underneath —
 // backup = pulling a copy of the DB out.
 export function BackupIcon() {

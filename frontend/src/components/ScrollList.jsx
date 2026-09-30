@@ -16,7 +16,7 @@ function OpenLinkIcon({ link }) {
     : <img src="/icons/export-link.svg" alt="Open" style={{ width: 16, height: 16 }} />
 }
 
-export function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect }){
+function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
