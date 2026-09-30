@@ -37,6 +37,13 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
   const [openId, setOpenId] = useState(queue.length > 0 ? queue[0].id : null)
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [saving, setSaving] = useState(false)
+  // Selection over the mailbox sidebar's own entries (not the candidate
+  // images inside one entry, that's selectedUrls above) — for bulk-removing
+  // several queue entries at once instead of one 🗑 click each. Purely
+  // client-side (onRemove just filters App.jsx's in-memory fetchQueue), so
+  // unlike ScrollList's bulk item delete there's no server round-trip or
+  // partial-failure case to handle here.
+  const [selectedEntryIds, setSelectedEntryIds] = useState(new Set())
   // Same 3 choices as ScrollList.jsx's per-item fetch-method dropdown,
   // applied uniformly to every item in this bulk run (unlike ScrollList's
   // own per-row auto-default to Playwright for pixiv links, this one
@@ -53,6 +60,30 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
   function openEntryFor(entry){
     setOpenId(entry.id)
     setSelectedUrls(new Set())
+  }
+
+  function toggleEntrySelect(id){
+    setSelectedEntryIds(prev => {
+      const next = new Set(prev)
+      if(next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function toggleSelectAllEntries(){
+    setSelectedEntryIds(prev => prev.size === queue.length ? new Set() : new Set(queue.map(e => e.id)))
+  }
+  function bulkRemoveSelected(){
+    const ids = [...selectedEntryIds]
+    if(ids.length === 0) return
+    const ok = window.confirm(`選択した${ids.length}件をキューから削除しますか？`)
+    if(!ok) return
+    ids.forEach(id => onRemove(id))
+    if(openId != null && ids.includes(openId)){
+      const remaining = queue.filter(q => !ids.includes(q.id))
+      setOpenId(remaining.length > 0 ? remaining[0].id : null)
+    }
+    setSelectedEntryIds(new Set())
   }
 
   async function save(entry, images){
@@ -119,24 +150,48 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
         ) : (
           <div style={{display:'flex', minHeight:0, flex:'1 1 auto'}}>
             {/* Entry list (mailbox sidebar) */}
-            <div style={{width:220, borderRight:'1px solid #f3f4f6', overflowY:'auto', flexShrink:0}}>
+            <div style={{width:220, borderRight:'1px solid #f3f4f6', overflowY:'auto', flexShrink:0, display:'flex', flexDirection:'column'}}>
+              <div style={{display:'flex', alignItems:'center', gap:6, padding:'8px 12px', borderBottom:'1px solid #f3f4f6', flexShrink:0}}>
+                <label style={{display:'flex', alignItems:'center', gap:4, cursor:'pointer', fontSize:12, color:'#6b7280'}}>
+                  <input
+                    type="checkbox"
+                    checked={selectedEntryIds.size > 0 && selectedEntryIds.size === queue.length}
+                    ref={el => { if(el) el.indeterminate = selectedEntryIds.size > 0 && selectedEntryIds.size < queue.length }}
+                    onChange={toggleSelectAllEntries}
+                  />
+                  全選択
+                </label>
+                {selectedEntryIds.size > 0 && (
+                  <button className="btn" style={{marginLeft:'auto', background:'#a33', color:'#fff', padding:'4px 8px', fontSize:12}} onClick={bulkRemoveSelected}>
+                    {selectedEntryIds.size}件削除
+                  </button>
+                )}
+              </div>
               {queue.map(entry => (
                 <div
                   key={entry.id}
                   onClick={()=>openEntryFor(entry)}
                   style={{
-                    position:'relative', padding:'10px 34px 10px 12px', cursor:'pointer',
+                    display:'flex', alignItems:'center', gap:8,
+                    padding:'10px 12px', cursor:'pointer',
                     background: entry.id===openId ? '#eff6ff' : 'transparent',
                     borderBottom:'1px solid #f3f4f6',
                   }}
                 >
-                  <div style={{fontSize:13, fontWeight:600}}>#{entry.itemId}</div>
-                  <div style={{fontSize:12, color:'#6b7280'}}>{entry.images.length}件の候補 · {timeAgo(entry.fetchedAt)}</div>
+                  <input
+                    type="checkbox" checked={selectedEntryIds.has(entry.id)}
+                    onClick={e=>e.stopPropagation()}
+                    onChange={()=>toggleEntrySelect(entry.id)}
+                  />
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:13, fontWeight:600}}>#{entry.itemId}</div>
+                    <div style={{fontSize:12, color:'#6b7280'}}>{entry.images.length}件の候補 · {timeAgo(entry.fetchedAt)}</div>
+                  </div>
                   <button
                     className="cgm-icon-btn cgm-icon-delete"
                     title="キューから削除"
                     onClick={e=>{ e.stopPropagation(); onRemove(entry.id); if(entry.id===openId){ const rest = queue.filter(q=>q.id!==entry.id); setOpenId(rest.length>0?rest[0].id:null) } }}
-                    style={{position:'absolute', top:8, right:8}}
+                    style={{flexShrink:0, fontSize:52, lineHeight:1, padding:'0 2px'}}
                   >🗑</button>
                 </div>
               ))}

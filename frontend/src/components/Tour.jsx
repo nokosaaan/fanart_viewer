@@ -141,7 +141,7 @@ export default function Tour({ steps, onClose, onMenuNeed }){
           <div style={{
             position: 'fixed', left: rect.left - PAD, top: rect.top - PAD,
             width: rect.width + PAD * 2, height: rect.height + PAD * 2,
-            borderRadius: 8, boxShadow: '0 0 0 3px #3b82f6, 0 0 24px rgba(59,130,246,0.5)',
+            borderRadius: 8, boxShadow: '0 0 0 3px #3b82f6, 0 0 12px rgba(59,130,246,0.5)',
             pointerEvents: 'none', transition: 'all 0.15s ease',
           }} />
           {/* Transparent — but click-capturing — cover directly over the
@@ -183,7 +183,13 @@ function dim(left, top, width, height){
 
 const CARD_WIDTH = 320
 const CARD_HEIGHT_ESTIMATE = 200 // fallback only, before the real height is measured (see Tour's cardHeight state)
-const MARGIN = 20
+// Was 20 — too tight against the highlight ring's own soft glow (see PAD
+// and the boxShadow blur radius above): the glow's blur visually reached
+// past the arrow tail and looked like it was covering the spotlighted
+// icon (most noticeable on header-menu-toggle, whose side-placement gap
+// is MARGIN - PAD - ARROW_SIZE). 32 plus the smaller 12px blur above keeps
+// the glow's visible falloff from ever reaching the arrow tip.
+const MARGIN = 32
 const ARROW_SIZE = 9 // speech-bubble tail (see arrowStyle) — MARGIN already leaves it room
 // Matches .header-menu-item's own `padding: 9px 10px` (styles.css) — a menu
 // item button is `width:100%` (spans the whole dropdown column), but its

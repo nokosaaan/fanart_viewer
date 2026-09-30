@@ -31,8 +31,8 @@ function WithQueueBadge({ children }) {
       <Svg>{children}</Svg>
       <span style={{
         position: 'absolute', right: -3, bottom: -3, width: 12, height: 12, borderRadius: '50%',
-        background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: '0 0 0 1px #e5e7eb',
+        background: 'var(--card)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 0 0 1px var(--border)',
       }}>
         <QueueBadge />
       </span>
@@ -113,8 +113,8 @@ export function BrainGearIcon() {
       </Svg>
       <span style={{
         position: 'absolute', right: -4, bottom: -4, width: 12, height: 12, borderRadius: '50%',
-        background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: '0 0 0 1px #e5e7eb',
+        background: 'var(--card)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 0 0 1px var(--border)',
       }}>
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <circle cx="12" cy="12" r="4" />

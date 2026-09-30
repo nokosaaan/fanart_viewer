@@ -332,7 +332,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
               readOnly={!urlEditable}
               onChange={e=>{ if(urlEditable) setUrl(e.target.value) }}
               onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); onFetch(e) } }}
-              style={urlEditable ? undefined : {cursor:'default', background:'#f3f4f6'}}
+              style={urlEditable ? undefined : {cursor:'default', background:'var(--hover-bg)'}}
             />
             <button
               type="button" className="btn" style={{marginLeft:6, padding:'6px 8px', lineHeight:1}}

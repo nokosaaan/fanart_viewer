@@ -71,6 +71,9 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .searchbar{ margin-bottom: 14px }
 .controls{ display:flex; gap:8px; align-items:center }
 .controls input{ flex:1; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text) }
+/* Native <select> elements (fetch-method dropdowns, etc.) otherwise keep
+   the browser's own light UA styling regardless of the app's theme. */
+select{ background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 8px }
 .controls-vertical{ display:flex; flex-direction:column; gap:8px; align-items:flex-end }
 .preview-toggle{ background:#111827; color:#fff; padding:8px 10px; border-radius:8px }
 .options-panel{ margin-top:6px; border-radius:14px; padding:8px; border:1px solid var(--border); background:linear-gradient(180deg, var(--card), var(--bg)); display:flex; flex-direction:column; gap:8px; align-items:flex-end }
@@ -122,6 +125,8 @@ body{ font-family: Inter, Arial, sans-serif; margin: 0; padding: 0; background:v
 .preview-wrap{ display:flex; align-items:center }
 .preview{ max-height:120px; max-width:180px; border-radius:6px }
 .link-text{ color:#0b5fff; text-decoration:underline }
+:root[data-theme="dark"] .link-text{ color:#60a5fa }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .link-text{ color:#60a5fa } }
 .actions-row{ margin-top:10px; display:flex; gap:8px; align-items:center }
 .url-input{ padding:8px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); width:380px }
 .btn{ background:#2563eb; color:#fff; border:0; padding:8px 12px; border-radius:999px; cursor:pointer; transition:background-color 0.15s ease }
