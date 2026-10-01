@@ -98,12 +98,12 @@ async function loadReleases() {
     } else if (latest) {
       primaryLink.href = latest.html_url
       primaryLabel.textContent = `${latest.tag_name} のページを開く`
-      primaryMeta.textContent = 'ビルドはまだアップロードされていません'
+      primaryMeta.textContent = 'ビルドはまだ未アップロード'
     }
   } catch (e) {
     listEl.hidden = true
     errorEl.hidden = false
-    primaryMeta.textContent = '最新バージョン情報の取得に失敗しました'
+    primaryMeta.textContent = '最新バージョン情報の取得に失敗'
   }
 }
 
