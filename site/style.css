@@ -1,28 +1,32 @@
-/* Fanart Viewer download page — near-total monochrome base (see the "Atoms"
-   reference this was originally built from), now layered with the fixed
-   accent palette below wherever a surface used to be a flat fill of the
-   site's own base black, plus a soft floating/jiggle feel on hover instead
-   of the previous flat-and-static treatment. */
+/* Fanart Viewer download page — white base with the watercolor-wash accent
+   palette, ported from the "白基調+水彩アクセント案" Design artifact: soft
+   blurred color circles (amber/sky/blue/violet/navy) behind the hero and in
+   each card's corner. Hover feedback is a plain color inversion (swap
+   background/text) rather than motion — an earlier floating/jiggle pass
+   read as too much for this page and was replaced with this simpler cue. */
 
 :root {
-  --color-champagne-gold: #c8ad86;
-  --color-candlelight-cream: #fff7dd;
-  --color-obsidian-black: #000000;
-  --color-ember-ash: #66635f;
+  /* Ink / neutrals (replaces the old cream-on-black palette) */
+  --color-ink: #1f2430;
+  --color-muted: #5b6472;
+  --color-faint: #9aa1ad;
+  --color-border: #eceef1;
+  --color-navy: #16213f;
+  --color-tint-blue: #eef5ff;
 
   /* Accent variation set — one fixed, named palette (amber / sky / blue /
-     violet, plus a navy fill) instead of ad-hoc one-off colors, so each
-     feature/section gets a distinct but deliberate accent rather than the
-     champagne gold repeated everywhere or random per-element colors. */
+     violet, plus navy), each with a darker "-ink" variant for text/borders
+     on white (the vivid tone alone doesn't meet contrast on white) and the
+     vivid tone itself for the watercolor washes. */
   --color-accent-amber: #f2a74f;
+  --color-accent-amber-ink: #b5690f;
   --color-accent-sky: #5ac8f5;
+  --color-accent-sky-ink: #0f7fb0;
   --color-accent-blue: #3b82f6;
+  --color-accent-blue-ink: #1d4ed8;
   --color-accent-violet: #8b7cf6;
-  --color-navy-deep: #16213f;
-
-  --cream-20: rgba(255, 247, 221, 0.2);
-  --cream-70: rgba(255, 247, 221, 0.7);
-  --cream-45: rgba(255, 247, 221, 0.45);
+  --color-accent-violet-ink: #5b21b6;
+  --color-accent-navy-wash: #33427a;
 
   --font-switzer: 'Switzer', 'General Sans', 'Satoshi', Inter, ui-sans-serif, system-ui, sans-serif;
 
@@ -30,7 +34,7 @@
   --section-gap: 80px;
   --card-padding: 32px;
 
-  --radius-cards: 4px;
+  --radius-cards: 8px;
   --radius-buttons: 4px;
   --radius-tags: 100px;
 }
@@ -39,12 +43,8 @@
 
 body {
   margin: 0;
-  /* Was a flat fill of --color-obsidian-black everywhere; now the same base
-     black fades up from the palette's navy instead, so the page itself
-     carries the accent set rather than reading as pure black. */
-  background: radial-gradient(120% 140% at 50% -10%, var(--color-navy-deep) 0%, var(--color-obsidian-black) 55%);
-  background-attachment: fixed;
-  color: var(--color-candlelight-cream);
+  background: #ffffff;
+  color: var(--color-ink);
   font-family: var(--font-switzer);
   font-weight: 400;
   line-height: 1.4;
@@ -63,7 +63,8 @@ h1, h2, h3, p { margin: 0; }
 /* ---------- navigation ---------- */
 
 .nav {
-  border-bottom: 1px solid var(--cream-20);
+  border-bottom: 1px solid var(--color-border);
+  background: #ffffff;
 }
 .nav-inner {
   display: flex;
@@ -74,94 +75,124 @@ h1, h2, h3, p { margin: 0; }
 .wordmark {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--color-ink);
 }
+/* Hand-drawn brush-stroke "F" (same glyph as the favicon) instead of the
+   old abstract 3x3 dot grid — see the Design artifact's nav mark. */
 .wordmark-mark {
-  display: grid;
-  grid-template-columns: repeat(3, 4px);
-  grid-template-rows: repeat(3, 4px);
-  gap: 2px;
+  display: block;
+  flex-shrink: 0;
 }
-.wordmark-mark span { background: var(--cream-45); }
-.wordmark-mark span.on { background: var(--color-champagne-gold); }
 
-.nav-links { display: flex; gap: 36px; font-size: 12px; }
-.nav-links a { color: var(--color-candlelight-cream); transition: color 0.15s ease; }
-.nav-links a:hover { color: var(--color-champagne-gold); }
+.nav-links { display: flex; gap: 36px; font-size: 13px; }
+.nav-links a { color: var(--color-ink); transition: color 0.15s ease; }
+.nav-links a:hover { color: var(--color-accent-blue); }
 
 /* ---------- hero ---------- */
 
 .hero {
-  padding: 80px 0;
+  position: relative;
+  padding: 96px 0 72px;
   text-align: center;
+  overflow: hidden;
 }
+
+/* Watercolor wash: five blurred, overlapping circles (one per accent)
+   bleeding into each other via mix-blend-mode — the motif from the Design
+   artifact's hero, now behind the mark instead of a headline. */
+.hero-wash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -60px;
+  height: 480px;
+  z-index: 0;
+  pointer-events: none;
+}
+.hero-wash span {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.6;
+  mix-blend-mode: multiply;
+}
+.hero-wash span:nth-child(1) { left: 4%; top: 70px; width: 420px; height: 420px; background: radial-gradient(circle, var(--color-accent-amber) 0%, var(--color-accent-amber) 32%, transparent 70%); }
+.hero-wash span:nth-child(2) { left: 23%; top: 10px; width: 380px; height: 380px; background: radial-gradient(circle, var(--color-accent-sky) 0%, var(--color-accent-sky) 32%, transparent 70%); }
+.hero-wash span:nth-child(3) { left: 42%; top: 90px; width: 440px; height: 440px; background: radial-gradient(circle, var(--color-accent-blue) 0%, var(--color-accent-blue) 32%, transparent 70%); }
+.hero-wash span:nth-child(4) { left: 62%; top: 20px; width: 380px; height: 380px; background: radial-gradient(circle, var(--color-accent-violet) 0%, var(--color-accent-violet) 32%, transparent 70%); }
+.hero-wash span:nth-child(5) { left: 80%; top: 100px; width: 400px; height: 400px; background: radial-gradient(circle, var(--color-accent-navy-wash) 0%, var(--color-accent-navy-wash) 32%, transparent 70%); }
+
+.hero-content { position: relative; z-index: 1; }
+
 .hero-mark {
   display: inline-grid;
   grid-template-columns: repeat(5, 10px);
   grid-template-rows: repeat(7, 10px);
   gap: 3px;
-  margin-bottom: 40px;
+  margin-bottom: 64px;
 }
-.hero-mark span { background: var(--cream-20); border-radius: 1px; }
-.hero-mark span.on { background: var(--color-champagne-gold); }
-
-.hero h1 {
-  font-size: 44px;
-  font-weight: 400;
-  line-height: 1.13;
-  letter-spacing: -1.85px;
-  color: var(--color-candlelight-cream);
-  max-width: 600px;
-  margin: 0 auto 44px;
-}
+.hero-mark span { background: var(--color-border); border-radius: 1px; }
+/* Each "on" cell takes its color from the same accent sequence as the wash
+   behind it, instead of one flat color — echoes the artifact's pixel mark. */
+.hero-mark span.c-amber { background: var(--color-accent-amber); }
+.hero-mark span.c-sky { background: var(--color-accent-sky); }
+.hero-mark span.c-blue { background: var(--color-accent-blue); }
+.hero-mark span.c-violet { background: var(--color-accent-violet); }
+.hero-mark span.c-navy { background: var(--color-navy); }
 
 .hero-cta { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 24px; }
 
 .btn-outline {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   font-size: 14px;
   font-weight: 500;
-  color: var(--color-candlelight-cream);
-  background: transparent;
-  border: 1px solid var(--cream-45);
+  color: var(--color-ink);
+  background: #ffffff;
+  border: 1px solid var(--color-navy);
   border-radius: var(--radius-buttons);
   padding: 16px 36px;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .btn-outline:hover {
-  border-color: var(--color-champagne-gold);
-  color: var(--color-champagne-gold);
-  animation: component-jiggle 0.55s ease-in-out;
+  background: var(--color-navy);
+  border-color: var(--color-navy);
+  color: #ffffff;
 }
+.btn-outline-icon { display: block; flex-shrink: 0; }
 
 .hero-cta-meta {
   font-size: 12px;
-  color: var(--cream-45);
+  color: var(--color-faint);
 }
 
 .ghost-link {
   display: inline-block;
   font-size: 12px;
-  color: var(--color-candlelight-cream);
+  color: var(--color-ink);
   transition: color 0.15s ease;
 }
-.ghost-link:hover { color: var(--color-champagne-gold); }
+.ghost-link:hover { color: var(--color-accent-blue); }
 
 /* ---------- sections ---------- */
 
-.section { padding: var(--section-gap) 0; border-top: 1px solid var(--cream-20); }
+.section { padding: var(--section-gap) 0; border-top: 1px solid var(--color-border); }
 .section-header {
   font-size: 24px;
   font-weight: 400;
   letter-spacing: -0.5px;
   text-align: left;
   margin-bottom: 8px;
+  color: var(--color-ink);
 }
 .section-sub {
   font-size: 14px;
-  color: var(--cream-70);
+  color: var(--color-muted);
   max-width: 640px;
   margin-bottom: 36px;
 }
@@ -174,76 +205,85 @@ h1, h2, h3, p { margin: 0; }
   gap: 16px;
 }
 .card {
-  /* Was a flat fill of --color-obsidian-black (identical to the page
-     background, only visible via its border); now a raised navy surface so
-     it actually reads as a distinct, floating panel above the page. */
-  background: var(--color-navy-deep);
-  border: 1px solid var(--cream-20);
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-cards);
   padding: var(--card-padding);
-  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
-  animation: component-float 6s ease-in-out infinite;
-  transition: box-shadow 0.2s ease;
+  box-shadow: 0 10px 24px rgba(31, 36, 48, 0.05);
+  transition: box-shadow 0.15s ease;
 }
-/* Offset each card's float cycle so the row drifts asynchronously instead
-   of bobbing in lockstep — closer to a loose, fluid cluster than a grid. */
-.card:nth-child(2) { animation-delay: -1.5s; }
-.card:nth-child(3) { animation-delay: -3s; }
-.card:nth-child(4) { animation-delay: -4.5s; }
 .card:hover {
-  animation: component-jiggle 0.55s ease-in-out;
-  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 16px 32px rgba(31, 36, 48, 0.1);
+}
+/* Small watercolor bleed in the corner, one accent per card (same hue the
+   card's tag uses) — see the Design artifact's feature cards. */
+.card-wash {
+  position: absolute;
+  right: -60px;
+  top: -60px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.6;
+  mix-blend-mode: multiply;
+  pointer-events: none;
 }
 .card-tag {
+  position: relative;
   display: inline-block;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.18px;
-  color: var(--color-champagne-gold);
-  border: 1px solid var(--color-champagne-gold);
+  background: #ffffff;
   border-radius: var(--radius-tags);
   padding: 4px 10px;
   margin-bottom: 16px;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.card-tag:hover, .release-badge:hover {
-  animation: component-jiggle 0.55s ease-in-out;
-}
-.card h3 { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
-.card p { font-size: 12px; color: var(--cream-70); }
+.card h3 { position: relative; font-size: 15px; font-weight: 600; margin-bottom: 10px; color: var(--color-ink); }
+.card p { position: relative; font-size: 13px; color: var(--color-muted); line-height: 1.6; }
 
 /* Each feature card gets its own accent from the fixed palette above
-   (automation → amber, AI → violet, backup → blue, browsing → sky) instead
-   of the single champagne gold repeated four times. */
-.card:nth-child(1) .card-tag { color: var(--color-accent-amber); border-color: var(--color-accent-amber); }
-.card:nth-child(2) .card-tag { color: var(--color-accent-violet); border-color: var(--color-accent-violet); }
-.card:nth-child(3) .card-tag { color: var(--color-accent-blue); border-color: var(--color-accent-blue); }
-.card:nth-child(4) .card-tag { color: var(--color-accent-sky); border-color: var(--color-accent-sky); }
+   (automation → amber, AI → violet, backup → blue, browsing → sky); hover
+   inverts the tag to a solid fill of that same color — the "touching it"
+   cue, with no motion involved. */
+.card:nth-child(1) .card-wash { background: radial-gradient(circle, var(--color-accent-amber) 0%, var(--color-accent-amber) 30%, transparent 70%); }
+.card:nth-child(1) .card-tag { color: var(--color-accent-amber-ink); border: 1px solid var(--color-accent-amber-ink); }
+.card:nth-child(1) .card-tag:hover { background: var(--color-accent-amber-ink); color: #ffffff; }
+.card:nth-child(2) .card-wash { background: radial-gradient(circle, var(--color-accent-violet) 0%, var(--color-accent-violet) 30%, transparent 70%); }
+.card:nth-child(2) .card-tag { color: var(--color-accent-violet-ink); border: 1px solid var(--color-accent-violet-ink); }
+.card:nth-child(2) .card-tag:hover { background: var(--color-accent-violet-ink); color: #ffffff; }
+.card:nth-child(3) .card-wash { background: radial-gradient(circle, var(--color-accent-blue) 0%, var(--color-accent-blue) 30%, transparent 70%); }
+.card:nth-child(3) .card-tag { color: var(--color-accent-blue-ink); border: 1px solid var(--color-accent-blue-ink); }
+.card:nth-child(3) .card-tag:hover { background: var(--color-accent-blue-ink); color: #ffffff; }
+.card:nth-child(4) .card-wash { background: radial-gradient(circle, var(--color-accent-sky) 0%, var(--color-accent-sky) 30%, transparent 70%); }
+.card:nth-child(4) .card-tag { color: var(--color-accent-sky-ink); border: 1px solid var(--color-accent-sky-ink); }
+.card:nth-child(4) .card-tag:hover { background: var(--color-accent-sky-ink); color: #ffffff; }
 
 /* ---------- releases ---------- */
 
 .release-list { display: flex; flex-direction: column; gap: 16px; }
 
 .release-card {
-  /* Same navy surface as .card — this list can run long, so it gets the
-     raised-panel look without .card's continuous idle float (which would
-     turn a long list into a lot of simultaneous motion); the jiggle on
-     hover still gives it the same "alive" feedback as everything else. */
-  background: var(--color-navy-deep);
-  border: 1px solid var(--cream-20);
+  background: #ffffff;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-cards);
   padding: var(--card-padding);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
-  transition: box-shadow 0.2s ease;
+  box-shadow: 0 10px 24px rgba(31, 36, 48, 0.05);
+  transition: box-shadow 0.15s ease;
 }
 .release-card:hover {
-  animation: component-jiggle 0.55s ease-in-out;
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 16px 32px rgba(31, 36, 48, 0.1);
 }
 .release-card.is-latest {
   border-color: var(--color-accent-blue);
-  background: linear-gradient(180deg, var(--color-navy-deep), var(--color-obsidian-black) 60%);
+  background: var(--color-tint-blue);
 }
-.release-card.is-latest .release-badge { color: var(--color-accent-blue); border-color: var(--color-accent-blue); }
+.release-card.is-latest .release-badge { color: var(--color-accent-blue-ink); border-color: var(--color-accent-blue-ink); }
+.release-card.is-latest .release-badge:hover { background: var(--color-accent-blue-ink); color: #ffffff; }
 
 .release-head {
   display: flex;
@@ -255,101 +295,81 @@ h1, h2, h3, p { margin: 0; }
 .release-tag {
   font-size: 14px;
   font-weight: 500;
+  color: var(--color-ink);
 }
 .release-badge {
   display: inline-block;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.18px;
-  color: var(--color-champagne-gold);
-  border: 1px solid var(--color-champagne-gold);
+  color: var(--color-accent-amber-ink);
+  background: #ffffff;
+  border: 1px solid var(--color-accent-amber-ink);
   border-radius: var(--radius-tags);
   padding: 4px 10px;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.release-date { font-size: 12px; color: var(--cream-45); margin-left: auto; }
+.release-badge:hover { background: var(--color-accent-amber-ink); color: #ffffff; }
+.release-date { font-size: 12px; color: var(--color-faint); margin-left: auto; }
 
 .release-links { display: flex; flex-wrap: wrap; gap: 8px 24px; }
 .release-asset-link {
   font-size: 12px;
-  color: var(--color-candlelight-cream);
+  color: var(--color-ink);
   transition: color 0.15s ease;
 }
-.release-asset-link:hover { color: var(--color-champagne-gold); }
-.release-asset-size { color: var(--cream-45); }
+.release-asset-link:hover { color: var(--color-accent-blue); }
+.release-asset-size { color: var(--color-faint); }
 
 .release-notes {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid var(--cream-20);
+  border-top: 1px solid var(--color-border);
 }
 .release-notes summary {
   cursor: pointer;
   font-size: 12px;
-  color: var(--cream-70);
+  color: var(--color-muted);
 }
-.release-notes summary:hover { color: var(--color-champagne-gold); }
+.release-notes summary:hover { color: var(--color-accent-blue); }
 .release-notes-body {
   margin-top: 10px;
   font-size: 12px;
   line-height: 1.6;
-  color: var(--cream-70);
+  color: var(--color-muted);
   white-space: pre-wrap;
 }
-.release-notes-body a { color: var(--color-champagne-gold); }
+.release-notes-body a { color: var(--color-accent-blue); }
 
-.release-empty { font-size: 12px; color: var(--cream-45); }
+.release-empty { font-size: 12px; color: var(--color-faint); }
 
 .release-skeleton {
   height: 100px;
   border-radius: var(--radius-cards);
-  border: 1px solid var(--cream-20);
+  border: 1px solid var(--color-border);
+  background: #fafbfc;
 }
 
 .release-error {
   font-size: 13px;
-  color: var(--cream-70);
-  border: 1px solid var(--cream-20);
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-cards);
   padding: 20px var(--card-padding);
 }
-.release-error a { color: var(--color-champagne-gold); }
+.release-error a { color: var(--color-accent-blue); }
 
 /* ---------- footer ---------- */
 
-.footer { border-top: 1px solid var(--cream-20); padding: 24px 0; }
+.footer { border-top: 1px solid var(--color-border); padding: 24px 0; }
 .footer-inner {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: var(--cream-45);
+  color: var(--color-faint);
 }
 .footer-inner a { transition: color 0.15s ease; }
-.footer-inner a:hover { color: var(--color-champagne-gold); }
-
-/* ---------- motion ---------- */
-
-/* Shared by every "component" above (feature cards, release cards, the
-   primary CTA, tags/badges): a slow idle bob for .card's continuous float,
-   and a quick squash-and-stretch wobble for the hover feedback everything
-   else also uses — the "ぷるぷる" jelly feel instead of a flat color/border
-   transition. */
-@keyframes component-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
-}
-@keyframes component-jiggle {
-  0% { transform: scale(1, 1); }
-  25% { transform: scale(1.05, 0.95); }
-  50% { transform: scale(0.97, 1.04); }
-  75% { transform: scale(1.02, 0.98); }
-  100% { transform: scale(1, 1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .card, .release-card, .btn-outline, .card-tag, .release-badge {
-    animation: none !important;
-  }
-}
+.footer-inner a:hover { color: var(--color-accent-blue); }
 
 /* ---------- responsive ---------- */
 
@@ -357,5 +377,4 @@ h1, h2, h3, p { margin: 0; }
   .card-grid { grid-template-columns: 1fr; }
   .nav-links { gap: 20px; }
   .nav-inner, .wrap { padding-left: 20px; padding-right: 20px; }
-  .hero h1 { font-size: 32px; letter-spacing: -1px; }
 }

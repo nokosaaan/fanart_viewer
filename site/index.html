@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
   <title>Fanart Viewer — ダウンロード</title>
   <meta name="description" content="Fanart Viewer: 自分専用のイラスト保管庫。Windows向けスタンドアロン版のダウンロードページ。">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='%23000'/%3E%3Cpath d='M8.6 5.4 C8.3 9.4 8.6 14.8 8.9 19.2' fill='none' stroke='%23c8ad86' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M9 6.4 C11.2 5.8 14.3 5.6 16.4 6.7' fill='none' stroke='%23c8ad86' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M9.2 12.5 C11 12.1 13.3 12.4 14.7 11.9' fill='none' stroke='%23c8ad86' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
@@ -15,11 +16,11 @@
   <header class="nav">
     <div class="wrap nav-inner">
       <a class="wordmark" href="#top">
-        <span class="wordmark-mark" aria-hidden="true">
-          <span></span><span></span><span></span>
-          <span></span><span class="on"></span><span></span>
-          <span></span><span></span><span></span>
-        </span>
+        <svg class="wordmark-mark" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8.6 5.4 C8.3 9.4 8.6 14.8 8.9 19.2" fill="none" stroke="#16213f" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9 6.4 C11.2 5.8 14.3 5.6 16.4 6.7" fill="none" stroke="#16213f" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M9.2 12.5 C11 12.1 13.3 12.4 14.7 11.9" fill="none" stroke="#16213f" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
         Fanart Viewer
       </a>
       <nav class="nav-links">
@@ -32,21 +33,28 @@
 
   <main>
     <section id="top" class="hero">
-      <div class="wrap">
+      <div class="hero-wash" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <div class="wrap hero-content">
         <div class="hero-mark" aria-hidden="true">
-          <span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span>
-          <span class="on"></span><span></span><span></span><span></span><span></span>
-          <span class="on"></span><span></span><span></span><span></span><span></span>
-          <span class="on"></span><span class="on"></span><span class="on"></span><span></span><span></span>
-          <span class="on"></span><span></span><span></span><span></span><span></span>
-          <span class="on"></span><span></span><span></span><span></span><span></span>
-          <span class="on"></span><span></span><span></span><span></span><span></span>
+          <span class="c-amber"></span><span class="c-amber"></span><span class="c-amber"></span><span class="c-amber"></span><span class="c-amber"></span>
+          <span class="c-sky"></span><span></span><span></span><span></span><span></span>
+          <span class="c-blue"></span><span></span><span></span><span></span><span></span>
+          <span class="c-violet"></span><span class="c-violet"></span><span class="c-violet"></span><span></span><span></span>
+          <span class="c-navy"></span><span></span><span></span><span></span><span></span>
+          <span class="c-navy"></span><span></span><span></span><span></span><span></span>
+          <span class="c-navy"></span><span></span><span></span><span></span><span></span>
         </div>
-
-        <h1>画像を全てここに集約。</h1>
 
         <div class="hero-cta" id="download">
           <a id="primary-download" class="btn-outline" href="https://github.com/nokosaaan/fanart_viewer/releases/latest" target="_blank" rel="noopener noreferrer">
+            <svg class="btn-outline-icon" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true">
+              <rect x="1" y="1" width="8" height="8" fill="currentColor"/>
+              <rect x="11" y="1" width="8" height="8" fill="currentColor"/>
+              <rect x="1" y="11" width="8" height="8" fill="currentColor"/>
+              <rect x="11" y="11" width="8" height="8" fill="currentColor"/>
+            </svg>
             <span id="primary-download-label">最新版をダウンロード</span>
           </a>
           <div class="hero-cta-meta" id="primary-download-meta">読み込み中…</div>
@@ -61,21 +69,25 @@
         <h2 class="section-header">できること</h2>
         <div class="card-grid">
           <div class="card">
+            <span class="card-wash" aria-hidden="true"></span>
             <span class="card-tag">自動化</span>
             <h3>放っておいても集まる</h3>
             <p>Twitter/X・Pixivのブックマークやいいねを、設定した間隔で自動巡回。ブラウザでログインするだけで認証も完了。</p>
           </div>
           <div class="card">
+            <span class="card-wash" aria-hidden="true"></span>
             <span class="card-tag">AI提案</span>
             <h3>使うほど賢くなる</h3>
             <p>登録したデータをもとに、自分専用の分類器を学習。タイトル・キャラクターをスコア付きで提案。</p>
           </div>
           <div class="card">
+            <span class="card-wash" aria-hidden="true"></span>
             <span class="card-tag">バックアップ</span>
             <h3>Google Driveへ安心保存</h3>
             <p>ワンクリックでバックアップ・復元。進捗もリアルタイムで確認。</p>
           </div>
           <div class="card">
+            <span class="card-wash" aria-hidden="true"></span>
             <span class="card-tag">閲覧</span>
             <h3>ギャラリーで一望</h3>
             <p>Preview Timelineで、集めた作品をギャラリー感覚で閲覧。気になった1枚はそのまま画像だけを保存。</p>
