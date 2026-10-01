@@ -8,6 +8,16 @@
   --color-obsidian-black: #000000;
   --color-ember-ash: #66635f;
 
+  /* Accent variation set — one fixed, named palette (amber / sky / blue /
+     violet, plus a navy fill) instead of ad-hoc one-off colors, so each
+     feature/section gets a distinct but deliberate accent rather than the
+     champagne gold repeated everywhere or random per-element colors. */
+  --color-accent-amber: #f2a74f;
+  --color-accent-sky: #5ac8f5;
+  --color-accent-blue: #3b82f6;
+  --color-accent-violet: #8b7cf6;
+  --color-navy-deep: #16213f;
+
   --cream-20: rgba(255, 247, 221, 0.2);
   --cream-70: rgba(255, 247, 221, 0.7);
   --cream-45: rgba(255, 247, 221, 0.45);
@@ -176,6 +186,14 @@ h1, h2, h3, p { margin: 0; }
 .card h3 { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
 .card p { font-size: 12px; color: var(--cream-70); }
 
+/* Each feature card gets its own accent from the fixed palette above
+   (automation → amber, AI → violet, backup → blue, browsing → sky) instead
+   of the single champagne gold repeated four times. */
+.card:nth-child(1) .card-tag { color: var(--color-accent-amber); border-color: var(--color-accent-amber); }
+.card:nth-child(2) .card-tag { color: var(--color-accent-violet); border-color: var(--color-accent-violet); }
+.card:nth-child(3) .card-tag { color: var(--color-accent-blue); border-color: var(--color-accent-blue); }
+.card:nth-child(4) .card-tag { color: var(--color-accent-sky); border-color: var(--color-accent-sky); }
+
 /* ---------- releases ---------- */
 
 .release-list { display: flex; flex-direction: column; gap: 16px; }
@@ -185,7 +203,11 @@ h1, h2, h3, p { margin: 0; }
   border-radius: var(--radius-cards);
   padding: var(--card-padding);
 }
-.release-card.is-latest { border-color: var(--color-champagne-gold); }
+.release-card.is-latest {
+  border-color: var(--color-accent-blue);
+  background: linear-gradient(180deg, var(--color-navy-deep), var(--color-obsidian-black) 60%);
+}
+.release-card.is-latest .release-badge { color: var(--color-accent-blue); border-color: var(--color-accent-blue); }
 
 .release-head {
   display: flex;

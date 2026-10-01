@@ -40,6 +40,38 @@ function WithQueueBadge({ children }) {
   )
 }
 
+// Sun / moon / monitor glyphs for ThemeSettings.jsx's appearance list — the
+// same three-way "light / dark / follow device" choice GitHub's own
+// appearance menu uses, drawn with this app's existing line-icon convention.
+export function SunIcon() {
+  return (
+    <Svg>
+      <circle cx="12" cy="12" r="4" />
+      <line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" />
+      <line x1="4" y1="12" x2="2" y2="12" /><line x1="22" y1="12" x2="20" y2="12" />
+      <line x1="5.64" y1="5.64" x2="4.22" y2="4.22" /><line x1="19.78" y1="19.78" x2="18.36" y2="18.36" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+    </Svg>
+  )
+}
+
+export function MoonIcon() {
+  return (
+    <Svg>
+      <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" />
+    </Svg>
+  )
+}
+
+export function MonitorIcon() {
+  return (
+    <Svg>
+      <rect x="2" y="4" width="20" height="13" rx="2" />
+      <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+    </Svg>
+  )
+}
+
 export function ReloadIcon() {
   return (
     <Svg>

@@ -91,8 +91,8 @@ export function buildTourStepsB(){
       targetId: 'filter-preview-missing',
     },
     {
-      title: 'アイテムを編集する',
-      body: 'タイトル・キャラクター・タグ・シチュエーション・作者を編集します。データが増えると、AIがスコア付きの候補(最大3件)を提案するようになります。どの根拠(ハッシュタグ・作家履歴・画像解析・Danbooru照合など)から来た提案かも表示されます。1枚に複数のキャラが写っている画像は、同じ画面でどの領域が誰かも矩形指定でき、ここでラベル付けしたデータは学習時の確実な教師データとして使われます。',
+      title: '編集キューで登録する',
+      body: '例:「鬼滅の刃」の炭治郎の絵なら\nTitlesに入力しEnterで登録\nCharactersも同様に追加\nSituationはボタンで選択\nTagsはカンマ区切りで入力\nAIが候補を提案することも\n保存を押せば確定(未入力も可)',
       targetId: 'menu-item-queue',
       needsHeaderMenu: true,
     },
