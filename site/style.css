@@ -1,6 +1,8 @@
-/* Fanart Viewer download page — styled to the "Atoms" reference (see the
-   skill this was built from): near-total monochrome, one champagne accent,
-   hairline borders instead of shadows, flat and static rather than kinetic. */
+/* Fanart Viewer download page — near-total monochrome base (see the "Atoms"
+   reference this was originally built from), now layered with the fixed
+   accent palette below wherever a surface used to be a flat fill of the
+   site's own base black, plus a soft floating/jiggle feel on hover instead
+   of the previous flat-and-static treatment. */
 
 :root {
   --color-champagne-gold: #c8ad86;
@@ -37,7 +39,11 @@
 
 body {
   margin: 0;
-  background: var(--color-obsidian-black);
+  /* Was a flat fill of --color-obsidian-black everywhere; now the same base
+     black fades up from the palette's navy instead, so the page itself
+     carries the accent set rather than reading as pure black. */
+  background: radial-gradient(120% 140% at 50% -10%, var(--color-navy-deep) 0%, var(--color-obsidian-black) 55%);
+  background-attachment: fixed;
   color: var(--color-candlelight-cream);
   font-family: var(--font-switzer);
   font-weight: 400;
@@ -127,6 +133,7 @@ h1, h2, h3, p { margin: 0; }
 .btn-outline:hover {
   border-color: var(--color-champagne-gold);
   color: var(--color-champagne-gold);
+  animation: component-jiggle 0.55s ease-in-out;
 }
 
 .hero-cta-meta {
@@ -167,10 +174,25 @@ h1, h2, h3, p { margin: 0; }
   gap: 16px;
 }
 .card {
-  background: var(--color-obsidian-black);
+  /* Was a flat fill of --color-obsidian-black (identical to the page
+     background, only visible via its border); now a raised navy surface so
+     it actually reads as a distinct, floating panel above the page. */
+  background: var(--color-navy-deep);
   border: 1px solid var(--cream-20);
   border-radius: var(--radius-cards);
   padding: var(--card-padding);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+  animation: component-float 6s ease-in-out infinite;
+  transition: box-shadow 0.2s ease;
+}
+/* Offset each card's float cycle so the row drifts asynchronously instead
+   of bobbing in lockstep — closer to a loose, fluid cluster than a grid. */
+.card:nth-child(2) { animation-delay: -1.5s; }
+.card:nth-child(3) { animation-delay: -3s; }
+.card:nth-child(4) { animation-delay: -4.5s; }
+.card:hover {
+  animation: component-jiggle 0.55s ease-in-out;
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
 }
 .card-tag {
   display: inline-block;
@@ -182,6 +204,9 @@ h1, h2, h3, p { margin: 0; }
   border-radius: var(--radius-tags);
   padding: 4px 10px;
   margin-bottom: 16px;
+}
+.card-tag:hover, .release-badge:hover {
+  animation: component-jiggle 0.55s ease-in-out;
 }
 .card h3 { font-size: 14px; font-weight: 500; margin-bottom: 10px; }
 .card p { font-size: 12px; color: var(--cream-70); }
@@ -199,9 +224,20 @@ h1, h2, h3, p { margin: 0; }
 .release-list { display: flex; flex-direction: column; gap: 16px; }
 
 .release-card {
+  /* Same navy surface as .card — this list can run long, so it gets the
+     raised-panel look without .card's continuous idle float (which would
+     turn a long list into a lot of simultaneous motion); the jiggle on
+     hover still gives it the same "alive" feedback as everything else. */
+  background: var(--color-navy-deep);
   border: 1px solid var(--cream-20);
   border-radius: var(--radius-cards);
   padding: var(--card-padding);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+  transition: box-shadow 0.2s ease;
+}
+.release-card:hover {
+  animation: component-jiggle 0.55s ease-in-out;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
 }
 .release-card.is-latest {
   border-color: var(--color-accent-blue);
@@ -289,6 +325,31 @@ h1, h2, h3, p { margin: 0; }
 }
 .footer-inner a { transition: color 0.15s ease; }
 .footer-inner a:hover { color: var(--color-champagne-gold); }
+
+/* ---------- motion ---------- */
+
+/* Shared by every "component" above (feature cards, release cards, the
+   primary CTA, tags/badges): a slow idle bob for .card's continuous float,
+   and a quick squash-and-stretch wobble for the hover feedback everything
+   else also uses — the "ぷるぷる" jelly feel instead of a flat color/border
+   transition. */
+@keyframes component-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes component-jiggle {
+  0% { transform: scale(1, 1); }
+  25% { transform: scale(1.05, 0.95); }
+  50% { transform: scale(0.97, 1.04); }
+  75% { transform: scale(1.02, 0.98); }
+  100% { transform: scale(1, 1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card, .release-card, .btn-outline, .card-tag, .release-badge {
+    animation: none !important;
+  }
+}
 
 /* ---------- responsive ---------- */
 
