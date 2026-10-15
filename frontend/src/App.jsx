@@ -363,6 +363,16 @@ function AppMain({ role, onLogout }){
   // backend pages a page-jump needs, without waiting on filtered/totalPages
   // (a memo, so it can't be read fresh mid-loop either).
   const itemsCountRef = useRef(items.length)
+  // IDs ever actually returned by a real backend fetch this session (never
+  // populated from the localStorage cache). The initial-load/background-index/
+  // loadNextPage merges below all union fresh results onto whatever the cache
+  // restored, but never used to remove anything -- so an item deleted on the
+  // backend (or a stale cache left over from a DB reset/restore) stayed in
+  // `items` forever, inflating totalPages and the item count indefinitely.
+  // Once a walk of the backend's pagination reaches its end (`next: null`),
+  // everything that exists server-side has necessarily passed through this
+  // set, so mergeAndPrune below can safely drop any leftover cache-only entry.
+  const fetchedIdsRef = useRef(new Set())
   // Guards the search-triggered full background load so it only ever starts once.
   const fullIndexStartedRef = useRef(false)
   const INITIAL_PAGES = 3
@@ -442,8 +452,9 @@ function AppMain({ role, onLogout }){
     ;(async ()=>{
       try{
         const { items: initial, nextUrl } = await fetchItemsPages('/api/items/', INITIAL_PAGES)
+        initial.forEach(it => { const id = idOf(it); if(id != null) fetchedIdsRef.current.add(id) })
         setItems(prev => {
-          const merged = uniqueById([...initial, ...(Array.isArray(prev) ? prev : [])])
+          const merged = mergeAndPrune([...initial, ...(Array.isArray(prev) ? prev : [])], nextUrl === null)
           itemsCountRef.current = merged.length
           return merged
         })
@@ -542,12 +553,13 @@ function AppMain({ role, onLogout }){
       try{
         const { items: rest, nextUrl } = await fetchItemsPages(nextPageUrl)
         if(cancelled) return
+        rest.forEach(it => { const id = idOf(it); if(id != null) fetchedIdsRef.current.add(id) })
         setItems(prev => {
           // Freshly-fetched first (see the initial-load effect above for the
           // same ordering, and why) -- a stale cached `prev` entry for an id
           // that also appears in `rest` must not win over what was just
           // re-fetched from the server.
-          const merged = uniqueById([...rest, ...(Array.isArray(prev)?prev:[])])
+          const merged = mergeAndPrune([...rest, ...(Array.isArray(prev)?prev:[])], nextUrl === null)
           itemsCountRef.current = merged.length
           return merged
         })
@@ -678,8 +690,9 @@ function AppMain({ role, onLogout }){
 
       const results = Array.isArray(data) ? data : (Array.isArray(data.results) ? data.results : [])
       const newNext = Array.isArray(data) ? null : (data.next || null)
+      results.forEach(it => { const id = idOf(it); if(id != null) fetchedIdsRef.current.add(id) })
       setItems(prev => {
-        const merged = uniqueById([...(Array.isArray(prev)?prev:[]), ...results])
+        const merged = mergeAndPrune([...(Array.isArray(prev)?prev:[]), ...results], newNext === null)
         itemsCountRef.current = merged.length
         return merged
       })
@@ -739,6 +752,24 @@ function AppMain({ role, onLogout }){
       out.push(it)
     }
     return out
+  }
+
+  function idOf(it){
+    return it && (it.id || it._id || it.pk || it.external_id)
+  }
+
+  // Dedupes `combined` (already ordered so the freshly-fetched copy of any
+  // duplicate id wins, per each call site's own comment) and, once `reachedEnd`
+  // says this walk has now seen the backend's entire list, drops anything left
+  // over that fetchedIdsRef never actually saw -- see fetchedIdsRef's own
+  // comment for why that's safe only at that point and not before.
+  function mergeAndPrune(combined, reachedEnd){
+    const merged = uniqueById(combined)
+    if(!reachedEnd) return merged
+    return merged.filter(it => {
+      const id = idOf(it)
+      return id == null || fetchedIdsRef.current.has(id)
+    })
   }
 
   return (
