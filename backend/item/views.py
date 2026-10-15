@@ -65,6 +65,7 @@ try:
     from . import tagger
     HAVE_TAGGER = True
 except Exception:
+    logging.exception('item.tagger failed to import; all image-based suggestions will be skipped')
     HAVE_TAGGER = False
 try:
     from bs4 import BeautifulSoup
