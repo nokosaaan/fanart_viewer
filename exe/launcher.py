@@ -34,6 +34,7 @@ seconds to import — showing nothing during that stretch reads as a
 hang). webview.start(func, args) is pywebview's own supported way to run
 exactly this kind of background init after the window appears.
 """
+import datetime
 import logging
 import os
 import secrets
@@ -88,6 +89,50 @@ if IS_GALLERYDL_MODE:
     sys.argv = ['gallery-dl', *_gallerydl_argv]
     sys.exit(gallery_dl.main())
 
+class _DailyRotatingStream:
+    """File-like sink for server.log that rotates it at midnight and prunes
+    old backups, since the app (unlike a training run) can stay running for
+    months and the file used to be opened once in 'a' mode for the whole
+    process lifetime with no cap at all. Keeps the live file at the same
+    `server.log` path (nothing else needs to change) and renames the old
+    day's content to `server.log.YYYY-MM-DD` on rollover, mirroring
+    logging.handlers.TimedRotatingFileHandler's own naming."""
+    _KEEP_DAYS = 14
+
+    def __init__(self, path: Path):
+        self._path = path
+        self._date = datetime.date.today()
+        self._file = open(path, 'a', encoding='utf-8', buffering=1)
+        self._prune_old()
+
+    def _rotate_if_needed(self):
+        today = datetime.date.today()
+        if today == self._date:
+            return
+        self._file.close()
+        if self._path.exists():
+            self._path.replace(self._path.with_name(f'{self._path.name}.{self._date.isoformat()}'))
+        self._date = today
+        self._file = open(self._path, 'a', encoding='utf-8', buffering=1)
+        self._prune_old()
+
+    def _prune_old(self):
+        cutoff = datetime.date.today() - datetime.timedelta(days=self._KEEP_DAYS)
+        for backup in self._path.parent.glob(f'{self._path.name}.*'):
+            try:
+                if datetime.date.fromisoformat(backup.name[len(self._path.name) + 1:]) < cutoff:
+                    backup.unlink()
+            except ValueError:
+                continue
+
+    def write(self, s):
+        self._rotate_if_needed()
+        self._file.write(s)
+
+    def flush(self):
+        self._file.flush()
+
+
 # --- Persistent per-user data directory -------------------------------
 # ~/.fanart_viewer on every OS (Path.home() resolves to %USERPROFILE% on
 # Windows) — deliberately NOT inside the install location, so an app
@@ -99,9 +144,14 @@ USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 # sys.stdout/stderr can even be None there, so this has to happen before
 # any print()/logging call, including ones further down this file. Training
 # mode gets its own log file so a training run's (often long, verbose)
-# output doesn't interleave with the running app's server.log.
-_log_filename = 'training.log' if IS_TRAINING_MODE else 'server.log'
-_log_file = open(USER_DATA_DIR / _log_filename, 'a', encoding='utf-8', buffering=1)
+# output doesn't interleave with the running app's server.log; it's opened
+# plain (no rotation) since classifier_training.py/train.sh/train.ps1 all
+# tail that exact, single `training.log` path live for progress reporting
+# and a training run is finite, unlike the server's own open-ended log.
+if IS_TRAINING_MODE:
+    _log_file = open(USER_DATA_DIR / 'training.log', 'a', encoding='utf-8', buffering=1)
+else:
+    _log_file = _DailyRotatingStream(USER_DATA_DIR / 'server.log')
 sys.stdout = _log_file
 sys.stderr = _log_file
 logging.basicConfig(stream=_log_file, level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
