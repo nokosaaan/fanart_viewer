@@ -373,6 +373,13 @@ function AppMain({ role, onLogout }){
   // everything that exists server-side has necessarily passed through this
   // set, so mergeAndPrune below can safely drop any leftover cache-only entry.
   const fetchedIdsRef = useRef(new Set())
+  // Only the first INITIAL_PAGES are re-fetched at startup, so every cached
+  // item past that point kept its stale field values (e.g. empty titles/tags
+  // that were since filled in) and the edit queue, which filters this same
+  // list client-side, flagged already-complete items as missing metadata.
+  // A cache-restored session therefore also runs the full background index
+  // (normally search-only) so every cached entry gets overwritten by a fresh copy.
+  const restoredFromCacheRef = useRef(items.length > 0)
   // Guards the search-triggered full background load so it only ever starts once.
   const fullIndexStartedRef = useRef(false)
   const INITIAL_PAGES = 3
@@ -545,7 +552,7 @@ function AppMain({ role, onLogout }){
   useEffect(()=>{
     const searching = query.trim() !== '' || filters.length > 0 ||
       situationFilter !== 'ALL' || titleMissingOnly || previewMissingOnly
-    if(!searching || !nextPageUrl || fullIndexStartedRef.current) return
+    if((!searching && !restoredFromCacheRef.current) || !nextPageUrl || fullIndexStartedRef.current) return
     fullIndexStartedRef.current = true
     let cancelled = false
     ;(async ()=>{
