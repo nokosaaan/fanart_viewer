@@ -566,7 +566,7 @@ function AppMain({ role, onLogout }){
           // same ordering, and why) -- a stale cached `prev` entry for an id
           // that also appears in `rest` must not win over what was just
           // re-fetched from the server.
-          const merged = mergeAndPrune([...rest, ...(Array.isArray(prev)?prev:[])], nextUrl === null)
+          const merged = mergeAndPrune(mergeFresh(prev, rest), nextUrl === null)
           itemsCountRef.current = merged.length
           return merged
         })
@@ -699,7 +699,7 @@ function AppMain({ role, onLogout }){
       const newNext = Array.isArray(data) ? null : (data.next || null)
       results.forEach(it => { const id = idOf(it); if(id != null) fetchedIdsRef.current.add(id) })
       setItems(prev => {
-        const merged = mergeAndPrune([...(Array.isArray(prev)?prev:[]), ...results], newNext === null)
+        const merged = mergeAndPrune(mergeFresh(prev, results), newNext === null)
         itemsCountRef.current = merged.length
         return merged
       })
@@ -763,6 +763,28 @@ function AppMain({ role, onLogout }){
 
   function idOf(it){
     return it && (it.id || it._id || it.pk || it.external_id)
+  }
+
+  // Keeps `prev`'s existing order (newest first, as the server returns it)
+  // but swaps in the freshly-fetched copy of every id it already holds, then
+  // appends fetched items it didn't have. Putting `fresh` in front instead
+  // would push the older pages ahead of the newest items already loaded.
+  function mergeFresh(prev, fresh){
+    const base = Array.isArray(prev) ? prev : []
+    const freshById = new Map()
+    for(const it of fresh){ const id = idOf(it); if(id != null) freshById.set(id, it) }
+    const seen = new Set()
+    const out = base.map(it => {
+      const id = idOf(it)
+      if(id == null) return it
+      seen.add(id)
+      return freshById.get(id) || it
+    })
+    for(const it of fresh){
+      const id = idOf(it)
+      if(id == null || !seen.has(id)) out.push(it)
+    }
+    return out
   }
 
   // Dedupes `combined` (already ordered so the freshly-fetched copy of any
