@@ -608,7 +608,10 @@ function AppMain({ role, onLogout }){
 
   const filtered = useMemo(()=>{
     const q = query.trim().toLowerCase()
-    const list = Array.isArray(items) ? items : (items && Array.isArray(items.results) ? items.results : [])
+    const rawList = Array.isArray(items) ? items : (items && Array.isArray(items.results) ? items.results : [])
+    // Always newest (highest #id) first, whatever order fetches/cache merges
+    // happened to leave `items` in, so a low id can never land on an earlier page.
+    const list = [...rawList].sort((a, b) => (Number(b && b.id) || 0) - (Number(a && a.id) || 0))
 
     function hasAnyTitle(it){
       if(!it) return false
