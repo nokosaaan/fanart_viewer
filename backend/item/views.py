@@ -1362,6 +1362,13 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
             _append_tag_similarity_candidates(sim2, title_c, char_c, situation_c,
                                                want_titles, want_characters, want_situation)
 
+    logging.info(
+        'suggest item=%s backend=%s want(t/c/tag/s)=%s/%s/%s/%s have_tagger=%s '
+        'image_index=%s tagger_ran=%s cand(title/char/situation/tags)=%d/%d/%d/%d',
+        item.id, tagger_backend, want_titles, want_characters, want_tags, want_situation,
+        HAVE_TAGGER, resolved_image_index, tagger_result is not None,
+        len(title_c), len(char_c), len(situation_c), len(tags_out),
+    )
     return {
         'title': title_c, 'character': char_c, 'situation': situation_c, 'tags': tags_out,
         'want_titles': want_titles, 'want_characters': want_characters,
