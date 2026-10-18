@@ -168,9 +168,8 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   const [bulkSaveProgress, setBulkSaveProgress] = useState(null) // {done, total, failed}
 
   const [suggestMode, setSuggestMode] = useState('local')
-  const [suggestModel, setSuggestModel] = useState('default')
+  const [suggestModel, setSuggestModel] = useState('canary')
   const [haveTimm, setHaveTimm] = useState(false)
-  const [suggestUseEnsemble, setSuggestUseEnsemble] = useState(true)
   useEffect(()=>{
     fetch('/api/items/tagger_capabilities/')
       .then(r=>r.json()).then(d=>setHaveTimm(!!d.have_timm)).catch(()=>{})
@@ -183,7 +182,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // Sequentially requests a suggestion for every item in `targetItems` that
   // doesn't already have a cached one — see the former EditQueueManager's
   // own comment for why this is sequential, not parallel.
-  const runSuggestFor = useCallback(async (targetItems, mode, model, useEnsemble) => {
+  const runSuggestFor = useCallback(async (targetItems, mode, model) => {
     if(bulkSuggestingRef.current) return
     const targets = targetItems.filter(it => !suggestionsRef.current[it.id])
     if(targets.length === 0) return
@@ -200,7 +199,6 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
           body: JSON.stringify({
             external: mode === 'external',
             model: model === 'canary' ? 'timm' : 'default',
-            use_ensemble: !!useEnsemble,
           }),
           signal: abortRef.current.signal,
         })
@@ -564,13 +562,9 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
               </select>
             </>
           )}
-          <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer', marginLeft:8}} title="複数の情報源を重み付けして統合する新方式(実験的)。従来方式より実データでキャラ推定精度が高いことを確認済み">
-            <input type="checkbox" checked={suggestUseEnsemble} onChange={e=>setSuggestUseEnsemble(e.target.checked)} disabled={bulkSuggesting} />
-            統合型の推論を使う(実験的)
-          </label>
           <button className="btn" style={{fontSize:12}} onClick={()=>{
               if(suggestModel==='canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
-              runSuggestFor(items, suggestMode, suggestModel, suggestUseEnsemble)
+              runSuggestFor(items, suggestMode, suggestModel)
             }} disabled={bulkSuggesting || items.length===0 || items.every(it => suggestions[it.id])}>
             {bulkSuggesting
               ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`

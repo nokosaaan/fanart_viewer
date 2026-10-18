@@ -1,153 +1,81 @@
 """Trains a supplementary character classifier on this app's OWN labeled
 images, for characters the public Danbooru-trained taggers structurally
 cannot know about (OCs, characters from very recent/niche titles not yet in
-Danbooru's tag vocabulary — see the evaluate_threshold discussion: the
-default model has ZERO of a checked recent title's characters in its label
-list, and even the larger 'canary' model only has some).
+Danbooru's tag vocabulary).
 
 Approach: reuse the existing tagger as a frozen feature extractor (no
 retraining of the tagger itself — that would need vastly more data/compute
-than a personal archive has) and train a lightweight classifier on top,
-scikit-learn LogisticRegression over each image's general-tag probability
-vector (from tagger._raw_predict, before any threshold is applied — the
-same raw per-tag confidences the tagger already computes, just reused as a
-visual feature representation instead of being thresholded into named
-tags). This only needs a shallow model to fit, which is fast even on CPU
-and has never needed a GPU in any of this app's tooling so far.
+than a personal archive has) and fit a lightweight classifier on top
+(scikit-learn LogisticRegression by default). --feature-source picks what
+the classifier sees: the tagger's general-tag probability vector ('tags'),
+the canary model's pooled embedding ('embedding' — keeps visual information
+the tag vocabulary throws away), or both. The saved artifact records which,
+and tagger.predict_character reads it, so inference needs no flag.
 
-v1 scope, deliberately: ONLY single-character items (an item with more than
-one confirmed character is skipped entirely) — an image with N characters
-would need to be localized per-character first (the same person-detection
-crop machinery tagger.py already uses for the Danbooru-trained models) to
-avoid the same cross-character feature contamination that motivated that
-feature; wiring that up for a from-scratch classifier is a separate, larger
-follow-up once this simpler version's accuracy is validated.
+WHAT IS TRAINED ON
+- Solo images: items with exactly one confirmed character.
+- With --include-multi-character, also manually region-labeled crops
+  (Item.character_regions, drawn in RegionAnnotator.jsx): a human-drawn box
+  around ONE person in a group image, cut out and treated as its own image.
+  Never automatic person detection alone (an earlier self-training attempt
+  was removed as unsound — a coincidental box-count match is not evidence).
+- Solo images and region crops are COUNTED TOGETHER against --min-images: a
+  newly added character with 3 solo images but 53 labeled regions has 56
+  training images and is included. Crops count for less in the fit
+  (--region-weight, default 0.5): a hand-drawn box can clip a neighbour or
+  miss hair ornaments, so it is noisier evidence than a solo image.
+- --max-images-per-character caps ONE character's rows (solo first, regions
+  fill the rest) so a long-established character with hundreds of images
+  doesn't cost hours of extraction for no accuracy gain; --max-images-per-
+  item stops one many-page post from standing in for a whole class.
+- --grayscale-augment adds each image's black-and-white version as an extra
+  row (same label), so monochrome drawings land near the character instead
+  of in a generic "monochrome" cluster.
+- A character labelled with a deliberate trait bucket (e.g. "white" for many
+  different unnamed OCs with white hair) is an intentional class and should
+  NOT be --exclude'd; --exclude is for accidental mislabels such as "the
+  whole cast of title X", which only teaches "several people present".
 
-A character is only included if it has at least --min-images *single-
-character* images total (across however many items that character appears
-alone in) — see the `character_image_stats` command to check this ahead of
-time. Use --exclude for a label that technically has enough images but
-isn't meant to be learned as a class at all — e.g. "any image featuring the
-full cast of title X" isn't one character, and training on it just teaches
-the classifier to detect "multiple people present" instead of an identity.
+HOW THE ACCURACY IS REPORTED
+The holdout is split by ITEM, not by row: pages/crops of one post never sit
+on both sides (otherwise the model scores by recognising the post, which
+inflated an earlier random-split figure by several points). A class whose
+images all come from ONE post can't be assessed (holding it out leaves no
+training rows) and is trained on but left out of the holdout. The saved
+model is refit on every row after the report (--no-refit-all to keep the
+split model); the printed accuracy describes the split model. Holdout
+accuracy is also printed separately for solo images and region crops.
 
-A deliberate trait-based bucket (e.g. a "white" label intentionally
-covering many DIFFERENT unnamed OCs that just happen to share white hair)
-is a different case and should NOT be --exclude'd: it's an intentional
-class, not an accidental mislabel, and the classifier's feature vector
-(the general-tag probability vector, which already includes hair-color
-tags like white_hair) is exactly what such a label needs to be learned
-from. Expect lower confidence for that class than for a single-identity
-one, since its images vary on everything except the one shared trait —
-and if a real, specific character elsewhere in the label set also happens
-to have white hair, the two classes can be confused with each other more
-than two single-identity classes normally would be.
-
-THE EXPENSIVE PART is feature extraction (running the tagger's forward pass
-once per image) — the classifier fit itself is fast. This command caches
-every extracted (item_id, character, feature vector, image key) to
---feature-cache after extraction, so a later run that only changes
---exclude/--min-images/--test-size (e.g. to drop a bad label you noticed in
-the first report) can reuse it via --use-cache instead of re-extracting from
-scratch — but --use-cache trusts the file exactly as saved and never looks
-at the DB again at all, so it goes stale the moment a new single-character
-item/image is added. A cache is only valid for the --backend/--feature-source
-it was extracted with (widening the character set below the cache's
-original --min-images floor still needs a fresh extraction — a cache stores
-whatever this run's --min-images left in, not a fixed lower floor).
-
---update-cache is the incremental alternative for ongoing use as the DB
-grows: it still scans the DB (needed to discover what's new), but reuses
-each image's already-cached feature vector by its own stable key (a
-PreviewImage's own id, or the item's id for the legacy single-blob preview
-path) instead of re-running the tagger on it — only images that are new (or
-weren't in the cache yet) actually get extracted, and the refreshed full set
-is written back. The same applies to --include-multi-character's manually
-labeled region crops (keyed by item id + image index + box coordinates, so
-redrawing a box's coordinates correctly forces that one crop to be
-re-extracted). A relabeled/deleted item's stale row is simply dropped
-(the DB scan each run only ever keeps what's currently eligible) rather than
-reused under its old label.
-
-This is a TRAINING script only — it saves a classifier artifact (joblib
-file) but does NOT wire it into the suggestion pipeline (item.tagger /
-item.views._suggest_for_item). That integration is a deliberate follow-up
-once this command's holdout accuracy has actually been reviewed.
-
---include-multi-character (v2 extension): also learns from items with 2+
-confirmed characters, which v1 skipped entirely — but ONLY from images a
-human has manually region-labeled (Item.character_regions, via
-RegionLabelQueueManager.jsx/RegionAnnotator.jsx), never from automatic
-person-detection alone.
-
-A not-yet-cached manual region is skipped entirely (no tagger call at all)
-when its character already clears --min-images from solo images alone —
-manual-region extraction (person-detection crop + tagger forward pass) costs
-exactly as much per-image as solo extraction, so a character that both
-appears alone often AND gets boxed often in group shots would otherwise
-spend a lot of that expensive extraction on data that was never strictly
-necessary. This is purely an extraction-time efficiency rule, not a
-data-quality filter: a region that's already sitting in the cache from an
-earlier run is still used as normal (see _get_manual_labeled_rows), and a
-character that DOESN'T clear --min-images from solo alone still gets every
-one of its manual regions extracted, same as before.
-
-An earlier version of this tried to bridge multi-character items WITHOUT
-manual labels via self-training: automatically detect person boxes, accept
-the item only when the detected box count happened to equal its confirmed
-character count, and pseudo-label each box by asking a "teacher" classifier
-(trained on single-character data) which candidate character it most
-resembles, keeping only pairings above a confidence threshold. This was
-removed as unsound, not just unused: the person detector is the SAME
-detector RegionLabelQueueManager's human reviewers already routinely have
-to correct (wrong/missing/merged boxes) before a region label is trusted
-for training at all — a coincidental box-count match on an unreviewed item
-is not evidence those boxes are correct crops of the right people, it's
-just an unverified guess with no human ever looking at it. And unlike that
-guess, a human-drawn region + label pair already IS a direct, trustworthy
-(box, character) mapping — there is nothing left to infer, so there's
-nothing for a confidence-gated pseudo-labeling step to add. See
-_get_manual_labeled_rows for the actual (much simpler) v2 process: read
-Item.character_regions, resolve each region's label (collapsing a linked
-CharacterAliasGroup to its canonical name; skipping only the one region
-when 2+ unlinked names make it ambiguous — see that method's own
-docstring), and train directly on the crop. An item with 2+ characters and
-no region labels at all simply contributes nothing here — same as v1 skips
-single-character-only, this skips unlabeled-multi-character entirely
-rather than guess.
+THE EXPENSIVE PART is feature extraction (one forward pass per image, ~8s
+on CPU). Features are cached by each image's stable key (a PreviewImage id,
+or item:<id> / <item>:<image index>:<box> for crops), so --update-cache only
+extracts what is new, and checkpoints during a long run. --use-cache refits
+straight from a cache without touching the DB (never goes stale-checked, so
+it is only right when nothing was added since).
 
 Usage:
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier
-  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier --min-images 20 --backend canary
-
-  # First run: extract + cache, excluding known-bad labels (accidental
-  # mislabels only — NOT an intentional trait bucket like "white", see
-  # above)
   docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --exclude 牢屋敷メンバー --feature-cache /app/data/tagger/char_features_onnx.joblib
+      --backend canary --feature-source embedding --include-multi-character --min-images 5
 
-  # Later: tweak and refit WITHOUT re-extracting (never touches the DB)
-  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --use-cache /app/data/tagger/char_features_onnx.joblib --exclude 牢屋敷メンバー,ユキ
+  # Ongoing use as the DB grows: only newly-added images get extracted
+  python manage.py train_character_classifier --backend canary --feature-source embedding \\
+      --include-multi-character --update-cache /app/data/tagger/character_features_canary_embedding.joblib
 
-  # Ongoing use as the DB grows: only newly-added images get extracted,
-  # everything already in the cache is reused as-is
-  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --update-cache /app/data/tagger/char_features_onnx.joblib --exclude 牢屋敷メンバー
-
-  # v2: also learn from manually region-labeled multi-character images
-  docker compose -f docker-compose.prod.yml exec web python manage.py train_character_classifier \\
-      --exclude 牢屋敷メンバー --include-multi-character
+  # Tweak and refit WITHOUT extracting or touching the DB
+  python manage.py train_character_classifier --backend canary --feature-source embedding \\
+      --use-cache /app/data/tagger/character_features_canary_embedding.joblib --exclude 牢屋敷メンバー
 """
 import importlib.util
 import os
 import time
+import zlib
 from collections import defaultdict
 
 import numpy as np
 from django.core.management.base import BaseCommand, CommandError
 
-from item.models import Item, CharacterAliasGroup
+from item.models import Item, CharacterAliasGroup, PreviewImage
 from item import tagger
 
 
@@ -372,69 +300,116 @@ class MetricLearningClassifier:
         return float(np.mean(self.predict(X) == np.asarray(y)))
 
 
+_SOLO, _REGION = 'solo', 'region'
+_GRAY_SUFFIX = '|gray'
+
+# Default cap on how many rows of ONE character the classifier trains on
+# (solo images preferred, manually region-labeled crops fill the remainder).
+# Beyond this a character gains almost nothing (see the learning-curve notes
+# in the --max-images-per-character help) while every extra row costs a ~8s
+# forward pass and fit time.
+DEFAULT_MAX_PER_CHARACTER = 150
+# A region crop is a human-drawn box around ONE person cut out of a group
+# image: it can clip a neighbour, include part of another character, or
+# miss hair ornaments -- noisier evidence of identity than a solo image,
+# so it counts for less in the fit (see --region-weight).
+DEFAULT_MAX_PER_ITEM = 10  # no accuracy change vs. uncapped at 10 or 5 in item-grouped CV; fewer rows to extract
+DEFAULT_REGION_WEIGHT = 0.5
+DEFAULT_GRAY_WEIGHT = 0.5
+
+
+def _item_id_of_key(key):
+    """Item id encoded in a region key ('<item>:<image_index>:<box>') or an
+    image key ('pi:<previewimage id>' has none -> None)."""
+    head = key.split(':', 1)[0]
+    return int(head) if head.isdigit() else None
+
+
 class Command(BaseCommand):
     help = (
-        'Trains a character classifier on this app\'s own single-character-item images, '
-        'using the existing tagger as a frozen feature extractor. Training-only — does not '
-        'wire the result into the suggestion pipeline.'
+        'Trains a character classifier on this app\'s own labeled images (single-character items and, '
+        'with --include-multi-character, manually region-labeled crops), using the existing tagger as a '
+        'frozen feature extractor.'
     )
 
     def add_arguments(self, parser):
         parser.add_argument('--min-images', type=int, default=15,
-                             help='Minimum single-character images a character needs to be included '
-                                  '(default 15 — see character_image_stats to check counts first)')
-        parser.add_argument('--max-images-per-character', type=int, default=None,
-                             help='Cap how many of each character\'s images actually get extracted '
-                                  '(default: no cap). Useful for a quick architecture comparison with the '
-                                  "slower --feature-source embedding (canary/timm runs ~6x slower per "
-                                  "image than the onnx tag-probability path).")
+                             help='Minimum TOTAL training images a character needs to be included — solo '
+                                  'images plus (with --include-multi-character) manually region-labeled '
+                                  'crops, counted together (default 15 — see character_image_stats)')
+        parser.add_argument('--max-images-per-character', type=int, default=DEFAULT_MAX_PER_CHARACTER,
+                             help='Cap on how many images of ONE character are used for training, solo images '
+                                  'first and region crops filling the rest (0 = no cap; default '
+                                  f'{DEFAULT_MAX_PER_CHARACTER}). Characters above the cap stop gaining accuracy '
+                                  'long before they stop costing extraction time (~8s per image on CPU), so the '
+                                  'surplus is neither extracted nor trained on. Already-cached images are '
+                                  'preferred when choosing which ones to keep.')
+        parser.add_argument('--max-images-per-item', type=int, default=DEFAULT_MAX_PER_ITEM,
+                             help='Cap on how many images of ONE character come from ONE post (0 = no cap; '
+                                  f'default {DEFAULT_MAX_PER_ITEM}). A 25-page post is one piece of evidence about a '
+                                  'character, not 25, and left alone it lets that single post dominate the class.')
+        parser.add_argument('--region-weight', type=float, default=DEFAULT_REGION_WEIGHT,
+                             help='Training weight of a manually region-labeled crop relative to a solo image '
+                                  f'(default {DEFAULT_REGION_WEIGHT}) — a hand-drawn box around one person in a '
+                                  'group image is less reliable evidence of identity than a solo image.')
+        parser.add_argument('--grayscale-augment', action='store_true',
+                             help='Also extract each training image\'s grayscale version and train on it as an '
+                                  'extra row (same label, --gray-weight), so a black-and-white drawing of a '
+                                  'character lands near that character instead of in a "monochrome" cluster. '
+                                  'Doubles extraction cost. The holdout is always real images only.')
+        parser.add_argument('--gray-weight', type=float, default=DEFAULT_GRAY_WEIGHT,
+                             help=f'Training weight of a grayscale-augmented row (default {DEFAULT_GRAY_WEIGHT}).')
+        parser.add_argument('--no-refit-all', action='store_true',
+                             help='Save the model fit on the training split only (the one the holdout accuracy '
+                                  'describes) instead of refitting on every row afterwards.')
         parser.add_argument('--exclude', type=str, default='',
                              help='Comma-separated character names to drop entirely, even if they clear '
                                   '--min-images — for labels that are not one visually-coherent character '
                                   '(a catch-all OC bucket, a "whole cast" group tag, etc.)')
-        parser.add_argument('--feature-source', choices=['tags', 'embedding'], default='tags',
-                             help="'tags' (default): the tagger's own general-tag probability vector "
-                                  "(tagger._raw_predict) — works with either --backend. 'embedding': the "
-                                  "canary/timm backend's pooled pre-classification-head embedding "
-                                  "(tagger.extract_embedding) — retains visual information the tag "
-                                  "vocabulary bottleneck already discarded; requires --backend canary.")
-        parser.add_argument('--backend', choices=['onnx', 'canary'], default='onnx',
+        parser.add_argument('--feature-source', type=str, default='tags',
+                             help="What the classifier sees, one or several joined with '+': 'tags' (the "
+                                  "tagger's general-tag probability vector), 'embedding' (the canary/timm "
+                                  "model's pooled pre-classification-head embedding — keeps visual information "
+                                  "the tag vocabulary discards; needs --backend canary), 'ccip' (deepghs' "
+                                  "same-character embedding via imgutils — trained so pictures of one character "
+                                  "land together whatever the outfit; needs no tagger forward pass at all). "
+                                  "E.g. 'tags+ccip'. 'both' = 'tags+embedding'. The artifact records the choice, "
+                                  "so inference needs no flag.")
+        parser.add_argument('--backend', choices=['onnx', 'canary'], default='canary',
                              help="Tagger backend to use as the frozen feature extractor: 'onnx' (small, "
                                   "always available) or 'canary' (needs INSTALL_TIMM_TAGGER=1). Whichever "
                                   "is chosen, the SAME backend must be used later at inference time to "
                                   "reproduce these exact features — the saved artifact records which one.")
         parser.add_argument('--test-size', type=float, default=0.15,
-                             help='Fraction of images per character held out to report accuracy (default 0.15)')
+                             help='Fraction of items held out to report accuracy (default 0.15). The split is '
+                                  'by ITEM, not by row: several crops/pages of one post never straddle '
+                                  'train and test.')
         parser.add_argument('--random-state', type=int, default=42,
                              help='Random seed for the train/holdout split (default 42)')
         parser.add_argument('--output', type=str, default=None,
                              help='Where to save the trained classifier (.joblib). Default: '
                                   "character_classifier_<backend>.joblib under the tagger's own cache dir.")
         parser.add_argument('--feature-cache', type=str, default=None,
-                             help='Where to save extracted (item_id, character, feature) data after '
-                                  "extraction, for reuse by a later --use-cache run. Default: "
-                                  "character_features_<backend>.joblib under the tagger's own cache dir.")
+                             help='Where to save extracted features after extraction, for reuse by a later '
+                                  "--use-cache run. Default: character_features_<backend>[_<feature source>]"
+                                  ".joblib under the tagger's own cache dir.")
         parser.add_argument('--use-cache', type=str, default=None,
                              help='Path to a previously-saved --feature-cache/--update-cache file — skip DB '
                                   'scanning and feature extraction entirely and refit straight from these '
-                                  'cached features, exactly as saved (still applies --exclude/--min-images '
-                                  'as filters first). Use this for a quick --exclude/--min-images iteration '
-                                  'when you know no new images were added since the cache was made — for '
-                                  'ongoing use as the DB grows, prefer --update-cache instead.')
+                                  'cached features, exactly as saved (still applies --exclude/--min-images/'
+                                  '--max-images-per-character as filters first).')
         parser.add_argument('--update-cache', type=str, default=None,
                              help='Path to a --feature-cache/--update-cache file to incrementally refresh: '
                                   'scans the DB as usual, but reuses each already-cached image\'s feature '
                                   'vector instead of re-running the (expensive) tagger forward pass on it, '
-                                  "only actually extracting images that are new (or weren't yet successfully "
-                                  'cached) since the file was last written. The file is then overwritten '
-                                  '(or --feature-cache written instead, if given) with the refreshed full '
-                                  'set. If the path does not exist yet, this is just a normal first '
-                                  'extraction that creates it. Mutually exclusive with --use-cache (that one '
-                                  'skips the DB scan needed to discover what is new).')
+                                  "only extracting images that are new (or weren't yet cached). The file is "
+                                  'overwritten (or --feature-cache written instead, if given) with the refreshed '
+                                  'set, and checkpointed during a long extraction so an interrupted run keeps '
+                                  'what it already computed. Mutually exclusive with --use-cache.')
         parser.add_argument('--include-multi-character', action='store_true',
                              help='Also learn from multi-character items, but ONLY the ones a human has '
                                   'manually region-labeled (Item.character_regions — see module docstring). '
-                                  'Off by default since most archives have few or no labeled regions yet.')
+                                  'Their crops count toward --min-images together with solo images.')
         parser.add_argument('--classifier',
                              choices=['logreg', 'mlp', 'nearest_centroid', 'metric_learning'], default='logreg',
                              help="Classifier head to fit on top of the (frozen) features: 'logreg' "
@@ -444,74 +419,342 @@ class Command(BaseCommand):
                                   "each class's mean feature vector, no gradient training), or "
                                   "'metric_learning' (real gradient-trained metric learning: an ArcFace-style "
                                   "learned embedding projection + margin loss — the literature survey's "
-                                  "priority-1 approach; requires torch, see requirements-timm.txt)")
+                                  "priority-1 approach; requires torch, see requirements-timm.txt). Only "
+                                  "'logreg' honors --region-weight/--gray-weight.")
+
+    # ------------------------------------------------------------------
+    # Candidate survey: what COULD be trained on, before any extraction.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_region_label(names, linked_groups):
+        """Single training label for a region's character names, or None
+        when ambiguous. A region can carry 2+ names either because
+        person-detection merged two overlapping people into one box
+        (genuinely ambiguous — no single identity to teach) or because the
+        same person legitimately has 2+ names (a magical girl's real name
+        + transformed name). A CharacterAliasGroup with linked=True whose
+        name-set matches exactly marks the second case: it's trained on
+        under that group's alphabetically-first name (views.
+        _expand_character_alias re-expands it at inference)."""
+        if len(names) == 1:
+            return names[0]
+        group = linked_groups.get(tuple(sorted(set(names))))
+        return group[0] if group is not None else None
+
+    def _survey(self, include_regions):
+        """[{'kind','char','item_id','key', ...}, ...] for every solo image
+        and (include_regions) region crop in the DB, WITHOUT reading any
+        image bytes — so a character's TOTAL support (solo + regions) is
+        known before deciding what's worth extracting."""
+        cands = []
+        annotated_ids = set()
+        n_invalid = n_ambiguous = 0
+
+        if include_regions:
+            linked_groups = {
+                tuple(sorted(set(g.characters))): sorted(set(g.characters))
+                for g in CharacterAliasGroup.objects.filter(linked=True)
+            }
+            for item in Item.objects.exclude(character_regions=[]).only('id', 'character_regions'):
+                annotated_ids.add(item.id)
+                for region in (item.character_regions or []):
+                    box, names = region.get('box'), region.get('characters') or []
+                    if not box or not names:
+                        continue
+                    try:
+                        x1, y1, x2, y2 = (float(v) for v in box)
+                    except (TypeError, ValueError):
+                        n_invalid += 1
+                        continue
+                    if x2 <= x1 or y2 <= y1:
+                        n_invalid += 1  # e.g. "Coordinate 'right' is less than 'left'" at extraction time
+                        continue
+                    label = self._resolve_region_label(names, linked_groups)
+                    if label is None:
+                        n_ambiguous += 1
+                        continue
+                    image_index = region.get('image_index')
+                    cands.append({
+                        'kind': _REGION, 'char': label, 'item_id': item.id, 'image_index': image_index,
+                        'box': tuple(box), 'key': f'{item.id}:{image_index}:{",".join(str(v) for v in box)}',
+                    })
+
+        preview_ids = defaultdict(list)
+        for item_id, pid in PreviewImage.objects.order_by('item_id', 'order').values_list('item_id', 'id'):
+            preview_ids[item_id].append(pid)
+        legacy_preview = set(Item.objects.filter(preview_data__isnull=False).values_list('id', flat=True))
+        for item_id, characters in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).values_list(
+                'id', 'characters'):
+            chars = [c for c in (characters or []) if c]
+            if len(chars) != 1:
+                continue  # solo = single-character items only
+            if item_id in annotated_ids:
+                continue  # its hand-drawn crop(s) supersede the whole frame
+            char = chars[0]
+            if preview_ids.get(item_id):
+                for pid in preview_ids[item_id]:
+                    cands.append({'kind': _SOLO, 'char': char, 'item_id': item_id, 'key': f'pi:{pid}'})
+            elif item_id in legacy_preview:
+                cands.append({'kind': _SOLO, 'char': char, 'item_id': item_id, 'key': f'item:{item_id}'})
+
+        if n_invalid:
+            self.stdout.write(self.style.WARNING(
+                f'{n_invalid} region(s) skipped: invalid box (right<=left or bottom<=top, or not numbers) — '
+                'see normalize_character_regions.'
+            ))
+        if n_ambiguous:
+            self.stdout.write(self.style.WARNING(
+                f'{n_ambiguous} region(s) skipped: 2+ characters on one box with no linked CharacterAliasGroup '
+                '(ambiguous identity).'
+            ))
+        return cands
+
+    @staticmethod
+    def _cands_from_cache(base_cache):
+        """The --use-cache counterpart of _survey: candidates (with their
+        features already attached) straight from the cache file."""
+        cands, region_item_ids = [], set()
+        for char, feat, key in (base_cache.get('manual_rows') or []):
+            if key is None or key.endswith(_GRAY_SUFFIX):
+                continue
+            iid = _item_id_of_key(key)
+            region_item_ids.add(iid)
+            cands.append({'kind': _REGION, 'char': char, 'item_id': iid, 'key': key, 'feat': feat})
+        for item_id, char, feat, key in base_cache['rows']:
+            if key is None or key.endswith(_GRAY_SUFFIX) or item_id in region_item_ids:
+                continue
+            cands.append({'kind': _SOLO, 'char': char, 'item_id': item_id, 'key': key, 'feat': feat})
+        return cands
+
+    @staticmethod
+    def _select(cands, exclude, min_images, cap, cached_keys, per_item_cap=0):
+        """-> (selected, per_char) where per_char is
+        {char: (n_solo, n_region, n_used)} for every eligible character.
+
+        Eligibility is decided on the TOTAL (solo + region) count, so a
+        newly added character with 3 solo images but 53 labeled regions
+        has 56 and is included. Above `cap`, solo images are kept first
+        (more reliable), then regions; within each tier already-cached
+        rows are preferred (free), then a stable hash order (the same
+        subset every run, not a different random draw each time)."""
+        def priority(c):
+            return (c['kind'] != _SOLO, c['key'] not in cached_keys, zlib.crc32(c['key'].encode('utf-8')))
+
+        by_char = defaultdict(list)
+        for c in cands:
+            if c['char'] not in exclude:
+                by_char[c['char']].append(c)
+        if per_item_cap:
+            # 25 pages of ONE post are one piece of evidence about a character,
+            # not 25 -- left alone they let a single post dominate its class.
+            for char, cs in by_char.items():
+                per_item = defaultdict(list)
+                for c in sorted(cs, key=priority):
+                    per_item[c['item_id']].append(c)
+                by_char[char] = [c for group in per_item.values() for c in group[:per_item_cap]]
+        cap = max(cap, min_images) if cap else 0
+        selected, per_char = [], {}
+        for char, cs in by_char.items():
+            if len(cs) < min_images:
+                continue
+            n_solo = sum(1 for c in cs if c['kind'] == _SOLO)
+            if cap and len(cs) > cap:
+                cs = sorted(cs, key=priority)[:cap]
+            per_char[char] = (n_solo, sum(1 for c in by_char[char] if c['kind'] == _REGION), len(cs))
+            selected.extend(cs)
+        return selected, per_char
+
+    # ------------------------------------------------------------------
+
+    def _compute_feature(self, image_bytes, tagger_backend, feature_source, gray=False):
+        """(feature_vector, feature_names) for one image: the parts named in
+        `feature_source` ('tags', 'embedding', 'ccip'), concatenated in that
+        order. Tags and embedding come out of ONE tagger forward pass; CCIP is
+        its own (much cheaper) model. Names are placeholders for the
+        embedding/CCIP dimensions — only len() matters to the feature-length
+        guard and the cache's ordering check."""
+        if gray:
+            image_bytes = tagger.to_grayscale_bytes(image_bytes)
+        parts = tagger.feature_parts(feature_source)
+        raw = embedding = None
+        if 'tags' in parts or 'embedding' in parts:
+            raw, embedding = tagger._raw_predict_with_embedding(image_bytes, None, tagger_backend)
+        vectors, names = [], []
+        for part in parts:
+            if part == 'tags':
+                preds, tag_names, _r, general_idx, _c = raw
+                vectors.append(np.asarray(preds, dtype=np.float32)[general_idx])
+                names += [tag_names[i] for i in general_idx]
+            elif part == 'embedding':
+                if embedding is None:
+                    raise RuntimeError("feature source 'embedding' needs the canary/timm backend")
+                vectors.append(embedding)
+                names += [f'embedding_{i}' for i in range(len(embedding))]
+            else:
+                vec = tagger.ccip_feature(image_bytes)
+                vectors.append(vec)
+                names += [f'ccip_{i}' for i in range(len(vec))]
+        return (np.concatenate(vectors) if len(vectors) > 1 else vectors[0]), names
+
+    def _image_bytes_for(self, cand, last):
+        """Raw image bytes for a candidate (crop applied for a region);
+        `last` is a one-entry cache of the previous (item, image) so several
+        boxes on one image decode it once. None if unavailable."""
+        from item.views import _select_image_bytes
+
+        key = cand['key']
+        if cand['kind'] == _SOLO:
+            if key.startswith('pi:'):
+                return PreviewImage.objects.filter(id=int(key[3:])).values_list('data', flat=True).first()
+            return Item.objects.filter(id=cand['item_id']).values_list('preview_data', flat=True).first()
+        ident = (cand['item_id'], cand['image_index'])
+        if last.get('ident') != ident:
+            item = Item.objects.only('id').get(id=cand['item_id'])
+            image_bytes, _idx = _select_image_bytes(item, cand['image_index'])
+            last['ident'], last['bytes'] = ident, image_bytes
+        if last['bytes'] is None:
+            return None
+        return tagger._crop_with_padding(last['bytes'], cand['box'])
+
+    def _extract(self, selected, cached, tagger_backend, feature_source, gray, expected_names, checkpoint):
+        """Attach 'feat' (and 'gray_feat' when `gray`) to every selected
+        candidate, reusing `cached` {key: feature} where possible. Returns
+        (rows_ok, general_tag_names, n_reused, n_new). `checkpoint(rows)` is
+        called every few hundred new extractions so a multi-hour run that is
+        interrupted keeps what it computed."""
+        general_tag_names = expected_names
+        n_base_cached = sum(1 for c in selected if c['key'] in cached)
+        todo = [c for c in selected if c['key'] not in cached or (gray and c['key'] + _GRAY_SUFFIX not in cached)]
+        todo.sort(key=lambda c: (c['kind'], c['item_id'], str(c.get('image_index'))))
+        self.stdout.write(
+            f'\nExtracting features for {len(selected)} images (backend={tagger_backend}, '
+            f'feature_source={feature_source}{", +grayscale" if gray else ""}) — '
+            f'{n_base_cached} already cached, {len(selected) - n_base_cached} new'
+            + (f' ({len(todo)} image(s) need extraction, the rest only their grayscale version)' if gray else '')
+            + '...'
+        )
+        n_new, t0, last, done = 0, time.time(), {}, 0
+        for cand in todo:
+            done += 1
+            try:
+                image_bytes = self._image_bytes_for(cand, last)
+                if image_bytes is None:
+                    self.stderr.write(f'item {cand["item_id"]}: no image available for {cand["key"]}, skipping')
+                    continue
+                image_bytes = bytes(image_bytes)
+                if cand['key'] not in cached:
+                    feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
+                    if general_tag_names is None:
+                        general_tag_names = names
+                    elif names != general_tag_names:
+                        self.stderr.write(f'item {cand["item_id"]}: feature ordering mismatch, skipping')
+                        continue
+                    cached[cand['key']] = feature
+                if gray and cand['key'] + _GRAY_SUFFIX not in cached:
+                    gfeature, _n = self._compute_feature(image_bytes, tagger_backend, feature_source, gray=True)
+                    cached[cand['key'] + _GRAY_SUFFIX] = gfeature
+                n_new += 1
+            except Exception as e:
+                self.stderr.write(f'item {cand["item_id"]}: feature extraction failed ({e}), skipping {cand["key"]}')
+                continue
+            if done % 50 == 0 or done == len(todo):
+                self.stdout.write(f'  {done}/{len(todo)} newly extracted ({time.time() - t0:.0f}s elapsed)')
+            if n_new and n_new % 300 == 0:
+                checkpoint()
+        rows = []
+        for c in selected:
+            if c['key'] in cached:
+                c['feat'] = cached[c['key']]
+                c['gray_feat'] = cached.get(c['key'] + _GRAY_SUFFIX)
+                rows.append(c)
+        return rows, general_tag_names, n_base_cached, n_new
+
+    # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
         try:
             import joblib
             from sklearn.linear_model import LogisticRegression
             from sklearn.neural_network import MLPClassifier
-            from sklearn.model_selection import train_test_split
+            from sklearn.model_selection import StratifiedGroupKFold, train_test_split
             from sklearn.metrics import classification_report
+            from sklearn.pipeline import Pipeline
+            from sklearn.preprocessing import StandardScaler
         except ImportError as e:
             # raise, not self.stderr.write(...); return -- this command runs
             # as a subprocess the GUI panel (see item/classifier_training.py)
             # only learns the outcome of via its exit code; a bare `return`
-            # here exits 0 (success) even though nothing was actually
-            # trained, which is exactly what made a failed run (e.g.
-            # --backend canary with timm not installed) show as "training
-            # completed successfully" in the app. Same reasoning applies to
-            # every other early-abort `return` in this method below.
+            # exits 0 (success) even though nothing was trained.
             raise CommandError(f'scikit-learn/joblib not available: {e}')
 
         classifier_choice = options['classifier']
-
-        def make_classifier():
-            if classifier_choice == 'mlp':
-                # One small hidden layer — with only a few hundred to a
-                # couple thousand training rows, a deeper/wider network
-                # would just overfit. L2 regularization (alpha) substitutes
-                # for early_stopping here — this sklearn version's
-                # early_stopping path crashes on string class labels
-                # (an internal scoring bug, not specific to this dataset).
-                return MLPClassifier(hidden_layer_sizes=(128,), max_iter=500, alpha=1e-2,
-                                      random_state=options['random_state'])
-            if classifier_choice == 'nearest_centroid':
-                return NearestCentroidClassifier()
-            if classifier_choice == 'metric_learning':
-                return MetricLearningClassifier(random_state=options['random_state'])
-            return LogisticRegression(max_iter=2000, class_weight='balanced')
-
         min_images = options['min_images']
+        cap = options['max_images_per_character']
+        region_weight, gray_weight = options['region_weight'], options['gray_weight']
         exclude = {c.strip() for c in options['exclude'].split(',') if c.strip()}
         backend_choice = options['backend']
         feature_source = options['feature_source']
+        gray = options['grayscale_augment']
+        include_regions = options['include_multi_character']
         tagger_backend = 'timm' if backend_choice == 'canary' else 'onnx'
-        if tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
+
+        needs_forward = any(p in ('tags', 'embedding') for p in tagger.feature_parts(feature_source))
+        if needs_forward and tagger_backend == 'timm' and not getattr(tagger, 'HAVE_TIMM', False):
             raise CommandError(
                 "--backend canary requires the 'timm' backend, which isn't installed on this server "
                 '(see requirements-timm.txt / the INSTALL_TIMM_TAGGER build arg).'
             )
-        if feature_source == 'embedding' and backend_choice != 'canary':
-            raise CommandError('--feature-source embedding requires --backend canary.')
+        parts = tagger.feature_parts(feature_source)
+        unknown = [p for p in parts if p not in ('tags', 'embedding', 'ccip')]
+        if unknown or not parts:
+            raise CommandError(f"--feature-source: unknown part(s) {unknown or feature_source!r} (use tags/embedding/ccip joined by '+').")
+        if 'embedding' in parts and backend_choice != 'canary':
+            raise CommandError(f'--feature-source {feature_source} requires --backend canary.')
+        if 'ccip' in parts and not (getattr(tagger, 'HAVE_CCIP', False) and tagger.ccip_available()):
+            raise CommandError("--feature-source with 'ccip' needs dghs-imgutils (see requirements.txt).")
         if classifier_choice == 'metric_learning' and not _have_torch():
             raise CommandError(
                 "--classifier metric_learning requires the optional 'torch' dependency "
                 '(see requirements-timm.txt / the INSTALL_TIMM_TAGGER build arg), which is not installed.'
             )
-
-        general_tag_names = None
-        use_cache_path = options['use_cache']
-        update_cache_path = options['update_cache']
+        use_cache_path, update_cache_path = options['use_cache'], options['update_cache']
         if use_cache_path and update_cache_path:
             raise CommandError(
                 '--use-cache と --update-cache は同時に指定できません(用途が異なります — '
                 'どちらか一方を選んでください)。'
             )
 
-        # --use-cache always loads (file must exist, same as before).
-        # --update-cache loads only if a file already sits at that path —
-        # otherwise this is just a normal first extraction that creates one.
+        def make_classifier():
+            if classifier_choice == 'mlp':
+                return MLPClassifier(hidden_layer_sizes=(128,), max_iter=500, alpha=1e-2,
+                                      random_state=options['random_state'])
+            if classifier_choice == 'nearest_centroid':
+                return NearestCentroidClassifier()
+            if classifier_choice == 'metric_learning':
+                return MetricLearningClassifier(random_state=options['random_state'])
+            # class balance is applied through sample weights below
+            if tagger.feature_parts(feature_source) == ['tags']:
+                return LogisticRegression(max_iter=2000)
+            # embedding/CCIP features have arbitrary per-dimension scale, so they
+            # are standardized; C=0.3 sat on the flat top of the sweep for
+            # embedding+CCIP (0.1 and 0.3 tied; 1 and 10 were worse or equal).
+            # Untuned when 'tags' (11.6k dims, dominating after scaling) is
+            # mixed in -- prefer embedding+ccip.
+            return Pipeline([('scale', StandardScaler()), ('clf', LogisticRegression(max_iter=3000, C=0.3))])
+
+        def fit_classifier(X_fit, y_fit, w_fit):
+            clf = make_classifier()
+            if classifier_choice == 'logreg':
+                if hasattr(clf, 'steps'):
+                    clf.fit(X_fit, y_fit, **{f'{clf.steps[-1][0]}__sample_weight': w_fit})
+                else:
+                    clf.fit(X_fit, y_fit, sample_weight=w_fit)
+            else:
+                clf.fit(X_fit, y_fit)
+            return clf
+
+        # ---- load cache -------------------------------------------------
         base_cache = None
         if use_cache_path:
             self.stdout.write(f"Loading cached features from {use_cache_path}...")
@@ -519,7 +762,7 @@ class Command(BaseCommand):
         elif update_cache_path and os.path.exists(update_cache_path):
             self.stdout.write(f"Loading cached features from {update_cache_path} to reuse where possible...")
             base_cache = joblib.load(update_cache_path)
-
+        general_tag_names = None
         if base_cache is not None:
             if base_cache.get('backend') != tagger_backend or base_cache.get('feature_source', 'tags') != feature_source:
                 raise CommandError(
@@ -528,257 +771,202 @@ class Command(BaseCommand):
                     f"feature_source={feature_source!r} was requested — features aren't compatible."
                 )
             general_tag_names = base_cache['general_tag_names']
-            # Normalize pre-image-key cache files (plain 3-tuples, from
-            # before --update-cache existed) to the current 4-tuple shape
-            # HERE — every other use of base_cache['rows'] below (both the
-            # cached_solo_features lookup dict and, for --use-cache, raw_rows
-            # itself) assumes 4 elements; doing this once right after
-            # loading means neither of those has to special-case the old
-            # shape again on its own.
             base_cache['rows'] = [r if len(r) == 4 else (*r, None) for r in base_cache['rows']]
 
-        # Keyed by each row's own stable image_key/region_key (see
-        # _extract_features/_get_manual_labeled_rows) so --update-cache can
-        # reuse an already-extracted feature by IDENTITY — rows from before
-        # that key existed have `None` here and are simply never reused.
-        cached_solo_features = {
-            key: feat for _item_id, _char, feat, key in (base_cache['rows'] if base_cache else []) if key is not None
-        }
-        cached_manual_features = {
-            key: feat for _char, feat, key in ((base_cache.get('manual_rows') or []) if base_cache else [])
-            if key is not None
-        }
-
-        if use_cache_path:
-            raw_rows = base_cache['rows']  # already normalized to 4-tuples above
-            self.stdout.write(f'Loaded {len(raw_rows)} cached (item, character, feature) rows.\n')
-        else:
-            raw_rows, general_tag_names, n_reused, n_new = self._extract_features(
-                min_images, tagger_backend, feature_source, options['max_images_per_character'],
-                cached_features=cached_solo_features, expected_general_tag_names=general_tag_names,
-            )
-            if raw_rows is None:
-                # _extract_features already wrote the specific reason via
-                # self.stderr before returning None -- this just needs to
-                # turn that into a nonzero exit (see the ImportError catch
-                # above for why a plain `return` isn't enough).
-                raise CommandError('特徴抽出に失敗しました(詳細は上記のログを確認してください)。')
-            if cached_solo_features:
-                self.stdout.write(f'{n_reused} image(s) reused from cache, {n_new} newly extracted.\n')
-
-        # Computed once here (not just at the very end) so the checkpoint
-        # save right below and the final save after manual-region extraction
-        # both write to the exact same file.
         default_cache_name = (
             f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
-            else f'character_features_{backend_choice}_{feature_source}.joblib'
+            else f'character_features_{backend_choice}_{feature_source.replace("+", "_")}.joblib'
         )
         feature_cache_path = (
-            options['feature_cache'] or update_cache_path
-            or os.path.join(tagger._data_dir(), default_cache_name)
+            options['feature_cache'] or update_cache_path or os.path.join(tagger._data_dir(), default_cache_name)
         )
 
-        # Checkpoint the solo-image features to disk NOW, before manual-
-        # region extraction (--include-multi-character) even starts — that
-        # step can itself run for hours with NO progress output at all on a
-        # large labeled set (see _get_manual_labeled_rows), and it would be
-        # a real loss to make solo extraction's own many-hour run (the part
-        # that just finished) unrecoverable if the process is killed or
-        # crashes during the second, silent stretch. Written again below
-        # (with manual_rows folded in) once that part finishes too — this
-        # first write just protects against losing THIS part specifically.
-        if not use_cache_path:
-            joblib.dump({'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
-                         'general_tag_names': general_tag_names},
-                        feature_cache_path)
+        cached = {}
+        if base_cache is not None:
+            for _iid, _char, feat, key in base_cache['rows']:
+                if key is not None:
+                    cached[key] = feat
+            for _char, feat, key in (base_cache.get('manual_rows') or []):
+                if key is not None:
+                    cached[key] = feat
 
-        # An item with manual character_regions gets a reliable, human-drawn
-        # crop fed straight in below when --include-multi-character is on —
-        # including its whole-image feature here too would train on the
-        # SAME image/character twice (once on the full frame, once on the
-        # region crop), for no benefit, since the crop already supersedes
-        # the noisier whole-image signal. Only excluded when that
-        # replacement is actually going to run this pass; raw_rows/the
-        # feature cache itself stays untouched (deliberately -- see
-        # _extract_features' own docstring on staying reusable across
-        # differently-flagged runs), this just skips folding those specific
-        # rows into X/y.
-        annotated_item_ids = (
-            set(Item.objects.exclude(character_regions=[]).values_list('id', flat=True))
-            if options['include_multi_character'] else set()
-        )
-
-        # Apply --exclude as a filter on whatever rows we now have (freshly
-        # extracted or loaded from cache) — this is the cheap part, so
-        # changing it never requires touching the tagger/DB again.
-        # --min-images is applied further below, AFTER manual region rows
-        # (if any) are merged in — see that block's own comment for why
-        # applying it here, before that merge, would be wrong.
-        by_char = defaultdict(list)
-        skipped_annotated = 0
-        for item_id, char, feature, _image_key in raw_rows:
-            if char in exclude:
-                continue
-            if item_id in annotated_item_ids:
-                skipped_annotated += 1
-                continue
-            by_char[char].append(feature)
-        if skipped_annotated:
-            self.stdout.write(
-                f'Skipped {skipped_annotated} whole-image feature(s) for region-annotated items '
-                '(their manually-labeled crop is used instead — see below).'
+        # ---- survey, select, extract --------------------------------------
+        if use_cache_path:
+            cands = self._cands_from_cache(base_cache)
+            self.stdout.write(f'Loaded {len(cands)} cached feature row(s) (no DB scan).\n')
+        else:
+            cands = self._survey(include_regions)
+        selected, per_char = self._select(cands, exclude, min_images, cap, set(cached), options['max_images_per_item'])
+        if len(per_char) < 2:
+            raise CommandError(
+                f'Only {len(per_char)} character(s) have >= {min_images} images (solo'
+                f'{" + region" if include_regions else ""}) after --exclude — need at least 2 classes.'
             )
+        n_solo_sel = sum(1 for c in selected if c['kind'] == _SOLO)
+        self.stdout.write(
+            f'{len(per_char)} characters qualify (>= {min_images} images, solo + region counted together; '
+            f'cap {cap or "none"}/character): {n_solo_sel} solo + {len(selected) - n_solo_sel} region row(s) selected.'
+        )
+        for c, (ns, nr, nu) in sorted(per_char.items(), key=lambda kv: -kv[1][2]):
+            capped = f'  (capped from {ns + nr})' if nu < ns + nr else ''
+            self.stdout.write(f'  {nu:>5}  {c}  [{ns} solo + {nr} region]{capped}')
 
-        # Manual region labels (see Item.character_regions, populated via
-        # RegionLabelQueueManager.jsx/RegionAnnotator.jsx) are ground truth
-        # — a human already said "this box is character X" — so they're
-        # used directly, with no confidence gate or automatic person-
-        # detection step of any kind (see module docstring for why an
-        # earlier automatic-bootstrap approach was removed: it re-ran the
-        # same person detector human reviewers already have to correct, so
-        # a coincidental box-count match proved nothing). An item with 2+
-        # characters and no region labels at all contributes nothing here
-        # — it's skipped, never guessed at.
-        #
-        # Merged into `by_char` HERE, before --min-images is applied and
-        # before the train/test split, rather than tacked onto X_train
-        # unconditionally afterward (the previous design): a character that
-        # never appears alone — only in region-labeled CP/MULTIPLE images —
-        # used to never be counted in the "characters qualify" tally at all
-        # (that was computed from solo images only), NOR get any chance to
-        # clear --min-images, yet its manual rows still got added to
-        # training completely unconditionally regardless of that gate —
-        # and, since they were added after the stratified split, NEVER once
-        # ended up in the held-out test set either, so the per-class holdout
-        # report silently never assessed them. Merging first means the
-        # printed tally reflects a character's TRUE total support (solo +
-        # manual) and every included class gets a genuine holdout split.
-        manual_counts = defaultdict(int)
-        # Characters that already clear --min-images from solo images ALONE
-        # (i.e. before any manual-region data is even considered) — passed
-        # into _get_manual_labeled_rows below so it can skip running the
-        # tagger on a not-yet-cached region for one of these characters
-        # entirely (see that method's own docstring for why this only
-        # affects NEW extraction, never data that's already sitting in the
-        # cache for free). A character that ISN'T in this set may still
-        # need every one of its manual regions — it might only clear
-        # --min-images (or exist at all) BECAUSE of them.
-        solo_satisfied = {c for c, feats in by_char.items() if len(feats) >= min_images}
-        # Saved into the cache file below alongside raw_rows whenever this
-        # run actually attempted manual-region extraction (see the write
-        # block's own comment on why NOT saving an empty/absent list are
-        # different things).
-        manual_rows = []
-        if options['include_multi_character']:
-            if use_cache_path and base_cache.get('manual_rows') is not None:
-                manual_rows = base_cache['manual_rows']
-                self.stdout.write(f'Loaded {len(manual_rows)} cached manually-labeled region(s) (no DB scan).\n')
-            else:
-                if use_cache_path:
-                    self.stdout.write(self.style.WARNING(
-                        'このキャッシュには手動領域ラベルの分が含まれていないため、その部分だけDBを'
-                        'スキャンして抽出します(単体画像の特徴量はキャッシュのみで済んでいます)。'
-                    ))
-                manual_rows, n_manual_reused, n_manual_new, n_manual_skipped = self._get_manual_labeled_rows(
-                    tagger_backend, options['feature_source'], general_tag_names,
-                    cached_features=cached_manual_features, solo_satisfied=solo_satisfied,
-                )
-                if cached_manual_features:
-                    self.stdout.write(f'{n_manual_reused} region(s) reused from cache, {n_manual_new} newly extracted.\n')
-                if n_manual_skipped:
-                    self.stdout.write(
-                        f'{n_manual_skipped} not-yet-cached region(s) skipped entirely (their character already '
-                        f'has >= {min_images} single-character images on its own — see character_image_stats to '
-                        'double check, or lower --min-images if you specifically want these regions included).\n'
-                    )
-            for char, feature, _region_key in manual_rows:
-                if char in exclude:
-                    continue
-                by_char[char].append(feature)
-                manual_counts[char] += 1
-            if not manual_rows:
-                self.stdout.write(self.style.WARNING(
-                    'No manually-labeled regions found. (See RegionLabelQueueManager.jsx to label multi-character items.)'
-                ))
+        def write_cache():
+            if use_cache_path:
+                return
+            solo_rows, manual_rows = [], []
+            by_key = {c['key']: c for c in cands}
+            for key, feat in cached.items():
+                base = key[:-len(_GRAY_SUFFIX)] if key.endswith(_GRAY_SUFFIX) else key
+                cand = by_key.get(base)
+                if cand is None:
+                    continue  # a no-longer-eligible row is dropped, never reused under a stale label
+                if cand['kind'] == _SOLO:
+                    solo_rows.append((cand['item_id'], cand['char'], feat, key))
+                else:
+                    manual_rows.append((cand['char'], feat, key))
+            joblib.dump({'rows': solo_rows, 'manual_rows': manual_rows, 'backend': tagger_backend,
+                         'feature_source': feature_source, 'general_tag_names': general_tag_names}, feature_cache_path)
 
-        # Persist the (possibly refreshed) feature set for reuse next time —
-        # same feature_cache_path already checkpointed with just the solo
-        # rows above, now overwritten once more with manual_rows folded in
-        # too. --use-cache deliberately never writes anything back (it
-        # trusts the file exactly as loaded, with no DB check at all); both
-        # a plain fresh run and --update-cache always do, so a first run
-        # already produces a file --update-cache can build on incrementally
-        # later.
-        if not use_cache_path:
-            cache_payload = {'rows': raw_rows, 'backend': tagger_backend, 'feature_source': feature_source,
-                              'general_tag_names': general_tag_names}
-            # Only recorded when this run actually attempted manual-region
-            # extraction (--include-multi-character) — an omitted key means
-            # "not yet computed, scan the DB if asked for it later", while
-            # an empty list means "computed, and there were genuinely none
-            # at the time" — conflating the two would make a later
-            # --use-cache run silently skip real manual regions that this
-            # particular run just never looked for.
-            if options['include_multi_character']:
-                cache_payload['manual_rows'] = manual_rows
-            joblib.dump(cache_payload, feature_cache_path)
-            self.stdout.write(self.style.SUCCESS(
-                f'\nCached {len(raw_rows)} extracted feature(s)'
-                + (f' + {len(manual_rows)} manually-labeled region(s)' if options['include_multi_character'] else '')
-                + f' to {feature_cache_path} (reuse with --use-cache to skip re-extraction entirely next time, '
-                'or --update-cache to keep it fresh incrementally as the DB grows).\n'
+        if use_cache_path:
+            rows = [c for c in selected]
+            for c in rows:
+                c['gray_feat'] = cached.get(c['key'] + _GRAY_SUFFIX)
+        else:
+            rows, general_tag_names, n_reused, n_new = self._extract(
+                selected, cached, tagger_backend, feature_source, gray, general_tag_names, write_cache,
+            )
+            self.stdout.write(f'{n_reused} image(s) reused from cache, {n_new} newly extracted.\n')
+            write_cache()
+            self.stdout.write(self.style.SUCCESS(f'Cached features to {feature_cache_path}\n'))
+        if len(rows) < 2:
+            raise CommandError('特徴抽出に失敗しました(詳細は上記のログを確認してください)。')
+
+        # ---- assemble matrix ----------------------------------------------
+        feats, labels, groups, kinds, aug, base_w = [], [], [], [], [], []
+        for c in rows:
+            kw = 1.0 if c['kind'] == _SOLO else region_weight
+            feats.append(c['feat']); labels.append(c['char']); groups.append(c['item_id'])
+            kinds.append(c['kind']); aug.append(False); base_w.append(kw)
+            if gray and c.get('gray_feat') is not None:
+                feats.append(c['gray_feat']); labels.append(c['char']); groups.append(c['item_id'])
+                kinds.append(c['kind']); aug.append(True); base_w.append(kw * gray_weight)
+        X = np.stack(feats).astype(np.float32)
+        y, groups = np.array(labels), np.array(groups)
+        kinds, aug, base_w = np.array(kinds), np.array(aug), np.array(base_w, dtype=np.float64)
+
+        # class-balanced sample weights over the EFFECTIVE (weighted) class mass
+        mass = defaultdict(float)
+        for lab, w in zip(y, base_w):
+            mass[lab] += w
+        total_mass, n_classes = sum(mass.values()), len(mass)
+        weights = np.array([w * total_mass / (n_classes * mass[lab]) for lab, w in zip(y, base_w)])
+
+        self.stdout.write(f'\n{n_classes} characters, {len(y)} training row(s) '
+                          f'({int((kinds == _REGION).sum())} region, {int(aug.sum())} grayscale-augmented), '
+                          f'feature dim {X.shape[1]}.')
+
+        # ---- item-grouped holdout split -------------------------------------
+        # A class whose images all come from ONE post can't be assessed:
+        # holding that post out leaves the class with no training rows, and
+        # keeping it in both sides lets the model score by recognising the
+        # post (neighbouring pages), which is not character recognition.
+        # Those classes are always trained on and left out of the holdout.
+        real_idx = np.where(~aug)[0]
+        posts_per_class = defaultdict(set)
+        for i in real_idx:
+            posts_per_class[y[i]].add(groups[i])
+        single_post = sorted(c for c, ps in posts_per_class.items() if len(ps) < 2)
+        assessable = [c for c in posts_per_class if c not in set(single_post)]
+        if single_post:
+            self.stdout.write(self.style.WARNING(
+                f'{len(single_post)} class(es) have images from only ONE post and are not assessable '
+                f'(trained on, excluded from the holdout): {single_post[:8]}{"..." if len(single_post) > 8 else ""}'
+            ))
+        assess_idx = real_idx[np.isin(y[real_idx], assessable)]
+        n_splits = max(2, int(round(1.0 / options['test_size'])))
+        try:
+            sgk = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=options['random_state'])
+            _tr, te_pos = next(sgk.split(assess_idx, y[assess_idx], groups[assess_idx]))
+            test_idx = assess_idx[te_pos]
+            held_items = set(groups[test_idx].tolist())
+            train_idx = np.where(~np.isin(groups, list(held_items)) | ~np.isin(y, assessable))[0]
+        except ValueError as e:
+            self.stdout.write(self.style.WARNING(f'Item-grouped split failed ({e}); falling back to a row-level split.'))
+            tr_pos, te_pos = train_test_split(np.arange(len(assess_idx)), test_size=options['test_size'],
+                                              random_state=options['random_state'], stratify=y[assess_idx])
+            test_idx = assess_idx[te_pos]
+            train_idx = np.setdiff1d(np.arange(len(y)), test_idx)
+        unseen = sorted(set(y[test_idx]) - set(y[train_idx]))
+        if unseen:
+            self.stdout.write(self.style.WARNING(
+                f'{len(unseen)} class(es) have all their rows in the holdout items and can never be predicted: {unseen[:10]}'
             ))
 
-        eligible = {c: feats for c, feats in by_char.items() if len(feats) >= min_images}
-        if len(eligible) < 2:
-            raise CommandError(
-                f'Only {len(eligible)} character(s) have >= {min_images} images after applying --exclude — '
-                'need at least 2 distinct classes to train a classifier.'
-            )
+        split_clf = fit_classifier(X[train_idx], y[train_idx], weights[train_idx])
+        pred = split_clf.predict(X[test_idx])
+        train_acc = float(np.mean(split_clf.predict(X[train_idx][~aug[train_idx]]) == y[train_idx][~aug[train_idx]]))
+        correct = pred == y[test_idx]
+        test_acc = float(correct.mean())
+        solo_mask, region_mask = kinds[test_idx] == _SOLO, kinds[test_idx] == _REGION
+        solo_acc = float(correct[solo_mask].mean()) if solo_mask.any() else None
+        region_acc = float(correct[region_mask].mean()) if region_mask.any() else None
 
-        self.stdout.write(f'{len(eligible)} characters included after filtering (>= {min_images} images, '
-                           f'excluding {sorted(exclude) or "none"}):')
-        for c, feats in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
-            manual_n = manual_counts.get(c, 0)
-            suffix = f'  ({manual_n} from manual regions)' if manual_n else ''
-            self.stdout.write(f'  {len(feats):>5}  {c}{suffix}')
+        # A post often has several images of the same character. Averaging the
+        # model's probabilities over a held-out post's solo images shows what
+        # classifying ALL of a post's images and combining them would give —
+        # much higher than judging one image alone (an image can be a back
+        # view, a close-up of a hand, a chibi). Reported separately: row-level
+        # accuracy above stays the headline number.
+        post_acc = multi_acc = multi_row_acc = n_posts = n_multi = None
+        try:
+            proba = split_clf.predict_proba(X[test_idx])
+            class_pos = {c: k for k, c in enumerate(split_clf.classes_)}
+            by_post = defaultdict(list)
+            for j, gi in enumerate(test_idx):
+                if kinds[gi] == _SOLO:
+                    by_post[(groups[gi], y[gi])].append(j)
+            post_ok, multi_ok, multi_row_ok = [], [], []
+            for (_item, char), js in by_post.items():
+                hit = split_clf.classes_[int(np.mean(proba[js], axis=0).argmax())] == char
+                post_ok.append(hit)
+                if len(js) > 1:
+                    multi_ok.append(hit)
+                    multi_row_ok += [bool(correct[j]) for j in js]
+            if post_ok:
+                n_posts, n_multi = len(post_ok), len(multi_ok)
+                post_acc = float(np.mean(post_ok))
+                multi_acc = float(np.mean(multi_ok)) if multi_ok else None
+                multi_row_acc = float(np.mean(multi_row_ok)) if multi_row_ok else None
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'Post-level accuracy skipped ({e}).'))
 
-        X = np.stack([f for feats in eligible.values() for f in feats])
-        y = np.array([c for c, feats in eligible.items() for _f in feats])
-
-        # Train/holdout split — class_weight='balanced' so the smallest
-        # included classes aren't drowned out by the largest ones. Solo and
-        # manually-labeled-region rows are already merged into X/y by this
-        # point (see above), so every included class — regardless of which
-        # source(s) it drew from — gets a genuine, stratified holdout split
-        # instead of manual-only classes bypassing it entirely.
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=options['test_size'], random_state=options['random_state'], stratify=y,
+        used_regions = bool((kinds == _REGION).any())
+        label = 'solo + manual regions (combined)' if used_regions else 'single-character only'
+        self.stdout.write(f'\n[{label}] Train accuracy: {train_acc:.1%}  |  Holdout accuracy: {test_acc:.1%}  '
+                          f'(item-grouped split, {len(test_idx)} held-out rows)\n')
+        self.stdout.write(
+            f'[{label}] Holdout by source — solo: '
+            + (f'{solo_acc:.1%} (n={int(solo_mask.sum())})' if solo_acc is not None else 'n/a')
+            + ' | region crops: '
+            + (f'{region_acc:.1%} (n={int(region_mask.sum())})' if region_acc is not None else 'n/a')
         )
+        if post_acc is not None:
+            self.stdout.write(
+                f'[{label}] Holdout by POST (probabilities averaged over a post\'s solo images) — '
+                f'{post_acc:.1%} over {n_posts} post(s)'
+                + (f'; the {n_multi} post(s) with 2+ images: {multi_row_acc:.1%} per image -> {multi_acc:.1%} averaged'
+                   if multi_acc is not None else '')
+            )
+        self.stdout.write(f'[{label}] Per-class holdout report:')
+        self.stdout.write(classification_report(y[test_idx], pred, zero_division=0))
 
-        def fit_and_report(X_fit, y_fit, label):
-            clf = make_classifier()
-            clf.fit(X_fit, y_fit)
-            train_acc = clf.score(X_fit, y_fit)
-            test_acc = clf.score(X_test, y_test)
-            self.stdout.write(f'\n[{label}] Train accuracy: {train_acc:.1%}  |  Holdout accuracy: {test_acc:.1%}\n')
-            self.stdout.write(f'[{label}] Per-class holdout report:')
-            self.stdout.write(classification_report(y_test, clf.predict(X_test), zero_division=0))
-            return clf, train_acc, test_acc
+        final_clf = split_clf
+        if not options['no_refit_all']:
+            self.stdout.write('Refitting on all rows (holdout included) for the saved model...')
+            final_clf = fit_classifier(X, y, weights)
 
-        used_manual_regions = bool(manual_counts)
-        fit_label = 'solo + manual regions (combined)' if used_manual_regions else 'single-character only'
-        final_clf, final_train_acc, final_test_acc = fit_and_report(X_train, y_train, fit_label)
-
-        # Save — self-contained: records which backend/tag ordering produced
-        # these features, so a later inference-side integration doesn't have
-        # to assume anything matches. Default filename only encodes backend
-        # (not classifier_type/feature_source) when both are at their
-        # production defaults ('logreg'/'tags') — that's what
-        # tagger._load_character_classifier expects to find; any
-        # non-default combination gets its own filename so an
-        # architecture-comparison run never silently clobbers another.
-        if classifier_choice == 'logreg' and feature_source == 'tags':
+        if classifier_choice == 'logreg':
             default_name = f'character_classifier_{backend_choice}.joblib'
         else:
             default_name = f'character_classifier_{backend_choice}_{feature_source}_{classifier_choice}.joblib'
@@ -789,304 +977,21 @@ class Command(BaseCommand):
             'backend': tagger_backend,
             'general_tag_names': general_tag_names,
             'feature_source': feature_source,
+            'feature_dim': int(X.shape[1]),
+            'tag_dim': sum(1 for n in (general_tag_names or []) if not n.startswith(('embedding_', 'ccip_'))),
             'min_images': min_images,
+            'max_images_per_character': cap,
+            'region_weight': region_weight,
+            'grayscale_augment': gray,
             'excluded': sorted(exclude),
             'classifier_type': classifier_choice,
-            'used_manual_region_labels': used_manual_regions,
-            'train_accuracy': final_train_acc,
-            'holdout_accuracy': final_test_acc,
+            'used_manual_region_labels': used_regions,
+            'refit_on_all_rows': not options['no_refit_all'],
+            'train_accuracy': train_acc,
+            'holdout_accuracy': test_acc,
+            'holdout_solo_accuracy': solo_acc,
+            'holdout_region_accuracy': region_acc,
+            'holdout_post_accuracy': post_acc,
+            'holdout_split': 'item-grouped',
         }, output_path)
         self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
-
-    def _get_manual_labeled_rows(self, tagger_backend, feature_source, expected_general_tag_names, cached_features=None,
-                                  solo_satisfied=None):
-        """[(character, feature, region_key), ...] for every human-labeled
-        region across all items with Item.character_regions set (see
-        RegionAnnotator.jsx / ItemViewSet.character_regions_view) — this is
-        the ONLY source of multi-character training data (see module
-        docstring for why an earlier automatic-detection-based approach was
-        removed); a human already drew the box and named it, so there's no
-        confidence gate to apply, just direct (character, feature) pairs to
-        train on.
-
-        `solo_satisfied`: characters that already clear `min_images` from
-        solo images alone (see handle()) — a region whose label is one of
-        these AND isn't already sitting in `cached_features` is skipped
-        entirely, WITHOUT running the tagger on it at all. This is a pure
-        extraction-time efficiency rule, not a data-quality filter: a region
-        that's already cached is still reused as usual (there is nothing to
-        save by throwing away a feature that cost nothing to include this
-        run), only a genuinely NEW crop's tagger pass gets skipped — for a
-        character that's already well past the threshold, this crop was
-        never going to be strictly needed, and manual-region extraction
-        (person-detection crop + tagger forward pass) is exactly as
-        expensive per-image as solo extraction, so skipping it is a real
-        time saving on any archive where a common character both appears
-        alone often AND gets manually boxed often in group shots.
-
-        `region_key` identifies the exact crop a feature came from (item id
-        + image index + box coordinates) — stable as long as that region's
-        box isn't redrawn, so a later --update-cache run can reuse it via
-        `cached_features` ({region_key: feature_vector}, see handle()) and
-        skip re-running the tagger on it. A region's LABEL is always taken
-        fresh from the DB regardless (see the loop below), so relabeling an
-        already-cached box's identity still reuses its feature but reflects
-        the new label — only the pixels (the box itself) affect this key.
-
-        A region can carry more than one character name for two very
-        different reasons: person-detection sometimes merges two
-        overlapping people (e.g. a hug pose) into a single box (genuinely
-        ambiguous — a crop labeled with 2+ names in that case has no
-        single-label identity to teach), OR the same person legitimately
-        has 2+ valid names (e.g. a magical girl's real name + transformed
-        name) and both were put on the one box that's actually just her.
-        CharacterAliasGroup (see its own docstring, and
-        CharacterAliasGroupViewSet.candidates / CharacterAliasGroupManager.
-        jsx for how a human confirms which case is which) distinguishes
-        these: a region whose exact name-set matches a `linked=True` group
-        is the second case, so it's trained on using that group's
-        alphabetically-first name as the canonical label — an arbitrary
-        but consistent choice, since views._expand_character_alias re-
-        expands whichever alias the classifier predicts back into the full
-        group at inference time anyway. Everything else (2+ names with no
-        matching linked group) is still the first case: counted and
-        skipped rather than taught as any one name (or, worse, as all of
-        them).
-
-        Regions span potentially several of an item's images (see
-        Item.character_regions' own docstring) — grouped by image_index per
-        item here so each distinct image is only fetched/selected once
-        (item.views._select_image_bytes) no matter how many boxes are on
-        it, rather than once per region.
-        """
-        from item.views import _select_image_bytes
-
-        cached_features = cached_features or {}
-        solo_satisfied = solo_satisfied or set()
-        linked_groups = {
-            tuple(sorted(set(g.characters))): sorted(set(g.characters))
-            for g in CharacterAliasGroup.objects.filter(linked=True)
-        }
-
-        # Materialized (not .iterator()'d) so it can be counted up front for
-        # progress logging below without a second DB round-trip — this is
-        # just id + a JSON field, not the image bytes, so holding the whole
-        # list in memory is cheap even for a large archive.
-        items = list(Item.objects.exclude(character_regions=[]).only('id', 'character_regions'))
-        total_regions = sum(
-            1 for item in items for region in (item.character_regions or [])
-            if region.get('box') and region.get('characters')
-        )
-        rows = []
-        skipped_mismatch = 0
-        skipped_multi_label = 0
-        skipped_solo_satisfied = 0
-        linked_alias_rows = 0
-        n_reused = 0
-        n_new = 0
-        processed = 0
-        t0 = time.time()
-        if total_regions:
-            self.stdout.write(f'\nProcessing {total_regions} manually-labeled region(s)...')
-        for item in items:
-            regions = item.character_regions or []
-            if not regions:
-                continue
-
-            by_image = defaultdict(list)
-            for region in regions:
-                by_image[region.get('image_index')].append(region)
-
-            for image_index, image_regions in by_image.items():
-                image_bytes = None  # only fetched on demand (see below) — never needed at all if every region here is already cached
-                for region in image_regions:
-                    box = region.get('box')
-                    names = region.get('characters') or []
-                    if not box or not names:
-                        continue
-                    processed += 1
-                    if processed % 50 == 0 or processed == total_regions:
-                        self.stdout.write(f'  {processed}/{total_regions} ({time.time() - t0:.0f}s elapsed)')
-                    label = None
-                    if len(names) == 1:
-                        label = names[0]
-                    else:
-                        group = linked_groups.get(tuple(sorted(set(names))))
-                        if group is not None:
-                            label = group[0]  # canonical name — see this method's own docstring
-                        else:
-                            skipped_multi_label += 1
-                            continue
-
-                    region_key = f'{item.id}:{image_index}:{",".join(str(v) for v in box)}'
-                    cached_feature = cached_features.get(region_key)
-                    if cached_feature is not None:
-                        rows.append((label, cached_feature, region_key))
-                        n_reused += 1
-                        if len(names) > 1:
-                            linked_alias_rows += 1
-                        continue
-
-                    # Not yet cached — worth actually running the tagger on
-                    # only if this character still needs the data (see this
-                    # method's own docstring on why an ALREADY-cached region
-                    # is kept above regardless of this check).
-                    if label in solo_satisfied:
-                        skipped_solo_satisfied += 1
-                        continue
-
-                    if image_bytes is None:
-                        image_bytes, _resolved_index = _select_image_bytes(item, image_index)
-                        if image_bytes is None:
-                            self.stderr.write(f'item {item.id}: no image available for its manual regions (image_index={image_index}), skipping')
-                            break  # no image means every region on it fails the same way
-                    try:
-                        crop_bytes = tagger._crop_with_padding(image_bytes, tuple(box))
-                        feature, feat_names = self._compute_feature(crop_bytes, tagger_backend, feature_source)
-                    except Exception as e:
-                        self.stderr.write(f'item {item.id}: manual-region feature extraction failed ({e}), skipping region')
-                        continue
-                    if feat_names != expected_general_tag_names:
-                        skipped_mismatch += 1
-                        continue
-                    if len(names) > 1:
-                        linked_alias_rows += 1
-                    n_new += 1
-                    rows.append((label, feature, region_key))
-
-        if linked_alias_rows:
-            self.stdout.write(f'{linked_alias_rows} region(s) trained via a confirmed CharacterAliasGroup (2+ names, same identity).')
-        if skipped_mismatch:
-            self.stdout.write(self.style.WARNING(
-                f'{skipped_mismatch} manually-labeled region(s) skipped (feature ordering mismatch).'
-            ))
-        if skipped_multi_label:
-            self.stdout.write(self.style.WARNING(
-                f'{skipped_multi_label} manually-labeled region(s) skipped (2+ characters on one box — '
-                'ambiguous identity, not used for single-label training).'
-            ))
-        self.stdout.write(f'{len(rows)} manually-labeled region(s) loaded from {len(items)} annotated item(s).')
-        return rows, n_reused, n_new, skipped_solo_satisfied
-
-    def _compute_feature(self, image_bytes, tagger_backend, feature_source):
-        """(feature_vector, feature_names) for one image, dispatching on
-        feature_source. 'embedding' names are placeholders
-        ('embedding_0', ...) rather than real tag names — there's nothing
-        human-readable to name a pooled embedding dimension, but
-        tagger.predict_character's feature-length mismatch guard only
-        needs len(feature_names) to match, so a placeholder list of the
-        right length is all that's required."""
-        if feature_source == 'embedding':
-            embedding = tagger.extract_embedding(image_bytes)
-            return embedding, [f'embedding_{i}' for i in range(len(embedding))]
-        preds, tag_names, _rating_idx, general_idx, _character_idx = tagger._raw_predict(
-            image_bytes, None, tagger_backend,
-        )
-        feature = np.asarray(preds, dtype=np.float32)[general_idx]
-        return feature, [tag_names[i] for i in general_idx]
-
-    def _extract_features(self, min_images, tagger_backend, feature_source='tags', max_images_per_character=None,
-                           cached_features=None, expected_general_tag_names=None):
-        """Scans the DB for single-character items and runs the tagger's
-        forward pass once per image (unless already in `cached_features`,
-        see below). Returns (rows, general_tag_names, n_reused, n_new) where
-        rows is [(item_id, character, feature_vector, image_key), ...] for
-        every character with >= min_images single-character images —
-        deliberately NOT filtered by --exclude here, so the resulting
-        feature-cache file stays maximally reusable for a later run with a
-        different --exclude list (excluding is a cheap post-filter, see
-        handle()).
-
-        `image_key` is a stable identity for the exact image a row came from
-        (a PreviewImage's own id, or `item:<item id>` for the legacy
-        single-blob preview path — see below) — independent of this run's
-        --min-images/--exclude, and of any OTHER image the same item might
-        also have, so a later --update-cache run can look an image up by
-        this key regardless of what else changed around it.
-
-        `cached_features`: optional {image_key: feature_vector} from a
-        previous run (see handle()'s --update-cache handling) — an eligible
-        image whose key is already in here reuses that feature instead of
-        re-running the tagger on it. Only images that are genuinely new (or
-        weren't successfully cached before) actually get extracted, which is
-        the whole point of --update-cache: the DB still has to be scanned to
-        discover what's new, but the expensive part (the tagger forward
-        pass) is skipped for everything already known.
-
-        `max_images_per_character` caps how many of each character's images
-        actually get extracted (first N found, no special sampling) — the
-        canary/timm backend runs roughly 6x slower per image than onnx (see
-        extract_embedding's docstring), so extracting a character's full
-        multi-hundred-image history isn't practical for a quick
-        architecture comparison; a capped, smaller-but-still-real sample is
-        far more useful than not comparing at all.
-        """
-        cached_features = cached_features or {}
-        by_char = defaultdict(list)  # character name -> [(item_id, image_key, image_bytes), ...]
-        items = Item.objects.exclude(characters=[]).exclude(characters__isnull=True).only(
-            'id', 'characters', 'preview_data',
-        )
-        for item in items.iterator():
-            chars = [c for c in (item.characters or []) if c]
-            if len(chars) != 1:
-                continue  # v1 scope: single-character items only
-            char = chars[0]
-            if max_images_per_character is not None and len(by_char[char]) >= max_images_per_character:
-                continue
-            imgs = list(item.preview_images.all())
-            if imgs:
-                by_char[char].extend((item.id, f'pi:{img.id}', bytes(img.data)) for img in imgs)
-            elif item.preview_data:
-                by_char[char].append((item.id, f'item:{item.id}', bytes(item.preview_data)))
-            if max_images_per_character is not None:
-                by_char[char] = by_char[char][:max_images_per_character]
-
-        eligible = {c: imgs for c, imgs in by_char.items() if len(imgs) >= min_images}
-        if len(eligible) < 2:
-            self.stderr.write(self.style.ERROR(
-                f'Only {len(eligible)} character(s) have >= {min_images} single-character images — '
-                'need at least 2 distinct classes to train a classifier. Lower --min-images, or gather '
-                'more single-character-item data first (see character_image_stats).'
-            ))
-            return None, None, 0, 0
-
-        self.stdout.write(f'{len(eligible)} characters qualify (>= {min_images} single-character images each):')
-        for c, imgs in sorted(eligible.items(), key=lambda kv: -len(kv[1])):
-            self.stdout.write(f'  {len(imgs):>5}  {c}')
-
-        total = sum(len(imgs) for imgs in eligible.values())
-        n_cached = sum(1 for imgs in eligible.values() for _iid, key, _b in imgs if key in cached_features)
-        self.stdout.write(
-            f'\nExtracting features for {total} images (backend={tagger_backend}, feature_source={feature_source})'
-            + (f' — {n_cached} already cached, {total - n_cached} to extract...' if cached_features else '...')
-        )
-        rows = []
-        general_tag_names = expected_general_tag_names
-        t0 = time.time()
-        done = 0
-        n_reused = 0
-        n_new = 0
-        for char, imgs in eligible.items():
-            for item_id, image_key, image_bytes in imgs:
-                cached_feature = cached_features.get(image_key)
-                if cached_feature is not None:
-                    rows.append((item_id, char, cached_feature, image_key))
-                    n_reused += 1
-                    continue
-                try:
-                    feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
-                except Exception as e:
-                    self.stderr.write(f'item {item_id}: feature extraction failed ({e}), skipping')
-                    continue
-                if general_tag_names is None:
-                    general_tag_names = names
-                rows.append((item_id, char, feature, image_key))
-                n_new += 1
-                done += 1
-                if done % 50 == 0 or done == total - n_cached:
-                    self.stdout.write(f'  {done}/{total - n_cached} newly extracted ({time.time() - t0:.0f}s elapsed)')
-
-        if len(rows) < 2:
-            self.stderr.write(self.style.ERROR('Not enough successfully-extracted features.'))
-            return None, None, 0, 0
-        return rows, general_tag_names, n_reused, n_new

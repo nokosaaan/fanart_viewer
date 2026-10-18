@@ -116,6 +116,103 @@ def _pixiv_request_context():
             browser.close()
 
 
+# Pixiv's own meta tags -- popularity badges ("1000users入り") and the age
+# rating -- say nothing about WHAT is drawn, and as "#..." hashtags they'd
+# be weighted like an artist's own words by the tag-similarity signature
+# (item.views.TAG_WEIGHT_HASHTAG), making unrelated popular works look alike.
+_META_TAG_RE = re.compile(r'^(?:\d+users入り|R-18G?|R18G?)$', re.IGNORECASE)
+
+
+def _clean_tags(raw_tags) -> list[str]:
+    seen, out = set(), []
+    for t in raw_tags or []:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()
+        if not t or _META_TAG_RE.match(t) or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def build_description(title: str, tags) -> str:
+    """The post's title, then its author-set tags as "#tag" tokens -- the
+    same shape a tweet's own text has, so item.views._match_hashtags (and
+    everything else that already reads hashtags out of Item.description)
+    picks them up with no Pixiv-specific path."""
+    tags = _clean_tags(tags)
+    title = (title or '').strip()
+    if not tags:
+        return title
+    tag_line = ' '.join('#' + t.replace(' ', '_') for t in tags)
+    return f'{title}\n{tag_line}' if title else tag_line
+
+
+def _tags_from_work(w: dict):
+    """Tag strings from a bookmarks-list `works[]` entry, or None when the
+    entry doesn't carry them (the caller then asks /ajax/illust/{id}).
+    An empty list is a real answer ("no tags"), not "unknown"."""
+    tags = w.get('tags')
+    if isinstance(tags, list):
+        return _clean_tags(tags)
+    return None
+
+
+def _fetch_illust_body(ctx, illust_id: int) -> dict:
+    resp = ctx.request.get(
+        f'https://www.pixiv.net/ajax/illust/{illust_id}',
+        headers={
+            'User-Agent': _UA, 'Accept': 'application/json',
+            'Referer': f'https://www.pixiv.net/artworks/{illust_id}',
+        },
+        timeout=20000,
+    )
+    if resp.status == 401:
+        raise PixivAuthError('Pixivセッションが無効です(PHPSESSIDの期限切れの可能性)')
+    if resp.status != 200:
+        raise PixivAPIError(f'HTTP {resp.status}')
+    data = resp.json()
+    if data.get('error'):
+        raise PixivAPIError(data.get('message') or 'unknown error')
+    return data.get('body') or {}
+
+
+def _tags_from_body(body: dict) -> list[str]:
+    out = []
+    for e in (body.get('tags') or {}).get('tags') or []:
+        tag = e.get('tag')
+        if not tag:
+            continue
+        out.append(tag)
+        en = ((e.get('translation') or {}).get('en') or '').strip()
+        if en and en.casefold() != tag.casefold():
+            out.append(en)
+    return _clean_tags(out)
+
+
+def fetch_illust_tags(ctx, illust_id: int) -> list[str]:
+    """Author-set tags for one illust via /ajax/illust/{id}
+    (body.tags.tags[].tag), plus each tag's English translation when Pixiv
+    provides one (body.tags.tags[].translation.en) -- lets an English-
+    registered character/title match a Japanese tag. The response shape is
+    Pixiv's known ajax convention, not yet verified against a live session
+    here: see the backfill_pixiv_tags --dry-run output to check it.
+
+    Raises PixivAuthError / PixivAPIError like fetch_account_bookmarks.
+    """
+    return _tags_from_body(_fetch_illust_body(ctx, illust_id))
+
+
+def fetch_illust_description(illust_id: int) -> str:
+    """One-off lookup for a single illust (opens its own browser context --
+    use fetch_illust_tags with a shared ctx for batches): body.title, then
+    its tags as "#tag" tokens (see build_description)."""
+    with _pixiv_request_context() as ctx:
+        body = _fetch_illust_body(ctx, illust_id)
+    return build_description(body.get('title') or '', _tags_from_body(body))
+
+
 def resolve_own_user_id() -> str:
     """The logged-in account's numeric user id -- needed since the
     bookmarks endpoint is per-user, not "my own" implicitly. See this
@@ -215,10 +312,21 @@ def fetch_account_bookmarks(
                 if illust_id in known_ids:
                     caught_up = True
                     break
+                tags = _tags_from_work(w)
+                if tags is None:
+                    try:
+                        tags = fetch_illust_tags(ctx, illust_id)
+                    except PixivAuthError:
+                        raise
+                    except Exception:
+                        # Tags are an enrichment: a failed lookup must not
+                        # drop the bookmark itself, just leave the title.
+                        logger.exception('pixiv_bookmarks_fetch: tag lookup failed for illust %s', illust_id)
+                        tags = []
                 candidates.append({
                     'illust_id': illust_id,
                     'user_name': w.get('userName') or '',
-                    'description': w.get('title') or '',
+                    'description': build_description(w.get('title') or '', tags),
                 })
 
             offset += len(works)

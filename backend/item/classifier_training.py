@@ -79,17 +79,32 @@ def training_log_path() -> Path:
 # than once is worth the one extra checkbox.
 # Deliberately still NOT exposed here: --feature-cache/--use-cache (the
 # frozen, no-DB-check variant)/--classifier/--test-size/--random-state/
-# --output/--max-images-per-character/--feature-source — all real argparse
-# options, just power-user tuning knobs irrelevant to "I added some new
-# characters, let's retrain" (still reachable via train.ps1's own
-# passthrough args for anyone who wants them).
+# --output/--max-images-per-character/--region-weight/--grayscale-augment —
+# all real argparse options, just power-user tuning knobs irrelevant to "I
+# added some new characters, let's retrain" (still reachable via train.ps1's
+# own passthrough args for anyone who wants them). --feature-source IS set
+# here, but not user-selectable: see _build_argv.
 def _build_argv(options: dict) -> list:
     argv = []
 
     backend_choice = options.get('backend')
     if backend_choice not in ('onnx', 'canary'):
-        backend_choice = 'onnx'  # train_character_classifier's own default
+        backend_choice = 'canary'  # train_character_classifier's own default
     argv += ['--backend', backend_choice]
+
+    # canary: the model's pooled embedding (keeps visual information the tag
+    # vocabulary throws away) plus CCIP (deepghs' same-character embedding),
+    # which measured as complementary to it: on a ~1200-image sample with
+    # item-grouped CV, embedding alone 71%, CCIP alone 67%, together 78%.
+    # CCIP is dropped when it isn't importable here (the exe installs
+    # imgutils with --no-deps), and onnx has no accessible embedding, so it
+    # stays on tags. Inference reads the artifact's own `feature_source`, so
+    # nothing else has to change when this does.
+    if backend_choice == 'canary':
+        feature_source = 'embedding+ccip' if tagger.ccip_available() else 'embedding'
+    else:
+        feature_source = 'tags'
+    argv += ['--feature-source', feature_source]
 
     min_images = options.get('min_images')
     if min_images is not None:
@@ -117,8 +132,11 @@ def _build_argv(options: dict) -> list:
     # isn't exposed in this GUI at all, so it's always the 'tags' variant
     # of that default name.
     if options.get('update_cache'):
-        cache_path = os.path.join(tagger._data_dir(), f'character_features_{backend_choice}.joblib')
-        argv += ['--update-cache', cache_path]
+        cache_name = (
+            f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
+            else f'character_features_{backend_choice}_{feature_source.replace("+", "_")}.joblib'
+        )
+        argv += ['--update-cache', os.path.join(tagger._data_dir(), cache_name)]
 
     return argv
 

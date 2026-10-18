@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { groupsForTitles } from '../lib/groupScope'
 import { saveCharacterRegions } from '../lib/itemFieldsApi'
 
 function getCookie(name) {
@@ -76,9 +77,11 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
   // mismatch tab's "ここで領域指定を続ける") passes nothing, so it just
   // falls back to the item's own titles.
   const effectiveTitles = (Array.isArray(titles) ? titles : (item.titles || [])).filter(Boolean)
-  const matchingGroups = effectiveTitles.length > 0
-    ? groups.filter(g => (g.titles || []).some(t => effectiveTitles.includes(t)))
-    : []
+  // Every character of every group that belongs to the item's title(s) --
+  // including legacy groups matched by name and the franchise-level parents
+  // (see lib/groupScope.js). The list is not truncated: a title can have far
+  // more characters than a short list could show.
+  const matchingGroups = groupsForTitles(groups, effectiveTitles)
   // Only actually restrict when it would narrow things down — same
   // reasoning as CharacterPicker.jsx's own `scoped`: most existing groups
   // haven't been retroactively linked to a title yet, so filtering to zero
@@ -313,6 +316,10 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
     try {
       const j = await saveCharacterRegions(item.id, labeledRegionsPayload())
       if (onDirtyChange) onDirtyChange(false)
+      if (j.auto_assigned_to_character_group) {
+        const g = j.auto_assigned_to_character_group
+        setNotice(`新しいキャラ(${(g.characters || []).join('、')})をグループ「${g.name}」に自動で割り当てました`)
+      }
       if (onSaved) onSaved(j.item)
     } catch (e) {
       setError(e.message)
@@ -385,8 +392,8 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
             }}
           />
           {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
-            {charSuggestions.slice(0, 20).map(c => {
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+            {charSuggestions.map(c => {
               const assigned = isAssignedToAllSelected(c)
               return (
                 <button key={c} onClick={() => toggleCharacterForSelectedBoxes(c)}
@@ -488,8 +495,8 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
                     }}
                   />
                   {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
-                  <div style={{ maxHeight: 140, overflowY: 'auto' }}>
-                    {charSuggestions.slice(0, 20).map(c => {
+                  <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+                    {charSuggestions.map(c => {
                       const selected = b.characters.includes(c)
                       return (
                         <button key={c} onClick={() => toggleCharacter(b.id, c)}

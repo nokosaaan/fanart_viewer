@@ -69,7 +69,7 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
         alert(`新しいタイトル「${j.auto_created_character_group.name}」のキャラクターグループを自動作成しました。`)
       }
       if(j.auto_assigned_to_character_group){
-        alert(`新しいキャラクターをキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
+        alert(`新しいキャラクター(${(j.auto_assigned_to_character_group.characters || []).join('、')})をキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
       }
 
       if(regionDirty && boxesRef.current){

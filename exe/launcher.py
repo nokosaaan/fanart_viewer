@@ -101,8 +101,15 @@ class _DailyRotatingStream:
 
     def __init__(self, path: Path):
         self._path = path
-        self._date = datetime.date.today()
+        # Seeded from the existing file's mtime, not today(): the app is usually
+        # closed and reopened on a later day, so an in-memory-only date would
+        # never differ from "today" and a stale server.log would never rotate.
+        self._date = (
+            datetime.date.fromtimestamp(path.stat().st_mtime)
+            if path.exists() else datetime.date.today()
+        )
         self._file = open(path, 'a', encoding='utf-8', buffering=1)
+        self._rotate_if_needed()
         self._prune_old()
 
     def _rotate_if_needed(self):

@@ -21,11 +21,13 @@ from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, T
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
 from . import pixiv_salvage
+from .character_groups import ensure_characters_grouped, response_fields as _group_response_fields
 from .danbooru_lookup import resolve_title_from_character as _resolve_title_from_character
 from .serializers import ItemSerializer, CharacterGroupSerializer, CharacterAliasGroupSerializer
 from security.ssrf_guard import validate_url, SSRFError
 import logging
 import traceback
+import unicodedata
 import base64
 from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
 import os
@@ -544,71 +546,215 @@ def _match_tagger_characters(candidates):
 _HASHTAG_ALIAS_LOOKUP_CAP = 5
 
 
+_HASHTAG_TOKEN_RE = re.compile(r'[#\uff03]([^\s#\uff03\u3001\u3002,.!\uff01?\uff1f\u300c\u300d\u300e\u300f"\'\u2019\u201d\u2026:\uff1a;\uff1b]+)')
+_TRAILING_QUALIFIER_RE = re.compile(r'^(.*?)\s*[(\uff08]([^()\uff08\uff09]+)[)\uff09]\s*$')
+
+
+def _extract_hashtag_tokens(description):
+    """Raw hashtag strings from the post text, original case, parentheses
+    kept intact (unlike _extract_hashtags, whose `\\w+` stops at the first
+    "(") -- Pixiv's own convention for tagging a character is
+    "#name(title)", which needs the qualifier to survive extraction."""
+    if not description:
+        return []
+    seen, out = set(), []
+    for tok in _HASHTAG_TOKEN_RE.findall(description):
+        # a ")" the author opened outside the tag, e.g. "(#foo)"
+        while tok and tok[-1] in ')\uff09' and (tok.count('(') + tok.count('\uff08')) < (tok.count(')') + tok.count('\uff09')):
+            tok = tok[:-1]
+        if tok and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
+def _fold_name(s):
+    """Script-insensitive comparison key: NFKC (full/half-width), casefold,
+    katakana -> hiragana, Latin diacritics stripped (Pokemon/Pok\u00e9mon),
+    and everything that isn't a letter/digit dropped (spaces, "\u30fb", "_",
+    "-", brackets). Diacritics are only stripped from Latin-range letters --
+    NFKD-ing kana would detach dakuten and change the word."""
+    s = unicodedata.normalize('NFKC', s or '').casefold()
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if 0x30A1 <= o <= 0x30F6:
+            ch = chr(o - 0x60)
+        elif 0x80 <= o < 0x250:
+            ch = ''.join(c for c in unicodedata.normalize('NFKD', ch) if not unicodedata.combining(c))
+        out.extend(c for c in ch if unicodedata.category(c)[0] in ('L', 'N'))
+    return ''.join(out)
+
+
+def _name_variants(name):
+    """(full, base, qualifier) folded keys. base/qualifier are None unless
+    the name ends in a "(...)" part -- "tairitsu (arcaea)" or a hashtag
+    "\u30ea\u30fc\u30ea\u30a8(\u30dd\u30b1\u30e2\u30f3)" -> base "\u30ea\u30fc\u30ea\u30a8", qualifier "\u30dd\u30b1\u30e2\u30f3"."""
+    raw = unicodedata.normalize('NFKC', name or '').strip()
+    full = _fold_name(raw)
+    m = _TRAILING_QUALIFIER_RE.match(raw)
+    if not m:
+        return full, None, None
+    return full, (_fold_name(m.group(1)) or None), (_fold_name(m.group(2)) or None)
+
+
+_PARTIAL_MIN_LEN_CJK = 3
+_PARTIAL_MIN_LEN_ASCII = 4
+_PARTIAL_MIN_LEN_HAN = 2
+_PARTIAL_MIN_RATIO = 0.15
+
+
+def _is_partial_match(a, b):
+    """Whether the shorter of two folded keys sits inside the longer one
+    (e.g. a hashtag "\u30dd\u30b1\u30e2\u30f3\u4eba\u9593\u7d75" around the title "\u30dd\u30b1\u30e2\u30f3"). Guarded
+    against short-name false positives: a minimum length (shorter for CJK,
+    where one character carries more information; 2 for an all-kanji name),
+    a minimum length ratio,
+    and a stoplist of bare colour words ("white" is a real trait-bucket
+    character in this DB, and "#whitehair" must not suggest it)."""
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if not short or short == long_ or short not in long_:
+        return False
+    if short in {_fold_name(w) for w in _COLOR_WORDS}:
+        return False
+    is_ascii = short.isascii()
+    # An all-kanji name carries more information per character than kana
+    # does ("\u611b\u97f3" inside "#\u5343\u65e9\u611b\u97f3\u751f\u8a95\u796d2025" is a real hit; a 2-kana name is not).
+    is_han = all('\u4e00' <= ch <= '\u9fff' for ch in short)
+    min_len = _PARTIAL_MIN_LEN_ASCII if is_ascii else (_PARTIAL_MIN_LEN_HAN if is_han else _PARTIAL_MIN_LEN_CJK)
+    if len(short) < min_len:
+        return False
+    return len(short) / len(long_) >= _PARTIAL_MIN_RATIO
+
+
+def _build_fold_index(names_with_extra_keys):
+    """{folded key: canonical name}. `names_with_extra_keys` is an iterable
+    of (canonical_name, [extra keys already folded]). The full-name key
+    keeps the first registration (as the old normalized-string match did);
+    base-name keys are only registered when exactly one distinct name owns
+    them -- "foo (a)" and "foo (b)" both folding to "foo" must not make "foo"
+    resolve to whichever came first."""
+    full_index, base_owners = {}, {}
+    for name, extra in names_with_extra_keys:
+        full, base, _qual = _name_variants(name)
+        if full:
+            full_index.setdefault(full, name)
+        for key in ([base] if base else []) + list(extra):
+            if key:
+                base_owners.setdefault(key, set()).add(name)
+    index = dict(full_index)
+    for key, owners in base_owners.items():
+        if key not in index and len(owners) == 1:
+            index[key] = next(iter(owners))
+    return index
+
+
 def _match_hashtags(description, external=False):
-    """Direct match of hashtags from the source post's own text (see
-    Item.description) against the app's existing title/character
-    vocabulary. This is the single most reliable signal available when
-    present — the artist's own naming, not an inference — so it's tried
-    first, independently of (and before) any image analysis.
+    """Match hashtags from the source post's own text (see Item.description)
+    against the app's existing title/character vocabulary. This is the
+    single most reliable signal available when present -- the artist's own
+    naming, not an inference -- so it's tried first, independently of (and
+    before) any image analysis.
 
-    Same normalized-string-match limitation as _match_tagger_characters:
-    only catches hashtags that already spell a title/character the same
-    way something in this app's vocabulary does — this app's own vocabulary
-    mixes Japanese and romaji names across different characters (whichever
-    form was registered for each), and a hashtag can just as easily be
-    written in the OTHER script than however that particular character
-    happens to be registered (e.g. hashtag "キュアエクレール" vs a
-    registered "cure eclair", or the reverse).
+    Matching is done on a folded key (_fold_name): full/half-width,
+    hiragana/katakana, case, diacritics and punctuation no longer matter.
+    Three tiers:
+    - exact: a hashtag's folded form (or, for "name(title)" hashtags, the
+      name part) equals a registered name's folded form. A "(title)"
+      qualifier is matched against registered titles as exact too -- the
+      artist stating the title outright.
+    - romaji <-> Japanese: a CharacterDanbooruLink (score >=
+      _DANBOORU_LINK_MIN_SCORE) maps the Danbooru tag spelling to the
+      registered name, so an English hashtag resolves to a Japanese-
+      registered character and vice versa.
+    - partial (returned separately as titles_partial/characters_partial,
+      for the weaker 'hashtag_partial' ensemble source): one side contains
+      the other, subject to _is_partial_match's guards.
 
-    `external`: when true, any hashtag that doesn't match directly also
-    gets a Danbooru wiki-alias lookup (see
-    danbooru_lookup.find_registered_character_via_alias) — the one network
-    call in this function, so gated behind the same explicit opt-in as the
-    rest of this pipeline's Danbooru use (see suggest_tags_view's
-    `external` flag). Capped at _HASHTAG_ALIAS_LOOKUP_CAP per call and
-    cached per hashtag text (DanbooruAliasCache), so this cost is paid at
-    most once per hashtag ever seen, not once per suggestion run.
+    `external`: when true, a hashtag that didn't match directly also gets a
+    Danbooru wiki-alias lookup (see danbooru_lookup.find_registered_
+    character_via_alias) -- the one network call here, gated behind the
+    same explicit opt-in as the rest of this pipeline's Danbooru use.
+    Capped at _HASHTAG_ALIAS_LOOKUP_CAP per call and cached per hashtag
+    text (DanbooruAliasCache).
     """
-    hashtags = _extract_hashtags(description)
-    if not hashtags:
-        return {'titles': [], 'characters': []}
-    normalized_hashtags = {_normalize_char_name(h) for h in hashtags}
+    empty = {'titles': [], 'characters': [], 'titles_partial': [], 'characters_partial': []}
+    tokens = _extract_hashtag_tokens(description)
+    if not tokens:
+        return empty
 
-    title_by_norm = {}
+    exact_keys, qualifier_keys, partial_keys = set(), set(), set()
+    for tok in tokens:
+        full, base, qual = _name_variants(tok)
+        for k in (full, base):
+            if k:
+                exact_keys.add(k)
+                partial_keys.add(k)
+        if qual:
+            qualifier_keys.add(qual)
+    if not exact_keys and not qualifier_keys:
+        return empty
+
+    title_names = set()
     for titles in Item.objects.exclude(titles=[]).values_list('titles', flat=True):
         for name in (titles or []):
             if name:
-                title_by_norm.setdefault(_normalize_char_name(name), name)
+                title_names.add(name)
+    title_link_keys = {}
+    for tl in TitleDanbooruLink.objects.exclude(danbooru_tag__isnull=True).exclude(danbooru_tag=''):
+        if (tl.match_score or 0) >= _DANBOORU_LINK_MIN_SCORE and tl.title_name in title_names:
+            full, base, _q = _name_variants(tl.danbooru_tag)
+            title_link_keys.setdefault(tl.title_name, []).extend(k for k in (full, base) if k)
+    title_index = _build_fold_index((n, title_link_keys.get(n, [])) for n in title_names)
 
-    char_by_norm = {}
-    all_char_names = []
+    link_keys_by_name = {}
+    for link in CharacterDanbooruLink.objects.exclude(danbooru_tag__isnull=True).exclude(danbooru_tag=''):
+        if (link.match_score or 0) >= _DANBOORU_LINK_MIN_SCORE:
+            full, base, _q = _name_variants(link.danbooru_tag)
+            link_keys_by_name.setdefault(link.character_name, []).extend(k for k in (full, base) if k)
+
+    char_names = []
     for group in CharacterGroup.objects.all():
-        for c in (group.characters or []):
-            char_by_norm.setdefault(_normalize_char_name(c), c)
-            all_char_names.append(c)
+        char_names.extend(c for c in (group.characters or []) if c)
     for chars in Item.objects.exclude(characters=[]).values_list('characters', flat=True):
-        for c in (chars or []):
-            if c:
-                char_by_norm.setdefault(_normalize_char_name(c), c)
-                all_char_names.append(c)
+        char_names.extend(c for c in (chars or []) if c)
+    unique_char_names = list(dict.fromkeys(char_names))
+    char_index = _build_fold_index((n, link_keys_by_name.get(n, [])) for n in unique_char_names)
 
-    matched_titles = {title_by_norm[h] for h in normalized_hashtags if h in title_by_norm}
-    matched_chars = {char_by_norm[h] for h in normalized_hashtags if h in char_by_norm}
+    matched_titles = {title_index[k] for k in (exact_keys | qualifier_keys) if k in title_index}
+    matched_chars = {char_index[k] for k in exact_keys if k in char_index}
+
+    partial_titles, partial_chars = set(), set()
+    for hk in partial_keys:
+        for key, name in title_index.items():
+            if name not in matched_titles and _is_partial_match(hk, key):
+                partial_titles.add(name)
+        for key, name in char_index.items():
+            if name not in matched_chars and _is_partial_match(hk, key):
+                partial_chars.add(name)
 
     if external:
-        unmatched = [h for h in hashtags if _normalize_char_name(h) not in char_by_norm]
+        unmatched = []
+        for tok in tokens:
+            full, base, _q = _name_variants(tok)
+            if not any(k in char_index for k in (full, base) if k):
+                m = _TRAILING_QUALIFIER_RE.match(unicodedata.normalize('NFKC', tok))
+                unmatched.append((m.group(1) if m else tok).lower())
         for h in unmatched[:_HASHTAG_ALIAS_LOOKUP_CAP]:
             try:
-                bridged = danbooru_lookup.find_registered_character_via_alias(h, all_char_names)
+                bridged = danbooru_lookup.find_registered_character_via_alias(h, unique_char_names)
             except Exception:
                 logging.exception('Danbooru alias lookup failed for hashtag %r', h)
                 continue
             if bridged:
                 matched_chars.add(bridged)
+                partial_chars.discard(bridged)
 
     return {
         'titles': sorted(matched_titles),
         'characters': sorted(matched_chars),
+        'titles_partial': sorted(partial_titles - matched_titles),
+        'characters_partial': sorted(partial_chars - matched_chars),
     }
 
 
@@ -726,22 +872,57 @@ def _looks_like_oc(description):
     return any(s in description for s in _OC_SUBSTRINGS)
 
 
-def _tag_weight(tag):
+# Tags that describe the DRAWING rather than the character -- on a
+# black-and-white image they fire for every character alike, so as shared
+# tags they would make unrelated monochrome works look similar.
+_MONOCHROME_STYLE_TAGS = {
+    'monochrome', 'greyscale', 'grayscale', 'sketch', 'lineart', 'line art', 'comic', '4koma',
+    'spot color', 'halftone', 'screentones', 'speech bubble', 'translated', 'text focus',
+}
+
+# Colour-independent identity cues: hairstyle/length and head features.
+# Eye/hair COLOUR and worn accessories are the "feature" tags above -- on a
+# black-and-white image colour can't be observed, so the shape of the hair
+# has to carry the character-level evidence instead (weaker, but real).
+_SHAPE_KEYWORDS = (
+    'twintails', 'ponytail', 'braid', 'ahoge', 'bob cut', 'hair bun', 'double bun', 'drill hair',
+    'hair over one eye', 'hair over eyes', 'side ponytail', 'low twintails', 'short hair', 'long hair',
+    'medium hair', 'very long hair', 'absurdly long hair', 'bangs', 'blunt bangs', 'sidelocks', 'hime cut',
+    'animal ears', 'cat ears', 'fox ears', 'wolf ears', 'rabbit ears', 'horns', 'pointy ears', 'elf', 'halo',
+    'tail', 'wings', 'mole', 'fang', 'heterochromia',
+)
+
+
+def _is_color_feature_tag(tag):
     words = tag.split()
-    if len(words) >= 2 and words[0] in _COLOR_WORDS and words[-1] in ('eyes', 'hair'):
+    return len(words) >= 2 and words[0] in _COLOR_WORDS and words[-1] in ('eyes', 'hair')
+
+
+def _tag_weight(tag, monochrome=False):
+    if _is_color_feature_tag(tag):
         return TAG_WEIGHT_FEATURE
     if any(kw in tag for kw in _ACCESSORY_KEYWORDS):
+        return TAG_WEIGHT_FEATURE
+    if monochrome and any(kw in tag for kw in _SHAPE_KEYWORDS):
         return TAG_WEIGHT_FEATURE
     return TAG_WEIGHT_GENERIC
 
 
-def _weighted_tag_signature(tags, description):
+def _weighted_tag_signature(tags, description, monochrome=False):
     """{tag_or_hashtag: weight} for one item, for scoring similarity
-    against another item's signature."""
+    against another item's signature.
+
+    `monochrome`: build the signature for comparing a black-and-white image
+    (see _suggest_from_similar_tags) -- colour tags and drawing-style tags
+    are left out (they can't be observed / don't distinguish characters),
+    and hairstyle-shape tags are promoted to feature weight."""
     sig = {}
     for t in (tags or []):
-        if t:
-            sig[t] = max(sig.get(t, 0), _tag_weight(t))
+        if not t:
+            continue
+        if monochrome and (_is_color_feature_tag(t) or t in _MONOCHROME_STYLE_TAGS):
+            continue
+        sig[t] = max(sig.get(t, 0), _tag_weight(t, monochrome))
     for h in _extract_hashtags(description):
         sig[h] = max(sig.get(h, 0), TAG_WEIGHT_HASHTAG)
     return sig
@@ -764,13 +945,21 @@ _TAG_SIMILARITY_MIN_SHARE = 0.3
 _CHARACTER_MIN_FEATURE_MATCHES = 2
 
 
-def _suggest_from_similar_tags(tag_names, description, exclude_pk):
+def _suggest_from_similar_tags(tag_names, description, exclude_pk, monochrome=False):
     """Suggest titles/characters/situation from OTHER items whose (weighted)
     tags overlap substantially with this item's. Complements
     _suggest_from_existing_data's artist-based prior: an artist who draws
     many different things won't get a useful suggestion from "their other
     items", but items sharing a specific combination of visual tags
     plausibly depict the same character/series regardless of who drew them.
+
+    `monochrome`: the query image is black-and-white, so its tags carry no
+    colour information and a few drawing-style tags ("monochrome",
+    "greyscale") that fire for every character. Both sides' signatures then
+    drop colour and style tags and count hairstyle/head-shape tags as
+    feature matches (see _weighted_tag_signature), so the "2 feature
+    matches" bar for suggesting a character can still be met -- on shape
+    instead of colour.
 
     Returns titles/title_candidates split: `titles` only holds candidates
     that cleared the normal confidence bar; when NONE do but there was
@@ -779,8 +968,8 @@ def _suggest_from_similar_tags(tag_names, description, exclude_pk):
     plausible options than silently give up.
     """
     empty = {'titles': [], 'title_candidates': [], 'characters': [], 'situation_hint': None, 'sample_size': 0}
-    query_sig = _weighted_tag_signature(tag_names, description)
-    plain_tags = [t for t in (tag_names or []) if t]
+    query_sig = _weighted_tag_signature(tag_names, description, monochrome)
+    plain_tags = [t for t in (tag_names or []) if t and (not monochrome or t in query_sig)]
     if not plain_tags or not query_sig:
         return empty
 
@@ -805,7 +994,7 @@ def _suggest_from_similar_tags(tag_names, description, exclude_pk):
     # doesn't count as a "feature match", only a mutually-specific one does.
     scored = []
     for c in candidates:
-        sib_sig = _weighted_tag_signature(c.tags, c.description)
+        sib_sig = _weighted_tag_signature(c.tags, c.description, monochrome)
         shared = query_sig.keys() & sib_sig.keys()
         if not shared:
             continue
@@ -894,6 +1083,69 @@ def _select_image_bytes(item, image_index=None):
     return None, None
 
 
+# How many of a post's images the suggestion pipeline analyses when the
+# caller didn't pick one. Each image costs a full tagger pass (+ person crops,
+# + CCIP), several to ~10 s on CPU, so a long post (a manga chapter) is
+# sampled rather than walked page by page.
+DEFAULT_MAX_IMAGES = 6
+MAX_IMAGES_LIMIT = 12
+
+
+def _select_images(item, image_index=None, max_images=DEFAULT_MAX_IMAGES):
+    """[(index | None, image_bytes), ...] -- the images of `item` to analyse.
+
+    An explicit `image_index` (the user picked one in the carousel) means
+    exactly that image. Otherwise EVERY image of the post, up to
+    `max_images`: a post often shows the same character in a back view, a
+    close-up and a chibi, and judging from one of them (what this used to do:
+    the largest file) throws the rest away. When there are more images than
+    the cap they are sampled evenly, first and last included, so a long post
+    is still covered end to end. Falls back to the legacy single preview
+    blob when there are no PreviewImage rows (index None)."""
+    imgs = list(item.preview_images.order_by('order'))
+    if imgs:
+        if image_index is not None and 0 <= image_index < len(imgs):
+            return [(image_index, bytes(imgs[image_index].data))]
+        if len(imgs) > max_images > 1:
+            picks = sorted({round(k * (len(imgs) - 1) / (max_images - 1)) for k in range(max_images)})
+        else:
+            picks = list(range(min(len(imgs), max(1, max_images))))
+        return [(i, bytes(imgs[i].data)) for i in picks if imgs[i].data]
+    if item.preview_data:
+        return [(None, bytes(item.preview_data))]
+    return []
+
+
+def _aggregate_confidences(per_image):
+    """per_image: [{name: confidence}, ...] one dict per analysed image ->
+    {name: (confidence, images_with, images_total, [image positions])}.
+
+    The combined confidence is half the best single image and half the mean
+    over ALL images (0 where absent): one strong sighting keeps a candidate
+    alive (a post can show a different character on each page, so it must
+    not be averaged away), while agreement across images ranks it higher
+    (the same character on 3 of 4 images beats a single 4-image blip). With
+    one image both halves are equal, so the value is unchanged."""
+    n = len(per_image)
+    out = {}
+    for name in set().union(*per_image) if per_image else ():
+        vals = [d.get(name, 0.0) for d in per_image]
+        seen = [i for i, v in enumerate(vals) if v > 0]
+        out[name] = (0.5 * max(vals) + 0.5 * sum(vals) / n, len(seen), n, seen)
+    return out
+
+
+def _aggregate_situation(hints):
+    """One situation from per-image hints: content warning first (any R18
+    image makes the post R18), then 'more than one person' (any), then SOLO
+    only if every image that said anything said SOLO."""
+    hints = [h for h in hints if h]
+    for wanted in ('R18', 'MULTIPLE'):
+        if wanted in hints:
+            return wanted
+    return hints[0] if hints and all(h == hints[0] for h in hints) else None
+
+
 def _is_field_missing(item, field):
     """Mirrors ItemQueueManager.jsx's own `isFieldMissing` exactly — kept as
     a small module-level helper (rather than inlined Q() logic, like
@@ -938,6 +1190,41 @@ def _expand_character_alias(char_name):
         if char_name in group.characters:
             return list(group.characters)
     return [char_name]
+
+
+def _classifier_predictions(tagger_result, tagger_backend):
+    """[(character, confidence), ...] best-first from the supplementary
+    classifier (see tagger.predict_character), one entry per distinct name.
+
+    The classifier is trained on single-subject inputs: solo images, and
+    manually region-labeled person crops. So it gets the same kind of input
+    at inference: the whole image when 0-1 people were detected, and each
+    detected person's OWN crop (tagger.suggest_tags's `crops`) when there
+    are 2+. Feeding it a group shot's blended whole-image vector -- which
+    used to be skipped entirely -- would be a train/inference mismatch, and
+    skipping group shots entirely meant the region labels it was trained on
+    could never help with exactly the images they came from. When 2+ people
+    were detected but no crop could be processed, nothing is predicted.
+    """
+    person_count = tagger_result.get('person_count', 0)
+    crops = tagger_result.get('crops') or []
+    if person_count >= 2:
+        inputs = [(c['general_probs'], c.get('embedding'), c.get('ccip')) for c in crops]
+    else:
+        inputs = [(tagger_result['general_probs'], tagger_result.get('embedding'), tagger_result.get('ccip'))]
+    best = {}
+    for probs, embedding, ccip in inputs:
+        name, confidence = tagger.predict_character(probs, tagger_backend, embedding=embedding, ccip=ccip)
+        if name and confidence > best.get(name, 0.0):
+            best[name] = confidence
+    return sorted(best.items(), key=lambda kv: -kv[1])
+
+
+def _classifier_needs(tagger_backend):
+    """(with_embedding, with_ccip) for tagger.suggest_tags -- only the
+    features the trained classifier actually reads are computed."""
+    parts = tagger.feature_parts(tagger.classifier_feature_source(tagger_backend))
+    return 'embedding' in parts, 'ccip' in parts
 
 
 def _suggest_for_item(item, external=False, tagger_backend='onnx',
@@ -1084,6 +1371,7 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                     general_threshold=general_threshold,
                     character_threshold=character_threshold,
                     backend=tagger_backend,
+                    **dict(zip(('with_embedding', 'with_ccip'), _classifier_needs(tagger_backend))),
                 )
             except Exception:
                 logging.exception('Tagger inference failed for item %s', item.id)
@@ -1128,12 +1416,10 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                     # docstring: it was never trained on multi-character
                     # crops, so a blended multi-person image would be a
                     # meaningless extrapolation for it).
-                    if use_classifier and want_characters and not characters \
-                            and tagger_result.get('person_count', 0) <= 1:
-                        char_name, confidence = tagger.predict_character(
-                            tagger_result['general_probs'], tagger_backend,
-                        )
-                        if char_name:
+                    if use_classifier and want_characters and not characters:
+                        predictions = _classifier_predictions(tagger_result, tagger_backend)
+                        if predictions:
+                            char_name, confidence = predictions[0]
                             characters = [
                                 {'name': n, 'score': confidence, 'matched': True, 'source': 'classifier'}
                                 for n in _expand_character_alias(char_name)
@@ -1202,7 +1488,7 @@ def _append_tag_similarity_candidates(sim, title_c, char_c, situation_c,
 
 def _collect_candidates(item, external=False, tagger_backend='onnx',
                          general_threshold=0.35, character_threshold=0.85,
-                         tag_limit_for_matching=None, image_index=None):
+                         tag_limit_for_matching=None, image_index=None, max_images=DEFAULT_MAX_IMAGES):
     """Candidate-collecting counterpart to _suggest_for_item, used both by
     _suggest_for_item_ensemble (the live suggest_tags endpoint's default —
     see that function's own docstring) and directly by
@@ -1239,6 +1525,20 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
 
     title_c, char_c, situation_c, tags_out = [], [], [], []
 
+    # The image is picked once, up front: whether it is black-and-white
+    # changes which evidence is trustworthy for EVERY source below (see
+    # _MONOCHROME_ENSEMBLE_WEIGHTS and _suggest_from_similar_tags'
+    # `monochrome`), not just for the tagger.
+    images, monochrome = [], False
+    if want_titles or want_characters or want_tags or want_situation:
+        images = _select_images(item, image_index, max_images)
+        if images:
+            # a mostly-black-and-white post (a manga with a colour cover)
+            # counts as monochrome: the colour cues are missing from most of it
+            monochrome = sum(tagger.is_monochrome(b) for _i, b in images) * 2 > len(images)
+    image_indices = [i for i, _b in images]
+    resolved_image_index = image_indices[0] if len(images) == 1 else None
+
     if want_titles or want_characters:
         hashtag_hits = _match_hashtags(item.description, external=external)
         if want_titles:
@@ -1247,6 +1547,12 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         if want_characters:
             for c in hashtag_hits['characters']:
                 char_c.append({'value': c, 'source': 'hashtag', 'confidence': 1.0})
+        if want_titles:
+            for t in hashtag_hits['titles_partial']:
+                title_c.append({'value': t, 'source': 'hashtag_partial', 'confidence': 1.0})
+        if want_characters:
+            for c in hashtag_hits['characters_partial']:
+                char_c.append({'value': c, 'source': 'hashtag_partial', 'confidence': 1.0})
 
     # Translate the post's own caption to English and search Danbooru for
     # a matching title/character (see danbooru_lookup.match_description_
@@ -1276,34 +1582,52 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
                 situation_c.append({'value': db['situation_hint'], 'source': 'artist_history', 'confidence': 1.0})
 
     if not want_tags and (want_titles or want_characters or want_situation):
-        sim = _suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk)
+        sim = _suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk, monochrome=monochrome)
         _append_tag_similarity_candidates(sim, title_c, char_c, situation_c,
                                            want_titles, want_characters, want_situation)
 
-    tagger_result = None
-    resolved_image_index = None
+    # One tagger pass per analysed image; the results are then combined (see
+    # _aggregate_confidences). Each image keeps its own person detection and
+    # per-person crops, so a post with a different character on every page
+    # still yields every character, with "k of n images" as the evidence.
+    results = []
     if (want_titles or want_characters or want_tags or want_situation) and HAVE_TAGGER:
-        image_bytes, resolved_image_index = _select_image_bytes(item, image_index)
-
-        if image_bytes is not None:
+        needs = dict(zip(('with_embedding', 'with_ccip'), _classifier_needs(tagger_backend)))
+        for position, (index, image_bytes) in enumerate(images):
             try:
-                tagger_result = tagger.suggest_tags(
+                results.append((position, tagger.suggest_tags(
                     image_bytes,
                     general_threshold=general_threshold,
                     character_threshold=character_threshold,
                     backend=tagger_backend,
-                )
+                    **needs,
+                )))
             except Exception:
-                logging.exception('Tagger inference failed for item %s', item.id)
+                logging.exception('Tagger inference failed for item %s image %s', item.id, index)
+    n_results = len(results)
 
-    if tagger_result is not None:
+    def support(entry_positions):
+        return {'image_indices': [image_indices[results[p][0]] for p in entry_positions
+                                  if image_indices[results[p][0]] is not None]}
+
+    if results:
         if want_tags:
-            tags_out = tagger_result['tags']
-        if want_situation and tagger_result['situation_hint']:
-            situation_c.append({'value': tagger_result['situation_hint'], 'source': 'tagger', 'confidence': 1.0})
+            merged_tags = {}
+            for _p, r in results:
+                for t in r['tags']:
+                    merged_tags[t['name']] = max(merged_tags.get(t['name'], 0.0), t['score'])
+            tags_out = [{'name': n, 'score': round(sc, 4)}
+                        for n, sc in sorted(merged_tags.items(), key=lambda kv: -kv[1])[:15]]
+        if want_situation:
+            hint = _aggregate_situation([r['situation_hint'] for _p, r in results])
+            if hint:
+                situation_c.append({'value': hint, 'source': 'tagger', 'confidence': 1.0})
 
         if want_characters or want_titles:
-            matched_chars, tagger_titles = _match_tagger_characters(tagger_result['characters'])
+            per_image_raw = [{c['name']: c['score'] for c in r['characters']} for _p, r in results]
+            raw_agg = _aggregate_confidences(per_image_raw)
+            raw_candidates = [{'name': n, 'score': round(v[0], 4)} for n, v in raw_agg.items()]
+            matched_chars, tagger_titles = _match_tagger_characters(raw_candidates)
             if want_characters:
                 # Only entries the tagger's output actually resolved to a
                 # real DB character (matched=True) are legitimate candidate
@@ -1315,9 +1639,11 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
                     if not c.get('matched'):
                         continue
                     confidence = c['score'] if c.get('score') is not None else 0.5
+                    _conf, k, n, seen = raw_agg.get(c.get('raw_name'), (None, 1, n_results, []))
                     char_c.append({
                         'value': c['name'], 'source': 'tagger', 'confidence': confidence,
                         'raw_name': c.get('raw_name'), 'match_method': c.get('match_method'),
+                        'images_with': k, 'images_total': n, **support(seen),
                     })
             if want_titles:
                 for t in tagger_titles:
@@ -1342,23 +1668,27 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
             # images (see item.management.commands.train_character_classifier)
             # — covers characters the Danbooru-trained tagger backends
             # structurally can't (OCs, titles not yet in Danbooru's tag
-            # vocabulary). Only trusted on single-subject images
-            # (person_count <= 1) since it was only ever trained on those —
-            # a multi-character image's blended features would be a
-            # meaningless extrapolation for it, not a real prediction.
-            if want_characters and tagger_result.get('person_count', 0) <= 1:
-                char_name, confidence = tagger.predict_character(
-                    tagger_result['general_probs'], tagger_backend,
-                )
-                if char_name:
-                    for n in _expand_character_alias(char_name):
-                        char_c.append({'value': n, 'source': 'classifier', 'confidence': confidence})
+            # vocabulary). Run per person crop on a multi-person image (see
+            # _classifier_predictions) -- it was trained on single-subject
+            # inputs, so a group shot's blended whole-image features would
+            # be a meaningless extrapolation for it -- and per analysed image.
+            if want_characters:
+                per_image_cls = [dict(_classifier_predictions(r, tagger_backend)) for _p, r in results]
+                for char_name, (confidence, k, n, seen) in _aggregate_confidences(per_image_cls).items():
+                    for alias in _expand_character_alias(char_name):
+                        char_c.append({'value': alias, 'source': 'classifier', 'confidence': confidence,
+                                       'images_with': k, 'images_total': n, **support(seen)})
 
         if want_titles or want_characters or want_situation:
-            tags_for_matching = tagger_result['tags_full']
+            # Tags that most of the analysed images agree on: the union over
+            # a post's images blends different characters' tags into one
+            # incoherent set, which is exactly what tag similarity can't use.
+            counts = Counter(t for _p, r in results for t in set(r['tags_full']))
+            need = (n_results + 1) // 2
+            tags_for_matching = [t for t, c in counts.most_common() if c >= need] or list(counts)
             if tag_limit_for_matching is not None:
                 tags_for_matching = tags_for_matching[:tag_limit_for_matching]
-            sim2 = _suggest_from_similar_tags(tags_for_matching, item.description, exclude_pk=item.pk)
+            sim2 = _suggest_from_similar_tags(tags_for_matching, item.description, exclude_pk=item.pk, monochrome=monochrome)
             _append_tag_similarity_candidates(sim2, title_c, char_c, situation_c,
                                                want_titles, want_characters, want_situation)
 
@@ -1366,14 +1696,15 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         'suggest item=%s backend=%s want(t/c/tag/s)=%s/%s/%s/%s have_tagger=%s '
         'image_index=%s tagger_ran=%s cand(title/char/situation/tags)=%d/%d/%d/%d',
         item.id, tagger_backend, want_titles, want_characters, want_tags, want_situation,
-        HAVE_TAGGER, resolved_image_index, tagger_result is not None,
+        HAVE_TAGGER, image_indices, n_results > 0,
         len(title_c), len(char_c), len(situation_c), len(tags_out),
     )
     return {
         'title': title_c, 'character': char_c, 'situation': situation_c, 'tags': tags_out,
         'want_titles': want_titles, 'want_characters': want_characters,
         'want_tags': want_tags, 'want_situation': want_situation,
-        'image_index': resolved_image_index,
+        'image_index': resolved_image_index, 'image_indices': image_indices, 'images_analyzed': n_results,
+        'monochrome': monochrome,
     }
 
 
@@ -1388,6 +1719,10 @@ DEFAULT_ENSEMBLE_WEIGHTS = {
     # evaluate_ensemble's own docstring on why) — kept at their original,
     # reasoning-based values rather than whatever the grid happened to show.
     'hashtag': 5.0,
+    # A hashtag that merely CONTAINS a registered name (or vice versa) --
+    # see _is_partial_match. Not grid-searched; sits between the
+    # single-source image signals and an exact hashtag hit.
+    'hashtag_partial': 2.0,
     'danbooru': 3.0,
     # Empirically tuned: a 6-dimension grid search (evaluate_ensemble
     # --grid-search) against confirmed real DB items, cross-checked across
@@ -1442,6 +1777,32 @@ _CROSS_FIELD_CONFIDENCE_CAP = 1.0
 # barely-above-zero guess (e.g. one tag_similarity_weak hit alone, ~0.15)
 # doesn't get to introduce noise into the other field.
 _CROSS_FIELD_MIN_SCORE = 1.0
+
+# Weights when the selected image is black-and-white (tagger.is_monochrome).
+# Colour is the cue the tag-based sources lean on hardest -- eye/hair colour
+# tags are what tag similarity matches on, and what the tagger's character
+# recognition and the tag-feature classifier see most clearly -- so on a
+# monochrome image they are down-weighted, and the sources that never looked
+# at the image (the artist's own hashtags and history) keep or gain weight.
+# Measured: the tag-feature classifier is ~10 points less accurate on
+# monochrome crops than on colour ones (73% vs 82%, item-grouped CV). The
+# specific multipliers below are reasoned, NOT tuned -- there is no
+# monochrome-only evaluation set large enough to grid-search them yet.
+_MONOCHROME_WEIGHT_SCALE = {
+    'tag_similarity': 0.5,
+    'tag_similarity_weak': 0.5,
+    'tagger': 0.75,
+    'tagger_group': 0.75,
+    'artist_history': 1.25,
+    'hashtag_partial': 1.25,
+}
+
+
+def _ensemble_weights(monochrome):
+    if not monochrome:
+        return DEFAULT_ENSEMBLE_WEIGHTS
+    return {src: w * _MONOCHROME_WEIGHT_SCALE.get(src, 1.0) for src, w in DEFAULT_ENSEMBLE_WEIGHTS.items()}
+
 
 # Situation gets its OWN weight scheme, not DEFAULT_ENSEMBLE_WEIGHTS — the
 # tagger's own composition/rating heuristic (see tagger._situation_hint:
@@ -1501,6 +1862,10 @@ def _character_breakdown(entries, values):
                 'confidence': round(e['confidence'], 4),
                 'raw_name': e.get('raw_name'),
                 'match_method': e.get('match_method'),
+                # multi-image evidence: seen on `images_with` of `images_total` analysed images
+                'images_with': e.get('images_with'),
+                'images_total': e.get('images_total'),
+                'image_indices': e.get('image_indices'),
             })
     return breakdown
 
@@ -1593,9 +1958,15 @@ def _cross_boost_character_candidates(title_scores, known_titles):
     return boosts
 
 
+# How many ranked character/title candidates the review list can hold. It used
+# to be cut at 3, but a group shot or a multi-image post can name 4+ characters;
+# the UI shows the top 3 and folds the rest behind a toggle (EditFields.jsx).
+_CANDIDATE_LIST_LIMIT = 12
+
+
 def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
                                 general_threshold=0.35, character_threshold=0.85,
-                                image_index=None):
+                                image_index=None, max_images=DEFAULT_MAX_IMAGES):
     """Weighted-ensemble counterpart to _suggest_for_item — same
     want_titles/want_characters/want_tags/want_situation contract and
     return shape (drop-in compatible with suggest_tags_view's response),
@@ -1618,8 +1989,10 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     collected = _collect_candidates(
         item, external=external, tagger_backend=tagger_backend,
         general_threshold=general_threshold, character_threshold=character_threshold,
-        image_index=image_index,
+        image_index=image_index, max_images=max_images,
     )
+
+    weights = _ensemble_weights(collected['monochrome'])
 
     # Title <-> character cross-boost: a character candidate's own combined
     # score makes its CharacterGroup's title(s) more likely, and (using
@@ -1638,13 +2011,13 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     # history alone support this character", not a value already inflated
     # by the very title boost it's about to help produce.
     _char_values_stage1, char_scores_stage1 = _combine_candidates(
-        collected['character'], DEFAULT_ENSEMBLE_WEIGHTS, top_k=3,
+        collected['character'], weights, top_k=_CANDIDATE_LIST_LIMIT,
     )
 
     title_entries = collected['title']
     if cross_boost:
         title_entries = title_entries + _cross_boost_title_candidates(char_scores_stage1, known_titles)
-    title_values, title_scores = _combine_candidates(title_entries, DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    title_values, title_scores = _combine_candidates(title_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
     # top_k=3 (not more): this is a REVIEW list a human picks from (see
     # EditFields.jsx's candidate cards), not an auto-apply-everything list
     # — three ranked options is enough to catch "the right answer wasn't
@@ -1663,7 +2036,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     char_entries = collected['character']
     if cross_boost:
         char_entries = char_entries + _cross_boost_character_candidates(title_scores, known_titles)
-    char_values, char_scores = _combine_candidates(char_entries, DEFAULT_ENSEMBLE_WEIGHTS, top_k=3)
+    char_values, char_scores = _combine_candidates(char_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
     situation_values, _situation_scores = _combine_candidates(collected['situation'], DEFAULT_SITUATION_WEIGHTS, top_k=1)
 
     char_breakdown = _character_breakdown(char_entries, char_values)
@@ -1702,130 +2075,9 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         'source': 'ensemble',
         'sample_size': 0,
         'image_index': collected['image_index'],
+        'image_indices': collected['image_indices'],
+        'images_analyzed': collected['images_analyzed'],
     }
-
-
-def _known_titles_and_characters_excluding(item_pk):
-    """All titles/characters used by every OTHER Item — one combined scan
-    (mirrors ItemViewSet.all_titles/all_characters, but both fields at once
-    and excluding one item) so _maybe_autocreate_character_group can tell
-    whether a title/character this save introduces is genuinely new to the
-    whole app, not just new to the one Item being edited."""
-    titles, characters = set(), set()
-    for other in Item.objects.exclude(pk=item_pk).only('titles', 'characters').iterator():
-        for t in (other.titles or []):
-            if t and isinstance(t, str):
-                titles.add(t.strip())
-        for c in (other.characters or []):
-            if c and isinstance(c, str):
-                characters.add(c.strip())
-    return titles, characters
-
-
-def _maybe_autocreate_character_group(item, orig_titles, orig_characters):
-    """Editing an item to give it BOTH a title and character(s) that have
-    never appeared anywhere else in the app is exactly the moment a new
-    series first gets archived — the same moment a human would otherwise
-    have to remember to go create a matching CharacterGroup by hand (see
-    CharacterGroup's own docstring: it's what scopes character-name
-    suggestions/matching to the right title, and what
-    train_character_classifier's title-roster resolution keys off). Auto-
-    creates one instead: named after the new title, seeded with every
-    character on this item (not just the newly-typed ones — for a
-    brand-new title, everyone appearing on this first item legitimately
-    belongs to it, even a name that happens to already exist elsewhere for
-    an unrelated franchise) and pre-linked to that title (CharacterGroup.
-    titles) so it shows up for this title immediately, without a human
-    needing to separately open the character-group manager and link it.
-
-    Deliberately narrow: only fires when THIS save introduces a title that
-    has never been used by any other Item AND at least one character that
-    has never been used by any other Item, in the same call — reusing an
-    existing title (even to add a brand-new character to it) is a
-    judgment call about whether that character belongs in an existing
-    group or a new one, which is left to a human via
-    CharacterGroupManager.jsx rather than guessed at here. Never touches
-    an existing CharacterGroup — get_or_create only creates; if a group
-    with this exact name coincidentally already exists (e.g. two different
-    items introducing the "same" new title back to back), its existing
-    characters/titles are extended, never overwritten.
-
-    Returns the CharacterGroup it created/extended, or None if the "new
-    title + new character" condition wasn't met.
-    """
-    new_titles = [t for t in (item.titles or []) if t and t not in orig_titles]
-    new_characters = [c for c in (item.characters or []) if c and c not in orig_characters]
-    if not new_titles or not new_characters:
-        return None
-
-    known_titles, known_characters = _known_titles_and_characters_excluding(item.pk)
-    brand_new_titles = [t for t in new_titles if t not in known_titles]
-    brand_new_characters = [c for c in new_characters if c not in known_characters]
-    if not brand_new_titles or not brand_new_characters:
-        return None
-
-    name = brand_new_titles[0]
-    group, _created = CharacterGroup.objects.get_or_create(name=name, defaults={'characters': [], 'titles': []})
-    group.characters = _merge_unique(group.characters, item.characters or [])
-    group.titles = _merge_unique(group.titles, brand_new_titles)
-    group.save(update_fields=['characters', 'titles'])
-    return group
-
-
-def _maybe_assign_new_characters_to_existing_groups(item, orig_characters):
-    """The everyday counterpart to _maybe_autocreate_character_group: an
-    ALREADY-established title (one an existing CharacterGroup already
-    claims via its own `titles`) getting a brand-new character doesn't
-    need a new group — the character just belongs in the one that's
-    already there. Without this, every such addition would otherwise have
-    to be assigned by hand via CharacterGroupManager.jsx's own
-    "未分類"(unclassified) checkbox list, every single time.
-
-    Same "never guess" posture as _maybe_autocreate_character_group:
-      - Only characters this save actually introduces are considered —
-        one already on the item before this save is left wherever it
-        already is.
-      - A character already belonging to ANY existing group (this one or
-        a different one) is left alone. It may deliberately live in a
-        broader/different group on purpose (e.g. a franchise-wide
-        character kept on a parent group rather than a title-specific
-        child one — see CharacterGroup.parent's own docstring), so
-        silently moving it here would undo a human's earlier, deliberate
-        placement.
-      - Only fires when this item's titles resolve to EXACTLY ONE distinct
-        CharacterGroup across all of them (via an exact match against that
-        group's own `titles` list, not a fuzzy one) — a crossover item
-        whose two titles belong to two different groups is a genuine
-        ambiguity for a human to resolve, not something to guess at here.
-
-    Returns the CharacterGroup characters were added to, or None if
-    nothing qualified (including the case where _maybe_autocreate_
-    character_group already handled this exact character via a brand-new
-    group of its own — by the time this runs, that character is no longer
-    ungrouped, so it's correctly skipped here instead of double-handled).
-    """
-    new_characters = [c for c in (item.characters or []) if c and c not in orig_characters]
-    titles = [t for t in (item.titles or []) if t]
-    if not new_characters or not titles:
-        return None
-
-    matching_groups = {}
-    already_grouped = set()
-    for g in CharacterGroup.objects.all():
-        already_grouped.update(g.characters or [])
-        if any(t in (g.titles or []) for t in titles):
-            matching_groups[g.pk] = g
-    if len(matching_groups) != 1:
-        return None
-    group = next(iter(matching_groups.values()))
-
-    to_add = [c for c in new_characters if c not in already_grouped]
-    if not to_add:
-        return None
-
-    group.characters = _merge_unique(group.characters, to_add)
-    group.save(update_fields=['characters'])
-    return group
 
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
@@ -2117,6 +2369,21 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     logging.warning('Twitter GQL description top-up auth error for %s: %s', target_url, e)
                 except Exception:
                     logging.exception('Twitter GQL description top-up failed for %s', target_url)
+
+            # Pixiv: none of the image-fetching paths here return the post's
+            # title/tags, so the same "always try once more, text only" idea
+            # as the Twitter top-up above -- author-set tags are what
+            # item.views._match_hashtags reads. Enrichment only: a failure
+            # here must never fail the image fetch itself.
+            if (not fetched_description and not item.description and HAVE_PIXIV_PLAYWRIGHT
+                    and 'pixiv.net/' in target_url):
+                pixiv_id_match = re.search(r'/artworks/(\d+)', target_url)
+                if pixiv_id_match:
+                    try:
+                        from .pixiv_bookmarks_fetch import fetch_illust_description
+                        fetched_description = fetch_illust_description(int(pixiv_id_match.group(1))) or ''
+                    except Exception:
+                        logging.exception('Pixiv description/tag top-up failed for %s', target_url)
 
             # Poipiku: dedicated fetcher that handles IllustItemThubExpand and
             # the ShowAppendFile AJAX endpoint.  Run for any poipiku.com URL,
@@ -3158,8 +3425,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         item.characters = region_chars
         item.character_regions_ack_signature = ''  # now genuinely equal — nothing left to remember
         item.save(update_fields=['characters', 'character_regions_ack_signature'])
+        grouping = _group_response_fields(ensure_characters_grouped(item))
         serializer = ItemSerializer(item, context={'request': request})
-        return Response({'status': 'saved', 'item': serializer.data})
+        return Response({'status': 'saved', 'item': serializer.data, **grouping})
 
     @action(detail=True, methods=['post'], url_path='acknowledge_character_mismatch')
     def acknowledge_character_mismatch(self, request, pk=None):
@@ -3232,12 +3500,27 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             except (TypeError, ValueError):
                 image_index = None
 
-        suggest_fn = _suggest_for_item_ensemble if use_ensemble else _suggest_for_item
-        result = suggest_fn(
-            item, external=external, tagger_backend=tagger_backend,
-            general_threshold=general_threshold, character_threshold=character_threshold,
-            image_index=image_index,
-        )
+        # How many of the post's images to analyse when none was picked (the
+        # ensemble path only; the cascade stays single-image). Clamped: each
+        # image is a full, slow tagger pass.
+        try:
+            max_images = int(data.get('max_images') or DEFAULT_MAX_IMAGES)
+        except (TypeError, ValueError):
+            max_images = DEFAULT_MAX_IMAGES
+        max_images = max(1, min(max_images, MAX_IMAGES_LIMIT))
+
+        if use_ensemble:
+            result = _suggest_for_item_ensemble(
+                item, external=external, tagger_backend=tagger_backend,
+                general_threshold=general_threshold, character_threshold=character_threshold,
+                image_index=image_index, max_images=max_images,
+            )
+        else:
+            result = _suggest_for_item(
+                item, external=external, tagger_backend=tagger_backend,
+                general_threshold=general_threshold, character_threshold=character_threshold,
+                image_index=image_index,
+            )
         return Response(result)
 
     @action(detail=True, methods=['post'], url_path='update_fields')
@@ -3250,10 +3533,6 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
         updates = {}
-        # Snapshot BEFORE any field below gets applied — _maybe_autocreate_character_group
-        # (called after save()) needs to know what was new to THIS item, not
-        # just what ended up on it.
-        orig_titles = list(item.titles or [])
         orig_characters = list(item.characters or [])
 
         if 'characters' in data:
@@ -3304,20 +3583,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to save Item updates')
             return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        auto_group = None
-        if 'titles' in updates and 'characters' in updates:
-            auto_group = _maybe_autocreate_character_group(item, orig_titles, orig_characters)
-
-        assigned_group = None
-        if 'characters' in updates:
-            assigned_group = _maybe_assign_new_characters_to_existing_groups(item, orig_characters)
+        # Every character this item carries ends up in its title's group --
+        # including ones typed before the title was, which is why a title
+        # change alone re-runs this (see item.character_groups).
+        grouping = {}
+        if 'characters' in updates or 'titles' in updates:
+            grouping = _group_response_fields(ensure_characters_grouped(item))
 
         serializer = ItemSerializer(item, context={'request': request})
-        response = {'status': 'updated', 'updated': updates, 'item': serializer.data}
-        if auto_group is not None:
-            response['auto_created_character_group'] = {'id': auto_group.id, 'name': auto_group.name}
-        if assigned_group is not None:
-            response['auto_assigned_to_character_group'] = {'id': assigned_group.id, 'name': assigned_group.name}
+        response = {'status': 'updated', 'updated': updates, 'item': serializer.data, **grouping}
         return Response(response)
 
     @action(detail=False, methods=['post'], url_path='create_manual')
@@ -3610,8 +3884,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to save character_regions for item %s', item.pk)
             return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        grouping = _group_response_fields(ensure_characters_grouped(item))
         serializer = ItemSerializer(item, context={'request': request})
-        return Response({'status': 'saved', 'item': serializer.data})
+        return Response({'status': 'saved', 'item': serializer.data, **grouping})
 
     @action(detail=False, methods=['get'], url_path='twitter_auth_check')
     def twitter_auth_check(self, request):

@@ -30,7 +30,7 @@ export default function TrainClassifierManager({ onClose }) {
   const [minImages, setMinImages] = useState('15')
   const [exclude, setExclude] = useState('')
   const [includeMulti, setIncludeMulti] = useState(false)
-  const [backend, setBackend] = useState('onnx')
+  const [backend, setBackend] = useState('canary')
   // On by default — see classifier_training.py's own _build_argv comment:
   // re-running the tagger on every already-processed image every single
   // retrain is expensive enough that skipping it is the sensible default,

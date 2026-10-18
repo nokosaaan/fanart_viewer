@@ -224,6 +224,111 @@ def _prepare_image_onnx(image_bytes, target_size):
     return np.expand_dims(arr, axis=0)
 
 
+# imgutils is only ever imported lazily (find_spec here, like HAVE_TIMM), and
+# CCIP's own ONNX model is fetched through huggingface_hub on first use --
+# routed into this app's own data dir for the same reason _load_timm does it
+# (the default ~/.cache may not survive a container restart).
+HAVE_CCIP = importlib.util.find_spec('imgutils') is not None
+CCIP_DIM = 768
+_ccip_importable = None
+
+
+def ccip_available():
+    """Whether CCIP can actually be imported here -- HAVE_CCIP only says the
+    imgutils package is installed, which is true of builds (the exe installs
+    it with --no-deps) where the CCIP module's own imports may still fail.
+    Checked once and cached; the model download itself happens on first use."""
+    global _ccip_importable
+    if _ccip_importable is None:
+        try:
+            os.environ.setdefault('HF_HOME', os.path.join(_data_dir(), 'hf_cache'))
+            from imgutils.metrics import ccip_extract_feature  # noqa: F401
+            _ccip_importable = True
+        except Exception:
+            logger.exception('CCIP is not importable in this environment')
+            _ccip_importable = False
+    return _ccip_importable
+
+
+def ccip_feature(image_bytes):
+    """CCIP (deepghs' Character Contrastive Image Pretraining, via imgutils)
+    embedding of an image -- a 768-d vector trained so that two pictures of
+    the SAME anime character land close together regardless of outfit, pose
+    or scene. Unlike the tagger it never goes through a tag vocabulary.
+    Expects roughly one character (a person crop, or a solo image)."""
+    if not (HAVE_CCIP and ccip_available()):
+        raise RuntimeError('ccip_feature needs dghs-imgutils with its CCIP module importable (see requirements.txt)')
+    os.environ.setdefault('HF_HOME', os.path.join(_data_dir(), 'hf_cache'))
+    from imgutils.metrics import ccip_extract_feature
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes))
+    canvas = Image.new('RGBA', image.size, (255, 255, 255))
+    canvas.alpha_composite(image.convert('RGBA'))
+    return np.asarray(ccip_extract_feature(canvas.convert('RGB')), dtype=np.float32)
+
+
+def to_grayscale_bytes(image_bytes):
+    """The same image with its colour removed (alpha flattened onto white
+    first, exactly like the tagger's own preprocessing), re-encoded as PNG.
+    Used to give the character classifier black-and-white versions of its
+    training images -- see train_character_classifier's --grayscale-augment."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes))
+    canvas = Image.new('RGBA', image.size, (255, 255, 255))
+    canvas.alpha_composite(image.convert('RGBA'))
+    buf = io.BytesIO()
+    canvas.convert('L').convert('RGB').save(buf, format='PNG')
+    return buf.getvalue()
+
+
+def color_stats(image_bytes):
+    """{'mean_saturation', 'colorful_fraction'} of the image's visible
+    (non-near-black) pixels, on a small thumbnail -- cheap (milliseconds),
+    independent of the tagger. A black-and-white drawing sits near 0 on
+    both; a coloured one doesn't."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes))
+    image.draft('RGB', (320, 320))
+    rgba = image.convert('RGBA')
+    canvas = Image.new('RGBA', rgba.size, (255, 255, 255))
+    canvas.alpha_composite(rgba)
+    thumb = canvas.convert('RGB')
+    thumb.thumbnail((256, 256))
+    hsv = np.asarray(thumb.convert('HSV'), dtype=np.float32) / 255.0
+    sat, val = hsv[..., 1], hsv[..., 2]
+    visible = val > 0.08
+    if not visible.any():
+        return {'mean_saturation': 0.0, 'colorful_fraction': 0.0}
+    return {
+        'mean_saturation': float(sat[visible].mean()),
+        'colorful_fraction': float((sat[visible] > 0.15).mean()),
+    }
+
+
+# Calibrated on ~8200 of this archive's own training images: at these values 6.4% of them
+# count as monochrome, and 80% of those also carry the tagger's own "monochrome"/"greyscale"
+# tag; loosening either bound sweeps in pastel and sepia-tinted colour work (the
+# agreement falls to ~55% by sat<=0.06).
+MONO_MAX_MEAN_SATURATION = 0.02
+MONO_MAX_COLORFUL_FRACTION = 0.03
+
+
+def is_monochrome(image_bytes):
+    """Whether the image is (effectively) black-and-white. Tolerates the
+    faint tint a scan or JPEG leaves on a grey drawing; a drawing with a
+    spot of colour (a red ribbon) isn't monochrome, since its colour cues
+    -- the very thing this flag exists to say are missing -- are present."""
+    try:
+        stats = color_stats(image_bytes)
+    except Exception:
+        return False
+    return (stats['mean_saturation'] <= MONO_MAX_MEAN_SATURATION
+            and stats['colorful_fraction'] <= MONO_MAX_COLORFUL_FRACTION)
+
+
 def _tags_from_predictions(preds, tag_names, rating_idx, general_idx, character_idx,
                             general_threshold, character_threshold, general_limit):
     """Shared by both backends: raw per-tag probabilities -> the same
@@ -353,15 +458,31 @@ def _prepare_image_timm(image_bytes, transform):
     return tensor
 
 
-def _raw_predict_timm(image_bytes, model_repo):
+def _timm_forward(image_bytes, model_repo, with_embedding=False):
+    """One forward pass -> (tag probabilities, loaded state, embedding|None).
+    With `with_embedding`, the pooled pre-logit embedding comes out of the
+    SAME pass (forward_features once, then the head twice -- the head is
+    negligible next to the backbone), so a classifier that wants the
+    embedding costs no second inference."""
     repo = model_repo or TIMM_MODEL_REPO
     state = _load_timm(repo)  # sets HF_HOME and imports torch/timm as a side effect, before this next import
     import torch
     tensor = _prepare_image_timm(image_bytes, state['transform'])
 
     with torch.inference_mode():
-        logits = state['model'](tensor)
+        embedding = None
+        if with_embedding:
+            features = state['model'].forward_features(tensor)
+            embedding = state['model'].forward_head(features, pre_logits=True).squeeze(0).numpy().astype(np.float32)
+            logits = state['model'].forward_head(features)
+        else:
+            logits = state['model'](tensor)
         preds = torch.sigmoid(logits).squeeze(0).numpy()
+    return preds, state, embedding
+
+
+def _raw_predict_timm(image_bytes, model_repo):
+    preds, state, _embedding = _timm_forward(image_bytes, model_repo)
     return preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx']
 
 
@@ -408,8 +529,24 @@ def _raw_predict(image_bytes, model_repo, backend):
     return _raw_predict_onnx(image_bytes, model_repo)
 
 
-def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend):
-    preds, tag_names, rating_idx, general_idx, character_idx = _raw_predict(image_bytes, model_repo, backend)
+def _raw_predict_with_embedding(image_bytes, model_repo, backend):
+    """(the usual 5-tuple of _raw_predict, embedding|None). The ONNX backend
+    has no accessible embedding (see extract_embedding), so it yields None."""
+    if backend == 'timm':
+        preds, state, embedding = _timm_forward(image_bytes, model_repo, with_embedding=True)
+        return (preds, state['tag_names'], state['rating_idx'], state['general_idx'], state['character_idx']), embedding
+    return _raw_predict_onnx(image_bytes, model_repo), None
+
+
+def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
+                               with_embedding=False):
+    if with_embedding:
+        (preds, tag_names, rating_idx, general_idx, character_idx), embedding = _raw_predict_with_embedding(
+            image_bytes, model_repo, backend,
+        )
+    else:
+        preds, tag_names, rating_idx, general_idx, character_idx = _raw_predict(image_bytes, model_repo, backend)
+        embedding = None
     result = _tags_from_predictions(
         preds, tag_names, rating_idx, general_idx, character_idx,
         general_threshold, character_threshold, general_limit,
@@ -421,6 +558,7 @@ def _suggest_tags_single_pass(image_bytes, general_threshold, character_threshol
     # suggest_tags()'s return value, and never read from a per-crop pass —
     # see suggest_tags's own docstring for why.
     result['_general_probs'] = np.asarray(preds, dtype=np.float32)[general_idx]
+    result['_embedding'] = embedding
     return result
 
 
@@ -510,7 +648,7 @@ def _crop_with_padding(image_bytes, box, padding_ratio=0.15):
 
 
 def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=15,
-                  model_repo=None, backend='onnx'):
+                  model_repo=None, backend='onnx', with_embedding=False, with_ccip=False):
     """Run the tagger on a single image.
 
     Returns {'characters': [...], 'tags': [...], 'rating': str|None,
@@ -548,6 +686,16 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     tag-based; see _situation_hint's own comment for why) — additive
     fields, safe for any existing caller that only reads the keys
     documented above.
+
+    `with_embedding`: also return the pooled embedding ('embedding', canary/
+    timm backend only; None otherwise) for the whole image and for every
+    person crop -- from the SAME forward pass that already runs, no extra
+    inference. `crops` lists, per detected person (up to _MAX_PERSON_CROPS,
+    only when 2+ people were found), that crop's own 'general_probs'/
+    'embedding'/'box' -- the input the supplementary character classifier
+    needs on a multi-person image. It was trained on person crops (manually
+    labeled regions), so feeding it the blended whole-image vector of a
+    group shot would be a train/inference mismatch.
     """
     try:
         boxes = _detect_person_boxes(image_bytes)
@@ -558,9 +706,13 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
 
     result = _suggest_tags_single_pass(
         image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
+        with_embedding=with_embedding,
     )
     general_probs = result.pop('_general_probs')
+    embedding = result.pop('_embedding', None)
+    ccip = _safe_ccip(image_bytes) if with_ccip else None
 
+    crops = []
     if len(boxes) >= 2:
         merged = {}
         for box in boxes[:_MAX_PERSON_CROPS]:
@@ -568,10 +720,17 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
                 crop_bytes = _crop_with_padding(image_bytes, box)
                 crop_result = _suggest_tags_single_pass(
                     crop_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
+                    with_embedding=with_embedding,
                 )
             except Exception:
                 logger.exception('Per-crop tagging failed for box %s', box)
                 continue
+            crops.append({
+                'box': box,
+                'general_probs': crop_result.pop('_general_probs'),
+                'embedding': crop_result.pop('_embedding', None),
+                'ccip': _safe_ccip(crop_bytes) if with_ccip else None,
+            })
             for c in crop_result['characters']:
                 existing = merged.get(c['name'])
                 if existing is None or c['score'] > existing['score']:
@@ -583,8 +742,19 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
             result = {**result, 'characters': sorted(merged.values(), key=lambda c: -c['score'])}
 
     result['general_probs'] = general_probs
+    result['embedding'] = embedding
+    result['ccip'] = ccip
+    result['crops'] = crops
     result['person_count'] = person_count
     return result
+
+
+def _safe_ccip(image_bytes):
+    try:
+        return ccip_feature(image_bytes)
+    except Exception:
+        logger.exception('CCIP feature extraction failed')
+        return None
 
 
 def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_threshold=0.35,
@@ -695,30 +865,64 @@ def have_character_classifier(backend):
     return _load_character_classifier(backend) is not None
 
 
-def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFIER_MIN_CONFIDENCE):
-    """(character_name, confidence) from the supplementary classifier, or
-    (None, 0.0) if no classifier is trained for this backend, its feature
-    dimension doesn't match what it was trained on (a model/tag-list
-    version drifted since training — fails safe rather than guessing), or
-    its top prediction doesn't clear min_confidence.
+def feature_parts(feature_source):
+    """'tags+ccip' -> ['tags', 'ccip']; the legacy 'both' means tags+embedding."""
+    if feature_source == 'both':
+        return ['tags', 'embedding']
+    return [p for p in (feature_source or 'tags').split('+') if p]
 
-    `general_probs` must be suggest_tags()'s own 'general_probs' for THIS
-    SAME backend — mismatched backends produce meaningless output, which is
-    exactly why callers always forward it from suggest_tags()'s return
-    value rather than recomputing it separately.
+
+def classifier_feature_source(backend):
+    """What the trained artifact for this backend was fit on, e.g. 'tags',
+    'embedding', 'ccip', 'tags+ccip' (None if there is no artifact). Lets a
+    caller ask suggest_tags only for the features the classifier will use."""
+    artifact = _load_character_classifier(backend)
+    if artifact is None:
+        return None
+    return artifact.get('feature_source', 'tags')
+
+
+def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFIER_MIN_CONFIDENCE,
+                      embedding=None, ccip=None):
+    """(character_name, confidence) from the supplementary classifier, or
+    (None, 0.0) if no classifier is trained for this backend, a feature it
+    needs is missing, its feature dimension doesn't match what it was trained
+    on (a model/tag-list version drifted since training — fails safe rather
+    than guessing), or its top prediction doesn't clear min_confidence.
+
+    `general_probs`/`embedding`/`ccip` must be suggest_tags()'s own values
+    for THIS SAME backend and for the SAME image or crop -- mismatched
+    backends produce meaningless output, which is exactly why callers always
+    forward them from suggest_tags()'s return value rather than recomputing.
+    The artifact's own `feature_source` decides which are used.
     """
     artifact = _load_character_classifier(backend)
     if artifact is None:
         return None, 0.0
     clf = artifact['classifier']
-    if len(general_probs) != len(artifact['general_tag_names']):
-        logger.warning(
-            'Character classifier feature-length mismatch (got %d, trained on %d) — '
-            'the tag list likely changed since training; skipping prediction.',
-            len(general_probs), len(artifact['general_tag_names']),
-        )
+
+    available = {'tags': general_probs, 'embedding': embedding, 'ccip': ccip}
+    parts = []
+    for name in feature_parts(artifact.get('feature_source', 'tags')):
+        value = available.get(name)
+        if value is None:
+            return None, 0.0
+        tag_dim = artifact.get('tag_dim', len(artifact['general_tag_names']))
+        if name == 'tags' and len(value) != tag_dim:
+            logger.warning(
+                'Character classifier feature-length mismatch (got %d, trained on %d) — '
+                'the tag list likely changed since training; skipping prediction.',
+                len(value), tag_dim,
+            )
+            return None, 0.0
+        parts.append(np.asarray(value, dtype=np.float32))
+    feature = np.concatenate(parts) if len(parts) > 1 else parts[0]
+    expected = artifact.get('feature_dim')
+    if expected is not None and len(feature) != expected:
+        logger.warning('Character classifier feature dim mismatch (got %d, trained on %d); skipping.', len(feature), expected)
         return None, 0.0
-    probs = clf.predict_proba(np.asarray(general_probs, dtype=np.float32).reshape(1, -1))[0]
+
+    probs = clf.predict_proba(feature.reshape(1, -1))[0]
     idx = int(np.argmax(probs))
     confidence = float(probs[idx])
     if confidence < min_confidence:

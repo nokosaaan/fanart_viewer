@@ -148,13 +148,6 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // (Danbooru reverse lookup for a tagger-recognized character that
   // matches nothing in this app's own vocabulary yet) is opt-in.
   const [suggestExternal, setSuggestExternal] = useState(false)
-  // On by default — the weighted-ensemble combiner
-  // (_suggest_for_item_ensemble) is now suggest_tags_view's own default
-  // too. A real 10-seed evaluation showed it winning on character accuracy
-  // in every sampled seed (avg 62.6% vs the old cascade's 51.0%);
-  // unchecking this opts back into the original "first source wins"
-  // cascade instead.
-  const [suggestUseEnsemble, setSuggestUseEnsemble] = useState(true)
   // Up to 3 ranked character candidates from the last suggestion response,
   // awaiting review — NOT auto-applied to charList (see applySuggestion's
   // own comment on why: an ensemble/cascade "match" can still be the wrong
@@ -175,11 +168,17 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // a title that has never been used anywhere in this app before, so
   // blind auto-apply was actually riskier here, not less).
   const [titleSuggestions, setTitleSuggestions] = useState([])
+  // Candidate lists show the top few and fold the rest behind a toggle: a
+  // group shot or a multi-image post can legitimately name 4+ characters,
+  // so the backend no longer cuts the list at 3 (see _suggest_for_item_ensemble).
+  const COLLAPSED_CANDIDATES = 3
+  const [showAllChars, setShowAllChars] = useState(false)
+  const [showAllTitles, setShowAllTitles] = useState(false)
   const [expandedTitleCandidate, setExpandedTitleCandidate] = useState(null)
   // Only offered once tagger_capabilities/ confirms the heavier 'timm'
   // backend is actually installed on this server (see requirements-timm.txt
   // — not every deployment opts into torch).
-  const [suggestModel, setSuggestModel] = useState('default')
+  const [suggestModel, setSuggestModel] = useState('canary')
   const [haveTimm, setHaveTimm] = useState(false)
   // This item's individual preview images (see ItemViewSet.previews), so
   // the user can pick a specific one to run inference on instead of always
@@ -259,8 +258,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   function applySuggestion(j){
     let added = false
 
-    // Titles: the ensemble backend (the default — see suggestUseEnsemble)
-    // now returns `titles`, the same {name, score, contributors} shape as
+    // Titles: the ensemble backend (suggest_tags_view's default) now returns `titles`, the same {name, score, contributors} shape as
     // `characters` — reviewed and picked by the user below, never auto-
     // applied. The older cascade path (opt-out fallback, `use_ensemble:
     // false`) has no such per-candidate breakdown and still returns the
@@ -308,7 +306,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     // when there was no image to infer from, e.g. tags-only result from
     // hashtags/DB history). Surfaced in the UI so it's never ambiguous
     // which image a suggestion is based on — see _select_image_bytes.
-    setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null, imageIndex: j.image_index ?? null })
+    setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null, imageIndex: j.image_index ?? null, imagesAnalyzed: j.images_analyzed ?? null })
   }
 
   function acceptTitleCandidate(t){
@@ -334,7 +332,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   }
 
   const SOURCE_LABELS = {
-    hashtag: 'ハッシュタグ', artist_history: '作家履歴(強)', artist_history_weak: '作家履歴(弱)',
+    hashtag: 'ハッシュタグ', hashtag_partial: 'ハッシュタグ(部分一致)', artist_history: '作家履歴(強)', artist_history_weak: '作家履歴(弱)',
     tag_similarity: 'タグ類似度(強)', tag_similarity_weak: 'タグ類似度(弱)',
     tagger: 'タガー直接認識', tagger_group: 'タガー+キャラグループ', classifier: '独自分類器', danbooru: 'Danbooru照合',
     oc_heuristic: 'オリジナル創作(推定)',
@@ -388,7 +386,6 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         body: JSON.stringify({
           external: suggestExternal,
           model: suggestModel === 'canary' ? 'timm' : 'default',
-          use_ensemble: suggestUseEnsemble,
           image_index: selectedImageIndex,
         }),
       })
@@ -415,20 +412,17 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       const j = await saveItemFields(item.id, payload)
       setLoading(false)
       // Backend auto-creates a CharacterGroup the moment a save first
-      // introduces both a brand-new title and a brand-new character
-      // together (see views._maybe_autocreate_character_group) — surfaced
-      // here so it isn't a silent side effect the user only discovers
-      // later in the character-group manager.
+      // had none for the item's title (see item/character_groups.py) —
+      // surfaced here so it isn't a silent side effect the user only
+      // discovers later in the character-group manager.
       if(j.auto_created_character_group){
         alert(`新しいタイトル「${j.auto_created_character_group.name}」のキャラクターグループを自動作成しました。`)
       }
-      // Same idea, for a title an existing group already claims (see
-      // views._maybe_assign_new_characters_to_existing_groups) — a new
-      // character under an already-established franchise gets folded
-      // straight into that group instead of landing in
-      // CharacterGroupManager's「未分類」list for manual assignment.
+      // Characters the save introduced (or that were waiting for a title) are
+      // filed into their title's group instead of landing in
+      // CharacterGroupManager's「未分類」list (see item/character_groups.py).
       if(j.auto_assigned_to_character_group){
-        alert(`新しいキャラクターをキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
+        alert(`新しいキャラクター(${(j.auto_assigned_to_character_group.characters || []).join('、')})をキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
       }
       if(onDirtyChange) onDirtyChange(false)
       if(onSaved) onSaved(j.item)
@@ -541,10 +535,6 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
           <input type="checkbox" checked={suggestExternal} onChange={e=>setSuggestExternal(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />
           Danbooruで新規タイトル・ハッシュタグの表記違いも照合(外部通信)
         </label>
-        <label style={{marginLeft:10, fontSize:11, color:'#94a3b8', cursor:'pointer'}} title="複数の情報源を重み付けして統合する新方式(実験的)。従来方式より実データでキャラ推定精度が高いことを確認済み">
-          <input type="checkbox" checked={suggestUseEnsemble} onChange={e=>setSuggestUseEnsemble(e.target.checked)} disabled={suggesting} style={{marginRight:4, verticalAlign:'middle'}} />
-          統合型の推論を使う(実験的)
-        </label>
         {haveTimm && (
           <select value={suggestModel} onChange={e=>setSuggestModel(e.target.value)} disabled={suggesting} style={{marginLeft:10, fontSize:11}}>
             <option value="default">標準モデル(軽量・高速)</option>
@@ -563,7 +553,10 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                     : '既存データ＋画像解析から'}
                   {suggestionResult.source.includes('danbooru') && '（Danbooru照合で新規タイトルを推論）'}</>
               )}
-              {images.length > 1 && suggestionResult.imageIndex != null && (
+              {images.length > 1 && suggestionResult.imagesAnalyzed > 1 && (
+                <> （全{images.length}枚中{suggestionResult.imagesAnalyzed}枚の画像を解析）</>
+              )}
+              {images.length > 1 && suggestionResult.imagesAnalyzed <= 1 && suggestionResult.imageIndex != null && (
                 <> （{suggestionResult.imageIndex + 1}枚目の画像を使用）</>
               )}
             </>
@@ -584,7 +577,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
             AI提案候補(スコア高い順、クリックで追加/解除。作品名データベースに無い新規タイトルの可能性もあります。どれも違う場合は下のTitlesで直接手動選択・入力してください):
           </div>
           <div style={{display:'flex', flexDirection:'column', gap:6}}>
-            {titleSuggestions.map(t => {
+            {(showAllTitles ? titleSuggestions : titleSuggestions.slice(0, COLLAPSED_CANDIDATES)).map(t => {
               const isAdded = titleList.includes(t.name)
               const isExpanded = expandedTitleCandidate === t.name
               const tier = candidateSourceTier(t.contributors)
@@ -629,6 +622,12 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                 </div>
               )
             })}
+            {titleSuggestions.length > COLLAPSED_CANDIDATES && (
+              <button className="btn" onClick={()=>setShowAllTitles(v => !v)}
+                style={{fontSize:11, alignSelf:'flex-start', background:'transparent', color:'#60a5fa'}}>
+                {showAllTitles ? '上位だけ表示 ▲' : `他${titleSuggestions.length - COLLAPSED_CANDIDATES}件の候補を表示 ▼`}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -662,7 +661,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
             AI提案候補(スコア高い順、クリックで追加/解除。どれも違う場合は下のCharactersで直接手動選択してください):
           </div>
           <div style={{display:'flex', flexDirection:'column', gap:6}}>
-            {charCandidates.map(c => {
+            {(showAllChars ? charCandidates : charCandidates.slice(0, COLLAPSED_CANDIDATES)).map(c => {
               const isAdded = charList.includes(c.name)
               const isExpanded = expandedCandidate === c.name
               const tier = candidateSourceTier(c.contributors)
@@ -700,6 +699,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                         <div key={i} style={{padding:'3px 0', borderTop: i>0 ? '1px solid #334155' : 'none'}}>
                           <span style={{color:'#93c5fd'}}>{SOURCE_LABELS[ct.source] || ct.source}</span>
                           {' '}(確信度 {ct.confidence})
+                          {ct.images_total > 1 && (
+                            <> — <span style={{color:'#86efac'}}>{ct.images_total}枚中{ct.images_with}枚で検出</span>
+                              {ct.image_indices && ct.image_indices.length > 0 && <>（{ct.image_indices.map(i => i + 1).join(', ')}枚目）</>}
+                            </>
+                          )}
                           {ct.raw_name && ct.raw_name !== c.name && (
                             <> — タガー認識: <span style={{color:'#fbbf24'}}>「{ct.raw_name}」</span>
                               {ct.match_method && <> → {MATCH_METHOD_LABELS[ct.match_method] || ct.match_method}</>}
@@ -712,6 +716,12 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                 </div>
               )
             })}
+            {charCandidates.length > COLLAPSED_CANDIDATES && (
+              <button className="btn" onClick={()=>setShowAllChars(v => !v)}
+                style={{fontSize:11, alignSelf:'flex-start', background:'transparent', color:'#60a5fa'}}>
+                {showAllChars ? '上位だけ表示 ▲' : `他${charCandidates.length - COLLAPSED_CANDIDATES}件の候補を表示 ▼`}
+              </button>
+            )}
           </div>
         </div>
       )}

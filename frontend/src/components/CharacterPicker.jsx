@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { groupsForTitles } from '../lib/groupScope'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -49,9 +50,7 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
   }
 
   const selectedTitles = Array.isArray(titles) ? titles.filter(Boolean) : []
-  const matchingGroups = selectedTitles.length > 0
-    ? groups.filter(g => (g.titles || []).some(t => selectedTitles.includes(t)))
-    : []
+  const matchingGroups = groupsForTitles(groups, selectedTitles)
   // Only actually restrict when it would narrow things down. Most existing
   // groups haven't been retroactively linked to a title yet (see
   // CharacterGroupManager) — filtering to zero matches would just make every
