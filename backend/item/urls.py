@@ -4,6 +4,7 @@ from .views import (
     CharacterAliasGroupViewSet,
 )
 from .views import items_from_db
+from .title_group_views import TitleGroupLinkViewSet
 from .backup_views import (
     backup_create_view, backup_list_view, backup_restore_view, backup_status_view, backup_restore_status_view,
 )
@@ -26,6 +27,7 @@ router.register(r'items', ItemViewSet, basename='item')
 router.register(r'character-groups', CharacterGroupViewSet, basename='character-group')
 router.register(r'character-links', CharacterDanbooruLinkViewSet, basename='character-link')
 router.register(r'title-links', TitleDanbooruLinkViewSet, basename='title-link')
+router.register(r'title-group-links', TitleGroupLinkViewSet, basename='title-group-link')
 router.register(r'character-alias-groups', CharacterAliasGroupViewSet, basename='character-alias-group')
 
 urlpatterns = [

@@ -1083,6 +1083,64 @@ def _select_image_bytes(item, image_index=None):
     return None, None
 
 
+def _remove_preview_images(item, ids):
+    """Delete `ids` (PreviewImage ids of `item`) and keep everything that
+    refers to an image's POSITION consistent.
+
+    Remaining images are renumbered contiguously (the order the previews list
+    and ?index=N use). Item.character_regions boxes name their image by that
+    same index, so after a delete they must follow their image to its new
+    index, and the boxes drawn on a deleted image must go -- otherwise a box
+    silently ends up on a different picture and trains the classifier on the
+    wrong crop. A region with image_index None means "the default image" (the
+    largest, see _select_image_bytes): it survives only while that image does.
+
+    Returns {'deleted', 'remaining', 'regions_dropped', 'regions_remapped'}.
+    """
+    from django.db import transaction
+    from django.db.models.functions import Length
+
+    ids = {int(i) for i in ids}
+    with transaction.atomic():
+        rows = list(item.preview_images.order_by('order').annotate(size=Length('data')).values('id', 'size'))
+        doomed = [pos for pos, row in enumerate(rows) if row['id'] in ids]
+        if not doomed:
+            return {'deleted': 0, 'remaining': len(rows), 'regions_dropped': 0, 'regions_remapped': 0}
+        doomed_set = set(doomed)
+        survivors = [pos for pos in range(len(rows)) if pos not in doomed_set]
+        new_index = {old: new for new, old in enumerate(survivors)}
+        default_pos = max(range(len(rows)), key=lambda pos: rows[pos]['size'] or 0)
+
+        PreviewImage.objects.filter(item=item, id__in=[rows[pos]['id'] for pos in doomed]).delete()
+        for old, new in new_index.items():
+            if old != new:
+                PreviewImage.objects.filter(pk=rows[old]['id']).update(order=new)
+
+        dropped = remapped = 0
+        regions = []
+        for region in (item.character_regions or []):
+            idx = region.get('image_index')
+            if idx is None:
+                if default_pos in doomed_set:
+                    dropped += 1
+                    continue
+            elif idx in doomed_set:
+                dropped += 1
+                continue
+            elif idx in new_index and new_index[idx] != idx:
+                region = {**region, 'image_index': new_index[idx]}
+                remapped += 1
+            regions.append(region)
+        if dropped or remapped:
+            item.character_regions = regions
+            item.save(update_fields=['character_regions'])
+        if not survivors:
+            item.preview_data = None
+            item.preview_content_type = None
+            item.save(update_fields=['preview_data', 'preview_content_type'])
+    return {'deleted': len(doomed), 'remaining': len(survivors), 'regions_dropped': dropped, 'regions_remapped': remapped}
+
+
 # How many of a post's images the suggestion pipeline analyses when the
 # caller didn't pick one. Each image costs a full tagger pass (+ person crops,
 # + CCIP), several to ~10 s on CPU, so a long post (a manga chapter) is
@@ -1192,9 +1250,10 @@ def _expand_character_alias(char_name):
     return [char_name]
 
 
-def _classifier_predictions(tagger_result, tagger_backend):
-    """[(character, confidence), ...] best-first from the supplementary
-    classifier (see tagger.predict_character), one entry per distinct name.
+def _classifier_predictions(tagger_result, tagger_backend, k=3, floor=0.02):
+    """[(character, probability), ...] best-first from the supplementary
+    classifier (see tagger.predict_character_topk): its top `k` classes for
+    each input, merged by name keeping the best probability.
 
     The classifier is trained on single-subject inputs: solo images, and
     manually region-labeled person crops. So it gets the same kind of input
@@ -1214,9 +1273,10 @@ def _classifier_predictions(tagger_result, tagger_backend):
         inputs = [(tagger_result['general_probs'], tagger_result.get('embedding'), tagger_result.get('ccip'))]
     best = {}
     for probs, embedding, ccip in inputs:
-        name, confidence = tagger.predict_character(probs, tagger_backend, embedding=embedding, ccip=ccip)
-        if name and confidence > best.get(name, 0.0):
-            best[name] = confidence
+        for name, p in tagger.predict_character_topk(probs, tagger_backend, k=k, floor=floor,
+                                                      embedding=embedding, ccip=ccip):
+            if p > best.get(name, 0.0):
+                best[name] = p
     return sorted(best.items(), key=lambda kv: -kv[1])
 
 
@@ -1417,7 +1477,9 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                     # crops, so a blended multi-person image would be a
                     # meaningless extrapolation for it).
                     if use_classifier and want_characters and not characters:
-                        predictions = _classifier_predictions(tagger_result, tagger_backend)
+                        predictions = [
+                            (n, p) for n, p in _classifier_predictions(tagger_result, tagger_backend, k=1, floor=0.5)
+                        ]
                         if predictions:
                             char_name, confidence = predictions[0]
                             characters = [
@@ -3052,13 +3114,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except Exception:
             return Response({'detail': 'preview not found'}, status=status.HTTP_404_NOT_FOUND)
         try:
-            pi.delete()
-            # re-order remaining preview images to keep contiguous order
-            remaining = list(item.preview_images.order_by('order'))
-            for new_idx, img in enumerate(remaining):
-                if img.order != new_idx:
-                    img.order = new_idx
-                    img.save()
+            _remove_preview_images(item, [pi.pk])
             return Response({'status': 'deleted', 'id': pid})
         except Exception as e:
             logging.exception('Failed to delete preview image by id')
@@ -3077,15 +3133,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         # DELETE: remove a single preview image at the given index
         if request.method == 'DELETE':
             try:
-                # delete the targeted preview image
-                target = imgs[idxi]
-                target.delete()
-                # re-order remaining preview images to keep contiguous order
-                remaining = list(item.preview_images.order_by('order'))
-                for new_idx, img in enumerate(remaining):
-                    if img.order != new_idx:
-                        img.order = new_idx
-                        img.save()
+                _remove_preview_images(item, [imgs[idxi].pk])
                 return Response({'status': 'deleted', 'index': idxi})
             except Exception as e:
                 logging.exception('Failed to delete preview image')
@@ -3094,6 +3142,53 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         # GET: return the image bytes for the requested index
         img = imgs[idxi]
         return HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+
+    @action(detail=True, methods=['post'], url_path='delete_previews')
+    def delete_previews(self, request, pk=None):
+        """Delete several of this item's images in one call.
+
+        Body: exactly one of
+          {"delete_ids": [PreviewImage id, ...]}  -- remove these;
+          {"keep_ids":   [PreviewImage id, ...]}  -- keep ONLY these, remove
+                                                      every other image.
+        "Keep" exists because the common case is "this post has 4 images and
+        I want just the one" -- naming the survivor is one click where
+        ticking the other three is three. keep_ids must be non-empty (an
+        empty keep would delete everything; the explicit clear-all endpoint
+        already exists for that) and every id must belong to this item.
+        Returns the _remove_preview_images summary, including how many
+        region labels were dropped/renumbered along with the images.
+        """
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        has_delete, has_keep = 'delete_ids' in data, 'keep_ids' in data
+        if has_delete == has_keep:
+            return Response({'detail': 'give exactly one of delete_ids / keep_ids'}, status=status.HTTP_400_BAD_REQUEST)
+        key = 'delete_ids' if has_delete else 'keep_ids'
+        raw = data.get(key)
+        if not isinstance(raw, list):
+            return Response({'detail': f'{key} must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            wanted = {int(v) for v in raw}
+        except (TypeError, ValueError):
+            return Response({'detail': f'{key} must be a list of ids'}, status=status.HTTP_400_BAD_REQUEST)
+
+        own = set(item.preview_images.values_list('id', flat=True))
+        if not wanted <= own:
+            return Response({'detail': 'some ids do not belong to this item'}, status=status.HTTP_400_BAD_REQUEST)
+        if has_keep:
+            if not wanted:
+                return Response({'detail': 'keep_ids must not be empty (use the clear-all endpoint to delete everything)'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            doomed = own - wanted
+        else:
+            doomed = wanted
+        try:
+            result = _remove_preview_images(item, doomed)
+        except Exception as e:
+            logging.exception('Failed to delete previews in bulk for item %s', item.pk)
+            return Response({'detail': 'Failed to delete previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'status': 'deleted', **result})
 
     @action(detail=True, methods=['delete'], url_path='delete_item')
     def delete_item(self, request, pk=None):

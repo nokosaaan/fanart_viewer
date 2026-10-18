@@ -882,23 +882,14 @@ def classifier_feature_source(backend):
     return artifact.get('feature_source', 'tags')
 
 
-def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFIER_MIN_CONFIDENCE,
-                      embedding=None, ccip=None):
-    """(character_name, confidence) from the supplementary classifier, or
-    (None, 0.0) if no classifier is trained for this backend, a feature it
-    needs is missing, its feature dimension doesn't match what it was trained
-    on (a model/tag-list version drifted since training — fails safe rather
-    than guessing), or its top prediction doesn't clear min_confidence.
-
-    `general_probs`/`embedding`/`ccip` must be suggest_tags()'s own values
-    for THIS SAME backend and for the SAME image or crop -- mismatched
-    backends produce meaningless output, which is exactly why callers always
-    forward them from suggest_tags()'s return value rather than recomputing.
-    The artifact's own `feature_source` decides which are used.
-    """
+def _classifier_probabilities(general_probs, backend, embedding, ccip):
+    """(classes, probabilities) over every class the classifier knows, or
+    None when it can't answer (no artifact, a needed feature missing, or a
+    feature dimension that doesn't match what it was trained on -- fails safe
+    rather than guessing)."""
     artifact = _load_character_classifier(backend)
     if artifact is None:
-        return None, 0.0
+        return None
     clf = artifact['classifier']
 
     available = {'tags': general_probs, 'embedding': embedding, 'ccip': ccip}
@@ -906,7 +897,7 @@ def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFI
     for name in feature_parts(artifact.get('feature_source', 'tags')):
         value = available.get(name)
         if value is None:
-            return None, 0.0
+            return None
         tag_dim = artifact.get('tag_dim', len(artifact['general_tag_names']))
         if name == 'tags' and len(value) != tag_dim:
             logger.warning(
@@ -914,17 +905,52 @@ def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFI
                 'the tag list likely changed since training; skipping prediction.',
                 len(value), tag_dim,
             )
-            return None, 0.0
+            return None
         parts.append(np.asarray(value, dtype=np.float32))
     feature = np.concatenate(parts) if len(parts) > 1 else parts[0]
     expected = artifact.get('feature_dim')
     if expected is not None and len(feature) != expected:
         logger.warning('Character classifier feature dim mismatch (got %d, trained on %d); skipping.', len(feature), expected)
-        return None, 0.0
+        return None
+    return clf.classes_, clf.predict_proba(feature.reshape(1, -1))[0]
 
-    probs = clf.predict_proba(feature.reshape(1, -1))[0]
+
+def predict_character_topk(general_probs, backend, k=3, floor=0.02, embedding=None, ccip=None):
+    """[(character, probability), ...] best first: the classifier's top `k`
+    classes whose probability is at least `floor` ([] if it can't answer).
+
+    This -- not predict_character's single thresholded answer -- is what the
+    suggestion ensemble consumes. Measured (item-grouped CV, 8.2k labelled
+    images): handing over only the top-1 above 0.5 withheld correct but
+    less-certain answers, so a post's character was the top suggestion 79.9%
+    of the time for single-image posts; the top 3 with a small floor makes it
+    89.2% (top-3 contains it 96%). Candidates are for a person to review, so
+    an uncertain-but-right one in the list beats none. A floor of 0.02 gave
+    the same accuracy as no floor with ~1/3 fewer candidates.
+
+    `general_probs`/`embedding`/`ccip` must be suggest_tags()'s own values
+    for THIS SAME backend and for the SAME image or crop (the artifact's own
+    `feature_source` decides which are used)."""
+    answer = _classifier_probabilities(general_probs, backend, embedding, ccip)
+    if answer is None:
+        return []
+    classes, probs = answer
+    order = np.argsort(-probs)[:k]
+    return [(classes[i], float(probs[i])) for i in order if probs[i] >= floor]
+
+
+def predict_character(general_probs, backend, min_confidence=_CHARACTER_CLASSIFIER_MIN_CONFIDENCE,
+                      embedding=None, ccip=None):
+    """(character_name, confidence) of the classifier's single best class, or
+    (None, 0.0) if it can't answer, or (None, confidence) if the best class
+    doesn't clear min_confidence. Kept for the single-answer cascade and the
+    evaluation commands; the ensemble uses predict_character_topk."""
+    answer = _classifier_probabilities(general_probs, backend, embedding, ccip)
+    if answer is None:
+        return None, 0.0
+    classes, probs = answer
     idx = int(np.argmax(probs))
     confidence = float(probs[idx])
     if confidence < min_confidence:
         return None, confidence
-    return clf.classes_[idx], confidence
+    return classes[idx], confidence

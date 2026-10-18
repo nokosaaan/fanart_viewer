@@ -7,6 +7,7 @@ import CharacterGroupManager from './components/CharacterGroupManager'
 import CharacterAliasGroupManager from './components/CharacterAliasGroupManager'
 import CharacterDanbooruLinkManager from './components/CharacterDanbooruLinkManager'
 import TitleDanbooruLinkManager from './components/TitleDanbooruLinkManager'
+import TitleGroupLinkManager from './components/TitleGroupLinkManager'
 import BackupManager from './components/BackupManager'
 import TrainClassifierManager from './components/TrainClassifierManager'
 import FetchQueueManager from './components/FetchQueueManager'
@@ -103,6 +104,7 @@ function AppMain({ role, onLogout }){
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
   const [titleLinkOpen, setTitleLinkOpen] = useState(false)
+  const [titleGroupLinkOpen, setTitleGroupLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [trainClassifierOpen, setTrainClassifierOpen] = useState(false)
   // Onboarding tour (see Tour.jsx / lib/tourSteps.js) — needs the header
@@ -851,6 +853,7 @@ function AppMain({ role, onLogout }){
                 tourId: 'menu-group-character',
                 submenu: [
                   { label: 'キャラクターグループ', onClick: () => setCharGroupOpen(true), tourId: 'menu-character-groups' },
+                  { label: 'タイトル↔グループ紐づけ', onClick: () => setTitleGroupLinkOpen(true), tourId: 'menu-title-group-link' },
                   { label: 'キャラクター別名グループ', onClick: () => setCharAliasGroupOpen(true), tourId: 'menu-character-alias-groups' },
                   { label: 'キャラ↔Danbooruリンク', onClick: () => setCharLinkOpen(true), tourId: 'menu-character-danbooru-link' },
                   { label: 'タイトル↔Danbooruリンク', onClick: () => setTitleLinkOpen(true), tourId: 'menu-title-danbooru-link' },
@@ -990,6 +993,7 @@ function AppMain({ role, onLogout }){
       {charAliasGroupOpen && <CharacterAliasGroupManager onClose={()=>setCharAliasGroupOpen(false)} />}
       {charLinkOpen && <CharacterDanbooruLinkManager onClose={()=>setCharLinkOpen(false)} />}
       {titleLinkOpen && <TitleDanbooruLinkManager onClose={()=>setTitleLinkOpen(false)} />}
+      {titleGroupLinkOpen && <TitleGroupLinkManager onClose={()=>setTitleGroupLinkOpen(false)} />}
       {backupOpen && <BackupManager onClose={()=>setBackupOpen(false)} />}
       {themeOpen && (
         <ThemeSettings

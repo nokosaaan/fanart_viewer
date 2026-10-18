@@ -217,6 +217,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     setCurrentPreviewIdx(0)
     setSelectedPreviewId(null)
     setDeletedPreviewIds(new Set())
+    setSelectMode(false)
+    setPickedIds(new Set())
     currentPreviewIdxRef.current = 0
     if(!item) return
     try{
@@ -247,6 +249,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
 
   const [deleting, setDeleting] = useState(false)
   const [deletingItem, setDeletingItem] = useState(false)
+  // Multi-select over THIS item's own images, for deleting several at once or
+  // for choosing the one(s) to keep ("keep" mode deletes everything else).
+  const [selectMode, setSelectMode] = useState(false)
+  const [pickedIds, setPickedIds] = useState(() => new Set())
   const [editOpen, setEditOpen] = useState(false)
 
   // Paging through THIS item's own images (e.g. a multi-page manga fetch)
@@ -345,6 +351,75 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       alert('Preview deleted.')
     }catch(e){ console.error(e); alert('Failed to delete preview') }
     finally{ setDeleting(false) }
+  }
+
+  function togglePicked(id){
+    setPickedIds(prev => {
+      const next = new Set(prev)
+      if(next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function leaveSelectMode(){
+    setSelectMode(false)
+    setPickedIds(new Set())
+  }
+
+  // One call for both "delete these" and "keep only these" (see the backend's
+  // delete_previews). The server renumbers the remaining images (and moves
+  // their region labels with them), so unlike the single-image tombstone
+  // above this reloads the filmstrip: every remaining thumbnail's index has
+  // changed, and a stale index would show the wrong picture.
+  async function runBulkDelete(body, confirmText){
+    if(selectedIndex===null) return
+    const it = previewItems[selectedIndex]
+    if(!it) return
+    if(!window.confirm(confirmText)) return
+    setDeleting(true)
+    try{
+      const resp = await fetch(`/api/items/${it.id}/delete_previews/`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+      })
+      const j = await resp.json().catch(()=>({}))
+      if(!resp.ok){ alert('Failed to delete previews: '+(j.detail||j.error||resp.status)); return }
+      await loadPreviewsForItem(it)
+      notify('item-preview-updated', { id: it.id })
+      let msg = `${j.deleted}枚の画像を削除しました(残り${j.remaining}枚)。`
+      if(j.regions_dropped) msg += `\n削除した画像上の領域指定 ${j.regions_dropped} 件も削除しました。`
+      if(j.regions_remapped) msg += `\n残った画像の領域指定 ${j.regions_remapped} 件を新しい画像番号に付け替えました。`
+      alert(msg)
+    }catch(e){ console.error(e); alert('Failed to delete previews') }
+    finally{ setDeleting(false) }
+  }
+
+  function aliveIds(){
+    return (previews || []).filter(p => !deletedPreviewIds.has(p.id)).map(p => p.id)
+  }
+
+  function deletePicked(){
+    const ids = [...pickedIds]
+    if(ids.length === 0) return
+    runBulkDelete({ delete_ids: ids },
+      ids.length >= aliveIds().length
+        ? `選んだ${ids.length}枚はこの投稿の画像すべてです。全部削除しますか？ 元に戻せません。`
+        : `選んだ${ids.length}枚の画像を削除しますか？ 元に戻せません。`)
+  }
+
+  function keepPicked(){
+    const ids = [...pickedIds]
+    if(ids.length === 0) return
+    const others = aliveIds().length - ids.length
+    if(others <= 0){ alert('削除される画像がありません(すべて選択されています)'); return }
+    runBulkDelete({ keep_ids: ids }, `選んだ${ids.length}枚だけを残し、それ以外の${others}枚を削除しますか？ 元に戻せません。`)
+  }
+
+  function keepOnlyCurrent(){
+    const pid = selectedPreviewId || ((previews && previews[currentPreviewIdx]) ? previews[currentPreviewIdx].id : null)
+    if(!pid) return
+    const others = aliveIds().length - 1
+    if(others <= 0){ alert('この投稿の画像は1枚だけです'); return }
+    runBulkDelete({ keep_ids: [pid] }, `いま表示している画像だけを残し、それ以外の${others}枚を削除しますか？ 元に戻せません。`)
   }
 
   async function clearAllPreviews(){
@@ -556,6 +631,29 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 {previews && previews.length>1 && (
                   <div className="modal-timeline-hint">←/→キーでこのアイテムの前後のページへ</div>
                 )}
+                {!readOnly && previews && previews.filter(p => !deletedPreviewIds.has(p.id)).length > 1 && (
+                  <div style={{display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', marginBottom:6, fontSize:12}}>
+                    {!selectMode ? (
+                      <>
+                        <button className="btn" style={{fontSize:12}} onClick={()=>{ setSelectMode(true); setPickedIds(new Set()) }}
+                          title="複数の画像を選んで、まとめて削除する/選んだ画像だけ残す">☑ 複数選択</button>
+                        <button className="btn" style={{fontSize:12}} onClick={keepOnlyCurrent} disabled={deleting}
+                          title="いま大きく表示している画像だけを残して、他の画像をすべて削除します">★ この1枚だけ残す</button>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{color:'#cbd5e1'}}>{pickedIds.size}枚選択中(画像をクリックで選択)</span>
+                        <button className="btn" style={{fontSize:12}} onClick={()=>setPickedIds(new Set(aliveIds()))}>すべて選択</button>
+                        <button className="btn" style={{fontSize:12}} onClick={()=>setPickedIds(new Set())}>選択解除</button>
+                        <button className="btn" style={{fontSize:12, background:'#a33', color:'#fff'}} disabled={deleting || pickedIds.size===0} onClick={deletePicked}
+                          title="選んだ画像を削除します">選んだ画像を削除</button>
+                        <button className="btn" style={{fontSize:12, background:'#166534', color:'#fff'}} disabled={deleting || pickedIds.size===0} onClick={keepPicked}
+                          title="選んだ画像だけを残し、それ以外を削除します">選んだ画像だけ残す</button>
+                        <button className="btn" style={{fontSize:12}} onClick={leaveSelectMode}>キャンセル</button>
+                      </>
+                    )}
+                  </div>
+                )}
                 <div className="modal-timeline">
                   {previews && previews.length>0 ? previews.map(p=> (
                     // key is the preview's own stable DB id, not its
@@ -579,7 +677,17 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         <span>削除済み</span>
                       </div>
                     ) : (
-                      <img key={p.id} src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`} className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'} onClick={()=>selectPreviewIndex(p.index)} />
+                      <div key={p.id} style={{position:'relative', flex:'0 0 auto', lineHeight:0}}>
+                        <img src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
+                          className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}
+                          style={selectMode && pickedIds.has(p.id) ? {borderColor:'#3b82f6', opacity:1} : undefined}
+                          onClick={()=> selectMode ? togglePicked(p.id) : selectPreviewIndex(p.index)} />
+                        {selectMode && (
+                          <span aria-hidden="true" style={{position:'absolute', top:4, left:4, width:18, height:18, borderRadius:4,
+                            background: pickedIds.has(p.id) ? '#2563eb' : 'rgba(0,0,0,0.55)', border:'1px solid #fff', color:'#fff',
+                            fontSize:12, lineHeight:'16px', textAlign:'center', pointerEvents:'none'}}>{pickedIds.has(p.id) ? '✓' : ''}</span>
+                        )}
+                      </div>
                     )
                   )) : (
                     <div className="timeline-empty">No previews</div>
