@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import CharacterPicker from './CharacterPicker'
 import { getPlatformIcon } from '../lib/platformIcon'
 import { saveItemFields } from '../lib/itemFieldsApi'
+import { handleGroupingResponse } from '../lib/groupChoice'
 
 const SECTION = {
   label: { color:'#94a3b8', fontSize:11, fontWeight:600, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6, display:'block' },
@@ -411,19 +412,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     try{
       const j = await saveItemFields(item.id, payload)
       setLoading(false)
-      // Backend auto-creates a CharacterGroup the moment a save first
-      // had none for the item's title (see item/character_groups.py) —
-      // surfaced here so it isn't a silent side effect the user only
-      // discovers later in the character-group manager.
-      if(j.auto_created_character_group){
-        alert(`新しいタイトル「${j.auto_created_character_group.name}」のキャラクターグループを自動作成しました。`)
-      }
-      // Characters the save introduced (or that were waiting for a title) are
-      // filed into their title's group instead of landing in
-      // CharacterGroupManager's「未分類」list (see item/character_groups.py).
-      if(j.auto_assigned_to_character_group){
-        alert(`新しいキャラクター(${(j.auto_assigned_to_character_group.characters || []).join('、')})をキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
-      }
+      // What the save did about character groups: the automatic-filing
+      // notices, or -- when the item's titles lead to more than one possible
+      // group -- a question for the person (see lib/groupChoice.jsx and
+      // item/character_groups.py).
+      await handleGroupingResponse(item.id, j)
       if(onDirtyChange) onDirtyChange(false)
       if(onSaved) onSaved(j.item)
     }catch(e){

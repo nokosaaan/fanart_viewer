@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { groupsForTitles } from '../lib/groupScope'
+import { handleGroupingResponse } from '../lib/groupChoice'
 import { saveCharacterRegions } from '../lib/itemFieldsApi'
 
 function getCookie(name) {
@@ -316,10 +317,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
     try {
       const j = await saveCharacterRegions(item.id, labeledRegionsPayload())
       if (onDirtyChange) onDirtyChange(false)
-      if (j.auto_assigned_to_character_group) {
-        const g = j.auto_assigned_to_character_group
-        setNotice(`新しいキャラ(${(g.characters || []).join('、')})をグループ「${g.name}」に自動で割り当てました`)
-      }
+      await handleGroupingResponse(item.id, j)
       if (onSaved) onSaved(j.item)
     } catch (e) {
       setError(e.message)

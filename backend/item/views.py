@@ -3502,6 +3502,69 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'next_before_id': batch[-1].id if (has_more and batch) else None,
         })
 
+    @action(detail=True, methods=['post'], url_path='assign_character_groups')
+    def assign_character_groups(self, request, pk=None):
+        """File characters into the groups a person chose -- the answer to the
+        `character_group_choice` an earlier save returned when this item's
+        titles led to more than one possible group.
+
+        Body: {"assignments": [{"character": str, "group_id": int} |
+                                {"character": str, "create_for_title": str}, ...]}.
+        `create_for_title` makes (or reuses) a group named after one of THIS
+        item's titles, for a title that had no group. Characters that are not
+        on the item, or are already in some group, are skipped (a person's
+        earlier placement is never moved); the response says which.
+        """
+        from .character_groups import file_characters
+
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        assignments = data.get('assignments')
+        if not isinstance(assignments, list):
+            return Response({'detail': 'assignments must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+        item_chars = set(item.characters or [])
+        item_titles = {t for t in (item.titles or []) if t}
+        grouped = {c for g in CharacterGroup.objects.all() for c in (g.characters or [])}
+        plan = defaultdict(list)  # ('group', id) | ('title', name) -> [characters]
+        skipped = []
+        for a in assignments:
+            if not isinstance(a, dict) or not isinstance(a.get('character'), str):
+                return Response({'detail': 'each assignment needs a character'}, status=status.HTTP_400_BAD_REQUEST)
+            char = a['character']
+            if char not in item_chars or char in grouped:
+                skipped.append(char)
+                continue
+            if a.get('create_for_title') is not None:
+                title = a['create_for_title']
+                if title not in item_titles:
+                    return Response({'detail': 'create_for_title must be one of this item\'s titles'}, status=status.HTTP_400_BAD_REQUEST)
+                plan[('title', title)].append(char)
+            elif a.get('group_id') is not None:
+                plan[('group', a['group_id'])].append(char)
+            else:
+                return Response({'detail': 'each assignment needs group_id or create_for_title'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # validate every target before writing any of them
+        targets = {}
+        for kind, ref in plan:
+            if kind == 'group':
+                try:
+                    targets[(kind, ref)] = CharacterGroup.objects.get(pk=ref)
+                except (CharacterGroup.DoesNotExist, ValueError, TypeError):
+                    return Response({'detail': f'group {ref} not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        filed, created = [], []
+        for (kind, ref), chars in plan.items():
+            if kind == 'group':
+                group, was_created = file_characters(targets[(kind, ref)], chars)
+            else:
+                group, was_created = file_characters(None, chars, create_title=ref)
+            filed.append({'group_id': group.id, 'group_name': group.name, 'characters': chars})
+            if was_created:
+                created.append({'id': group.id, 'name': group.name})
+        return Response({'status': 'ok', 'filed': filed, 'created_groups': created, 'skipped': skipped})
+
     @action(detail=True, methods=['post'], url_path='sync_characters_to_regions')
     def sync_characters_to_regions(self, request, pk=None):
         """Set Item.characters to EXACTLY the character set implied by
@@ -3517,10 +3580,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         """
         item = self.get_object()
         region_chars = sorted({c for r in (item.character_regions or []) for c in (r.get('characters') or [])})
+        introduced_chars = [c for c in region_chars if c not in (item.characters or [])]
         item.characters = region_chars
         item.character_regions_ack_signature = ''  # now genuinely equal — nothing left to remember
         item.save(update_fields=['characters', 'character_regions_ack_signature'])
-        grouping = _group_response_fields(ensure_characters_grouped(item))
+        grouping = _group_response_fields(ensure_characters_grouped(item, only=introduced_chars))
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'saved', 'item': serializer.data, **grouping})
 
@@ -3628,6 +3692,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
         updates = {}
+        orig_titles = list(item.titles or [])
         orig_characters = list(item.characters or [])
 
         if 'characters' in data:
@@ -3683,7 +3748,14 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         # change alone re-runs this (see item.character_groups).
         grouping = {}
         if 'characters' in updates or 'titles' in updates:
-            grouping = _group_response_fields(ensure_characters_grouped(item))
+            # When the titles don't settle where a character goes, the person is
+            # asked (see character_group_choice) -- about the characters this
+            # save introduced, or about every ungrouped one if the titles
+            # themselves just changed (that is what makes them askable now).
+            introduced = [c for c in (item.characters or []) if c not in orig_characters]
+            titles_changed = set(t for t in (item.titles or []) if t) != set(t for t in orig_titles if t)
+            grouping = _group_response_fields(
+                ensure_characters_grouped(item, only=None if titles_changed else introduced))
 
         serializer = ItemSerializer(item, context={'request': request})
         response = {'status': 'updated', 'updated': updates, 'item': serializer.data, **grouping}
@@ -3967,10 +4039,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         item.character_regions = cleaned
 
         existing_chars = list(item.characters or [])
+        introduced_chars = []
         for r in cleaned:
             for name in r['characters']:
                 if name not in existing_chars:
                     existing_chars.append(name)
+                    introduced_chars.append(name)
         item.characters = existing_chars
 
         try:
@@ -3979,7 +4053,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to save character_regions for item %s', item.pk)
             return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        grouping = _group_response_fields(ensure_characters_grouped(item))
+        grouping = _group_response_fields(ensure_characters_grouped(item, only=introduced_chars))
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'saved', 'item': serializer.data, **grouping})
 

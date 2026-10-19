@@ -11,11 +11,13 @@ command repairs what is already in the DB:
    mistaken for a title.
 2. Ungrouped characters. For each one, every item that carries it votes for
    the group its title resolves to (the most specific group claiming the
-   title; the item's other, already-grouped characters break ties between
-   two spellings of a title -- see item.character_groups.pick_group_for_item).
-   The character goes to the group with the most votes. A title with no group
-   gets one, named after the title. A character that appears only on items
-   with no title is left alone and reported: there's nowhere to file it yet.
+   title -- see item.character_groups.group_options). Only an item whose
+   titles lead to ONE destination votes: an item with several titles leading
+   to different groups is a choice for a person (the save-time dialog), not
+   something to guess here. The character goes to the group with the most
+   votes. A title with no group gets one, named after the title. A character
+   that appears only on untitled items, or only on items with several
+   competing titles, is left alone and reported.
 
 Dry run by default -- prints what it would do and changes nothing. Pass
 --apply to write it.
@@ -28,7 +30,7 @@ from collections import Counter, defaultdict
 
 from django.core.management.base import BaseCommand
 
-from item.character_groups import groups_for_title, pick_group_for_item
+from item.character_groups import group_options
 from item.models import CharacterGroup, Item
 
 
@@ -72,11 +74,19 @@ class Command(BaseCommand):
         assigned = created = skipped = 0
         new_groups = {}  # title -> CharacterGroup created this run (so two characters share it)
         for char, its in sorted(users.items()):
-            votes = Counter()
+            # Each item votes for where its titles lead -- but only an item whose
+            # titles lead to ONE destination can vote. An item with several
+            # titles leading to different groups would be a guess, and guessing
+            # is what the save-time dialog exists to avoid.
+            votes, new_titles, ambiguous = Counter(), Counter(), 0
             for it in its:
-                g = pick_group_for_item(it.titles, [c for c in (it.characters or []) if c in grouped], groups)
-                if g is not None:
-                    votes[g.pk] += 1
+                options = group_options(it.titles, groups)
+                if len(options) > 1:
+                    ambiguous += 1
+                elif len(options) == 1 and options[0]['group'] is not None:
+                    votes[options[0]['group'].pk] += 1
+                elif len(options) == 1:
+                    new_titles[options[0]['title']] += 1
             if votes:
                 top = votes.most_common()
                 best_pk = top[0][0]
@@ -84,13 +94,8 @@ class Command(BaseCommand):
                     if len(top) > 1 and top[1][1] == top[0][1] else ''
                 group = by_pk[best_pk]
                 self.stdout.write(f'  {char!r} -> group {group.name!r}{note}')
-            else:
-                title_counts = Counter(t for it in its for t in (it.titles or [])[:1] if t)
-                if not title_counts:
-                    self.stdout.write(f'  {char!r}: no item carrying it has a title -- left alone')
-                    skipped += 1
-                    continue
-                title = title_counts.most_common(1)[0][0]
+            elif new_titles:
+                title = new_titles.most_common(1)[0][0]
                 group = new_groups.get(title)
                 if group is None:
                     self.stdout.write(f'  {char!r} -> NEW group {title!r} (its title had no group)')
@@ -103,6 +108,15 @@ class Command(BaseCommand):
                     created += 1
                 else:
                     self.stdout.write(f'  {char!r} -> group {title!r} (created above)')
+            elif ambiguous:
+                self.stdout.write(f'  {char!r}: its item(s) have several titles leading to different groups '
+                                  '-- left alone; choose in the edit form / the title-group review screen')
+                skipped += 1
+                continue
+            else:
+                self.stdout.write(f'  {char!r}: no item carrying it has a title -- left alone')
+                skipped += 1
+                continue
             if apply:
                 group.characters = list(dict.fromkeys(list(group.characters or []) + [char]))
                 group.save(update_fields=['characters'])
@@ -111,7 +125,7 @@ class Command(BaseCommand):
             assigned += 1
 
         self.stdout.write(self.style.SUCCESS(
-            f'\n{len(users)} ungrouped character(s): {assigned} filed, {skipped} left alone (no title); '
+            f'\n{len(users)} ungrouped character(s): {assigned} filed, {skipped} left alone (no title, or several titles to choose between); '
             f'{created} new group(s); {linked} legacy group(s) linked'
             + ('' if apply else ' -- dry run, nothing saved. Re-run with --apply.')
         ))

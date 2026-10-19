@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { ItemEditForm } from './EditFields'
 import RegionAnnotator from './RegionAnnotator'
 import { saveItemFields, saveCharacterRegions } from '../lib/itemFieldsApi'
+import { handleGroupingResponse } from '../lib/groupChoice'
 
 // One combined "編集 + 領域ラベル付け" screen for a single item — replaces
 // having to open the same image twice, once in the edit queue and once in
@@ -62,20 +63,20 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
       const j = await saveItemFields(item.id, payload)
       let latestItem = j.item
 
-      // Same two auto-linking notices ItemEditForm.save() itself would show
-      // — replicated here since this path calls saveItemFields directly
+      // Same auto-linking notices ItemEditForm.save() itself would show
+      // — shown here since this path calls saveItemFields directly
       // rather than going through ItemEditForm's own save().
-      if(j.auto_created_character_group){
-        alert(`新しいタイトル「${j.auto_created_character_group.name}」のキャラクターグループを自動作成しました。`)
-      }
-      if(j.auto_assigned_to_character_group){
-        alert(`新しいキャラクター(${(j.auto_assigned_to_character_group.characters || []).join('、')})をキャラクターグループ「${j.auto_assigned_to_character_group.name}」に自動的に割り当てました。`)
-      }
+      await handleGroupingResponse(item.id, j)
 
       if(regionDirty && boxesRef.current){
         const regions = boxesRef.current.getPayload()
         const j2 = await saveCharacterRegions(item.id, regions)
         latestItem = j2.item
+        // A character first typed in the region popover is filed into its
+        // title's group by character_regions_view exactly as update_fields
+        // does for the form's own character field (item/character_groups.py)
+        // — so say so here too, instead of leaving that save silent.
+        await handleGroupingResponse(item.id, j2)
       }
 
       setFieldsDirty(false)

@@ -215,7 +215,7 @@ class TitleGroupLinkViewSet(viewsets.ViewSet):
         for item in Item.objects.exclude(titles=[]).exclude(titles__isnull=True).only('id', 'titles', 'characters'):
             if title not in (item.titles or []):
                 continue
-            result = ensure_characters_grouped(item)
+            result = ensure_characters_grouped(item, title=title)  # the person chose the title: nothing to ask
             if result['group'] is not None:
                 assigned += result['assigned']
                 group_names.add(result['group'].name)
