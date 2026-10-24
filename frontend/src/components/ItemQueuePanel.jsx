@@ -19,8 +19,13 @@ import { handleGroupingResponse } from '../lib/groupChoice'
 export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, closeLabel = 'スキップ（後で対応）', initialSuggestion = null }){
   const [situationDraft, setSituationDraft] = useState((item.situation || '').toUpperCase())
   const [titlesDraft, setTitlesDraft] = useState(item.titles || [])
+  const [suggestion, setSuggestion] = useState(initialSuggestion)
   const [fieldsDirty, setFieldsDirty] = useState(false)
   const [regionDirty, setRegionDirty] = useState(false)
+
+  useEffect(() => {
+    if (initialSuggestion) setSuggestion(initialSuggestion)
+  }, [initialSuggestion])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -101,6 +106,7 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
         onSituationChange={setSituationDraft}
         onTitlesChange={setTitlesDraft}
         onDirtyChange={setFieldsDirty}
+        onSuggestionApplied={setSuggestion}
       />
 
       {showRegionSection && (
@@ -111,6 +117,7 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
           <RegionAnnotator
             item={item}
             titles={titlesDraft}
+            proposedRegions={suggestion?.proposed_regions || null}
             showOwnActions={false}
             boxesRef={boxesRef}
             onDirtyChange={setRegionDirty}

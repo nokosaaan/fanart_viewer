@@ -1287,6 +1287,122 @@ def _classifier_needs(tagger_backend):
     return 'embedding' in parts, 'ccip' in parts
 
 
+def _predict_crop_character_scores(crop, tagger_backend):
+    """Predict character name -> score mapping for a single person crop."""
+    scores = {}
+    raw_chars = crop.get('characters') or []
+    if raw_chars:
+        matched, _ = _match_tagger_characters(raw_chars)
+        for mc in matched:
+            if mc.get('matched'):
+                scores[mc['name']] = max(scores.get(mc['name'], 0.0), (mc.get('score') or 0.8) * 1.5)
+
+    probs = crop.get('general_probs')
+    if probs is not None:
+        try:
+            preds = tagger.predict_character_topk(
+                probs, tagger_backend, k=5, floor=0.01,
+                embedding=crop.get('embedding'), ccip=crop.get('ccip')
+            )
+            for name, p in preds:
+                for alias in _expand_character_alias(name):
+                    scores[alias] = max(scores.get(alias, 0.0), p * 2.0)
+        except Exception:
+            pass
+    return scores
+
+
+def _derive_proposed_regions(results, candidate_characters, tagger_backend, image_indices=None):
+    """Derive region bounding boxes with candidate character assignments across analysed images.
+
+    results: list of (position, tagger_result)
+    candidate_characters: list of candidate character names (str) or candidate dicts with 'name'
+    image_indices: list of original image index per position in results (optional)
+    """
+    proposed = []
+    char_names = []
+    for c in candidate_characters:
+        if isinstance(c, dict):
+            name = c.get('name')
+        elif isinstance(c, str):
+            name = c
+        else:
+            name = None
+        if name and name not in char_names:
+            char_names.append(name)
+
+    for position, r in results:
+        img_idx = image_indices[position] if image_indices and position < len(image_indices) else None
+        crops = r.get('crops') or []
+        boxes = r.get('boxes') or [c['box'] for c in crops]
+
+        if not boxes:
+            continue
+
+        box_infos = []
+        if crops and len(crops) == len(boxes):
+            for crop in crops:
+                scores = _predict_crop_character_scores(crop, tagger_backend)
+                box_infos.append((crop['box'], scores))
+        elif crops:
+            for crop in crops:
+                scores = _predict_crop_character_scores(crop, tagger_backend)
+                box_infos.append((crop['box'], scores))
+        else:
+            # Fallback when person crops are not available (e.g. 1 box)
+            whole_scores = {}
+            probs = r.get('general_probs')
+            if probs is not None:
+                try:
+                    preds = tagger.predict_character_topk(
+                        probs, tagger_backend, k=5, floor=0.01,
+                        embedding=r.get('embedding'), ccip=r.get('ccip')
+                    )
+                    for name, p in preds:
+                        for alias in _expand_character_alias(name):
+                            whole_scores[alias] = max(whole_scores.get(alias, 0.0), p * 2.0)
+                except Exception:
+                    pass
+            for name in char_names:
+                whole_scores.setdefault(name, 1.0)
+            for box in boxes:
+                box_infos.append((box, whole_scores))
+
+        assigned_chars = set()
+        box_assignments = [None] * len(box_infos)
+
+        pair_scores = []
+        for b_idx, (box, scores) in enumerate(box_infos):
+            for c_idx, c_name in enumerate(char_names):
+                score = scores.get(c_name, 0.0)
+                rank_bonus = max(0.0, (len(char_names) - c_idx) * 0.01)
+                pair_scores.append((score + rank_bonus, b_idx, c_name))
+
+        pair_scores.sort(key=lambda x: -x[0])
+
+        used_boxes = set()
+        for score, b_idx, c_name in pair_scores:
+            if b_idx not in used_boxes and c_name not in assigned_chars:
+                used_boxes.add(b_idx)
+                assigned_chars.add(c_name)
+                box_assignments[b_idx] = c_name
+
+        remaining_candidates = [c for c in char_names if c not in assigned_chars]
+        for b_idx in range(len(box_infos)):
+            if box_assignments[b_idx] is None and remaining_candidates:
+                box_assignments[b_idx] = remaining_candidates.pop(0)
+
+        for b_idx, (box, _scores) in enumerate(box_infos):
+            assigned = box_assignments[b_idx]
+            proposed.append({
+                'image_index': img_idx,
+                'box': [int(v) for v in box],
+                'characters': [assigned] if assigned else [],
+            })
+
+    return proposed
+
+
 def _suggest_for_item(item, external=False, tagger_backend='onnx',
                        general_threshold=0.35, character_threshold=0.85,
                        tag_limit_for_matching=None, use_classifier=False,
@@ -1514,12 +1630,23 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
     if titles:
         title_candidates = []  # a confident answer supersedes the low-confidence list
 
+    proposed_regions = []
+    if tagger_result is not None:
+        proposed_regions = _derive_proposed_regions(
+            [(0, tagger_result)],
+            characters,
+            tagger_backend,
+            image_indices=[resolved_image_index] if resolved_image_index is not None else None,
+        )
+
     return {
         'characters': characters,
+        'titles': titles,
         'tags': tags,
         'situation_hint': situation_hint,
         'suggested_titles': titles,
         'title_candidates': title_candidates,
+        'proposed_regions': proposed_regions,
         'source': source,
         'sample_size': db['sample_size'] if db else 0,
         'image_index': resolved_image_index,
@@ -1767,6 +1894,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         'want_tags': want_tags, 'want_situation': want_situation,
         'image_index': resolved_image_index, 'image_indices': image_indices, 'images_analyzed': n_results,
         'monochrome': monochrome,
+        'results': results, 'tagger_backend': tagger_backend,
     }
 
 
@@ -2127,6 +2255,13 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
             {'source': 'oc_heuristic', 'confidence': 1.0, 'raw_name': None, 'match_method': None},
         ]}]
 
+    proposed_regions = _derive_proposed_regions(
+        collected.get('results', []),
+        characters,
+        tagger_backend,
+        image_indices=collected.get('image_indices'),
+    )
+
     return {
         'characters': characters,
         'titles': titles,
@@ -2134,6 +2269,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         'situation_hint': situation_values[0] if situation_values else None,
         'suggested_titles': [],
         'title_candidates': [],
+        'proposed_regions': proposed_regions,
         'source': 'ensemble',
         'sample_size': 0,
         'image_index': collected['image_index'],
@@ -3977,9 +4113,37 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             # here), so this needs the same try/except those have.
             logging.exception('detect_regions: person detection failed')
             boxes = []
+
+        proposed_regions = []
+        if boxes and HAVE_TAGGER:
+            try:
+                tagger_backend = 'onnx'
+                item_chars = list(item.characters or [])
+                crops = []
+                for box in boxes[:tagger._MAX_PERSON_CROPS]:
+                    try:
+                        crop_bytes = tagger._crop_with_padding(image_bytes, box)
+                        crop_result = tagger._suggest_tags_single_pass(
+                            crop_bytes, 0.35, 0.85, 15, backend=tagger_backend,
+                        )
+                        crops.append({
+                            'box': list(box),
+                            'characters': crop_result.get('characters', []),
+                            'general_probs': crop_result.pop('_general_probs'),
+                            'embedding': crop_result.pop('_embedding', None),
+                            'ccip': None,
+                        })
+                    except Exception:
+                        continue
+                r = {'crops': crops, 'boxes': [list(b) for b in boxes]}
+                proposed_regions = _derive_proposed_regions([(0, r)], item_chars, tagger_backend, image_indices=[resolved_index])
+            except Exception:
+                logging.exception('detect_regions: character matching failed')
+
         return Response({
             'image_index': resolved_index,
             'boxes': [list(box) for box in boxes],
+            'proposed_regions': proposed_regions,
         })
 
     @action(detail=True, methods=['post'], url_path='character_regions')

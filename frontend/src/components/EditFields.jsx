@@ -123,7 +123,7 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
 // skip-to-next rather than close-a-modal — see fieldsRef/onSituationChange/
 // onDirtyChange/showOwnActions below, all added for that embedding).
 export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null,
-  fieldsRef = null, onSituationChange = null, onTitlesChange = null, onDirtyChange = null, showOwnActions = true }){
+  fieldsRef = null, onSituationChange = null, onTitlesChange = null, onDirtyChange = null, onSuggestionApplied = null, showOwnActions = true }){
   const [titleList, setTitleList] = useState(item.titles||[])
   const [charList,  setCharList]  = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
@@ -317,6 +317,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     // hashtags/DB history). Surfaced in the UI so it's never ambiguous
     // which image a suggestion is based on — see _select_image_bytes.
     setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null, imageIndex: j.image_index ?? null, imagesAnalyzed: j.images_analyzed ?? null })
+    if(onSuggestionApplied) onSuggestionApplied(j)
   }
 
   function acceptTitleCandidate(t){

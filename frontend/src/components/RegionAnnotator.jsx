@@ -35,7 +35,7 @@ function nextBoxId() { return `box-${++_boxIdCounter}` }
 // (matching tagger._detect_person_boxes/_crop_with_padding exactly, so no
 // translation is needed server-side) and only ever converted to/from the
 // image's on-screen CSS size at render time and on mouse events.
-export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef = null, showOwnActions = true, titles = null }) {
+export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef = null, showOwnActions = true, titles = null, proposedRegions = null }) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
@@ -127,15 +127,45 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
   // Pre-fill from any previously saved labels for this item, so re-opening
   // an already-annotated item shows what's there (across every image it
   // was labeled on) instead of a blank slate.
+  // If no saved labels exist, pre-fill from pipeline-proposed regions (if available).
   useEffect(() => {
     if (Array.isArray(item.character_regions) && item.character_regions.length > 0) {
       setBoxes(item.character_regions.map(r => ({
         id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
       })))
       setCurrentImageIndex(item.character_regions[0].image_index ?? null)
+    } else if (Array.isArray(proposedRegions) && proposedRegions.length > 0) {
+      setBoxes(proposedRegions.map(r => ({
+        id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+      })))
+      if (proposedRegions[0].image_index != null) {
+        setCurrentImageIndex(proposedRegions[0].image_index)
+      }
+      setNotice('AI提案の領域とキャラクター候補を自動セットしました。合っていればそのまま保存、違っていれば修正できます。')
+      if (onDirtyChange) onDirtyChange(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // If proposedRegions arrive later (e.g. after AI suggestion runs or async fetch completes)
+  // and no boxes are loaded yet, populate them automatically.
+  useEffect(() => {
+    if ((!item.character_regions || item.character_regions.length === 0) &&
+        Array.isArray(proposedRegions) && proposedRegions.length > 0) {
+      setBoxes(prev => {
+        if (prev.length > 0) return prev
+        const next = proposedRegions.map(r => ({
+          id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+        }))
+        if (proposedRegions[0].image_index != null) {
+          setCurrentImageIndex(proposedRegions[0].image_index)
+        }
+        setNotice('AI提案の領域とキャラクター候補を自動セットしました。合っていればそのまま保存、違っていれば修正できます。')
+        if (onDirtyChange) onDirtyChange(true)
+        return next
+      })
+    }
+  }, [proposedRegions, item.character_regions, onDirtyChange])
 
   const previewUrl = currentImageIndex != null
     ? `/api/items/${item.id}/preview/?index=${currentImageIndex}`
@@ -176,10 +206,21 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
       if (!resp.ok) throw new Error(j.detail || `自動検出に失敗しました (${resp.status})`)
       const resolvedIndex = j.image_index ?? null
       if (resolvedIndex !== currentImageIndex) setCurrentImageIndex(resolvedIndex)
-      const detected = (j.boxes || []).map(box => ({ id: nextBoxId(), imageIndex: resolvedIndex, box, characters: [] }))
+      let detected = []
+      if (Array.isArray(j.proposed_regions) && j.proposed_regions.length > 0) {
+        detected = j.proposed_regions.map(r => ({
+          id: nextBoxId(), imageIndex: r.image_index ?? resolvedIndex, box: r.box, characters: r.characters || [],
+        }))
+      } else {
+        detected = (j.boxes || []).map(box => ({ id: nextBoxId(), imageIndex: resolvedIndex, box, characters: [] }))
+      }
       setBoxes(prev => [...prev, ...detected])
       if (detected.length === 0) setNotice('人物が検出されませんでした。手動でドラッグして矩形を追加してください。')
-      else { setNotice(''); if (onDirtyChange) onDirtyChange(true) }
+      else {
+        const hasChars = detected.some(d => d.characters.length > 0)
+        setNotice(hasChars ? '人物領域と候補キャラクターを検出しました。合っていればそのまま保存、違っていれば修正できます。' : '')
+        if (onDirtyChange) onDirtyChange(true)
+      }
     } catch (e) {
       setError(e.message)
     } finally {

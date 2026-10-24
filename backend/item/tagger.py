@@ -726,7 +726,8 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
                 logger.exception('Per-crop tagging failed for box %s', box)
                 continue
             crops.append({
-                'box': box,
+                'box': list(box),
+                'characters': crop_result.get('characters', []),
                 'general_probs': crop_result.pop('_general_probs'),
                 'embedding': crop_result.pop('_embedding', None),
                 'ccip': _safe_ccip(crop_bytes) if with_ccip else None,
@@ -745,6 +746,7 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     result['embedding'] = embedding
     result['ccip'] = ccip
     result['crops'] = crops
+    result['boxes'] = [list(b) for b in boxes]
     result['person_count'] = person_count
     return result
 
