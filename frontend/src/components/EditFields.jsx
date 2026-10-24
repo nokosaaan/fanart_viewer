@@ -130,6 +130,15 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   const [tags,      setTags]      = useState((item.tags||[]).join(', '))
   const [artist,    setArtist]    = useState(item.artist||'')
   const [loading,   setLoading]   = useState(false)
+
+  // Re-sync form state when item props change so reopened editor or external updates always see fresh values
+  useEffect(() => {
+    setTitleList(item.titles || [])
+    setCharList(item.characters || [])
+    setSituation((item.situation || '').toUpperCase())
+    setTags((item.tags || []).join(', '))
+    setArtist(item.artist || '')
+  }, [item.id, item.situation, item.titles, item.characters, item.tags, item.artist])
   const [allTitles, setAllTitles] = useState([])
   const [allChars,  setAllChars]  = useState([])
   const [suggesting, setSuggesting] = useState(false)
@@ -412,6 +421,9 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     try{
       const j = await saveItemFields(item.id, payload)
       setLoading(false)
+      if (j && j.item) {
+        Object.assign(item, j.item)
+      }
       // What the save did about character groups: the automatic-filing
       // notices, or -- when the item's titles lead to more than one possible
       // group -- a question for the person (see lib/groupChoice.jsx and
@@ -738,7 +750,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <label style={SECTION.label}>Situation</label>
         <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
           {SITUATIONS.map(s=>(
-            <button key={s.value} onClick={()=>setSituation(s.value)}
+            <button key={s.value} type="button" onClick={()=>setSituation(prev => prev === s.value ? '' : s.value)}
               style={{
                 padding:'8px 16px', borderRadius:6, border:'none', cursor:'pointer', fontSize:13, fontWeight:500,
                 background: situation===s.value ? '#3b82f6' : '#0f172a',

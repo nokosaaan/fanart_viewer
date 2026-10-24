@@ -69,6 +69,31 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
   const [tagsState, setTagsState] = useState(it.tags || [])
   const [situationState, setSituationState] = useState(it.situation || '')
   const [artistState, setArtistState] = useState(it.artist || '')
+
+  // Keep local row state in sync with props changes or cross-component updates
+  useEffect(() => {
+    setTitlesState(it.titles || [])
+    setCharsState(it.characters || [])
+    setTagsState(it.tags || [])
+    setSituationState(it.situation || '')
+    setArtistState(it.artist || '')
+  }, [it.id, it.titles, it.characters, it.tags, it.situation, it.artist])
+
+  useEffect(() => {
+    function onRowItemUpdated(ev){
+      const updated = ev && ev.detail && ev.detail.item
+      if(updated && (updated.id === it.id || String(updated.id) === String(it.id))){
+        setTitlesState(updated.titles || [])
+        setCharsState(updated.characters || [])
+        setTagsState(updated.tags || [])
+        setSituationState(updated.situation || '')
+        setArtistState(updated.artist || '')
+        Object.assign(it, updated)
+      }
+    }
+    window.addEventListener('item-updated', onRowItemUpdated)
+    return () => window.removeEventListener('item-updated', onRowItemUpdated)
+  }, [it])
   const [copied, setCopied] = useState(false)
   const [uploadingLocal, setUploadingLocal] = useState(false)
   const localFileInputRef = useRef(null)
@@ -474,6 +499,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
           setTagsState(newItem.tags || [])
           setSituationState(newItem.situation || '')
           setArtistState(newItem.artist || '')
+          Object.assign(it, newItem)
           setShowEditor(false)
           // Carry the full updated item (update_fields returns it fully
           // serialized) so App.jsx can merge it into the shared items list —

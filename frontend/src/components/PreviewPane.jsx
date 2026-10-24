@@ -62,6 +62,21 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   // they'd navigated elsewhere with prev()/next().
   const jumpedItemIdRef = useRef(null)
   const [panePageIndex, setPanePageIndex] = useState(0)
+  const [, setForceUpdate] = useState(0)
+
+  useEffect(()=>{
+    function onPreviewItemUpdated(ev){
+      const updated = ev && ev.detail && ev.detail.item
+      if(!updated || updated.id == null) return
+      const target = previewItems.find(it => it && (it.id === updated.id || String(it.id) === String(updated.id)))
+      if(target){
+        Object.assign(target, updated)
+        setForceUpdate(n => n + 1)
+      }
+    }
+    window.addEventListener('item-updated', onPreviewItemUpdated)
+    return () => window.removeEventListener('item-updated', onPreviewItemUpdated)
+  }, [previewItems])
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
@@ -577,7 +592,14 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   )}
                 </div>
                 <div className="modal-meta">
-                  <div className="preview-title">{(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].titles || previewItems[selectedIndex].title || ''}</div>
+                  <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
+                    <div className="preview-title">{(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].titles || previewItems[selectedIndex].title || ''}</div>
+                    {previewItems[selectedIndex].situation && (
+                      <span className={`situation-chip s-${previewItems[selectedIndex].situation.toLowerCase()}`}>
+                        {previewItems[selectedIndex].situation.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
                   <div className="preview-artist">{previewItems[selectedIndex].artist || ''}</div>
                   <a className="link-text" href={previewItems[selectedIndex].link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
                     {(() => {
@@ -705,6 +727,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
           onClose={()=>setEditOpen(false)}
           onSaved={(newItem)=>{
             setEditOpen(false)
+            Object.assign(previewItems[selectedIndex], newItem)
+            setForceUpdate(n => n + 1)
             notify('item-updated', { id: previewItems[selectedIndex].id, item: newItem })
           }}
         />

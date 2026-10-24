@@ -492,7 +492,7 @@ function AppMain({ role, onLogout }){
       try{
         const updated = ev && ev.detail && ev.detail.item
         if(!updated || updated.id == null) return
-        setItems(prev => Array.isArray(prev) ? prev.map(it => it.id === updated.id ? { ...it, ...updated } : it) : prev)
+        setItems(prev => Array.isArray(prev) ? prev.map(it => (it.id === updated.id || String(it.id) === String(updated.id)) ? { ...it, ...updated } : it) : prev)
       }catch(e){/* ignore */}
     }
     window.addEventListener('item-updated', onItemUpdated)
@@ -1062,7 +1062,7 @@ function AppMain({ role, onLogout }){
           item={pendingNewItem}
           onClose={()=>setPendingNewItem(null)}
           onSaved={(updated)=>{
-            setItems(prev => Array.isArray(prev) ? prev.map(it => it.id === updated.id ? { ...it, ...updated } : it) : prev)
+            setItems(prev => Array.isArray(prev) ? prev.map(it => (it.id === updated.id || String(it.id) === String(updated.id)) ? { ...it, ...updated } : it) : prev)
             setPendingNewItem(null)
           }}
         />
