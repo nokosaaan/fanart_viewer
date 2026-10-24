@@ -80,6 +80,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
+  const [editOpen, setEditOpen] = useState(false)
   // Ids deleted from THIS item's own filmstrip but not yet reflected by a
   // fresh fetch — see deleteCurrentPreview. Deleting one image used to
   // immediately refetch/replace `previews`, which reindexes every later
@@ -168,6 +169,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   useEffect(()=>{
     function onKey(e){
       if(selectedIndex===null) return
+      // When edit modal is open, let user type/navigate within edit window without hotkeys moving background
+      if(editOpen) return
       if(e.key==='Escape') closeLightbox()
       // Up/Down move to the prev/next ITEM, matching the mouse wheel below
       // (deltaY drives next()/prev()) — Left/Right instead page through
@@ -180,14 +183,24 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     }
     window.addEventListener('keydown', onKey)
     return ()=> window.removeEventListener('keydown', onKey)
-  }, [selectedIndex, previewItems, previews])
+  }, [selectedIndex, previewItems, previews, editOpen])
 
   // wheel navigation: accumulate deltas to avoid accidental small scrolls
   const wheelAccRef = useRef(0)
   const lastNavRef = useRef(0)
+
+  useEffect(()=>{
+    wheelAccRef.current = 0
+  }, [editOpen])
+
   useEffect(()=>{
     function handleWheel(e){
       if(selectedIndex===null) return
+      // When edit modal is open, scroll only inside the edit window — do not switch items in the background
+      if(editOpen) return
+      // If event originated from an overlay/form/dialog outside lightbox main area, do not trigger item nav
+      if(e.target && e.target.closest && (e.target.closest('[role="dialog"]') || e.target.closest('form'))) return
+
       // prefer vertical wheel (deltaY) but accept deltaX as well
       const delta = e.deltaY || e.deltaX || 0
       wheelAccRef.current += delta
@@ -204,7 +217,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     // attach to window to capture wheel inside modal
     window.addEventListener('wheel', handleWheel, {passive: true})
     return ()=> window.removeEventListener('wheel', handleWheel)
-  }, [selectedIndex, previewItems])
+  }, [selectedIndex, previewItems, editOpen])
 
   function openLarge(i){
     const it = previewItems[i]
@@ -268,7 +281,6 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   // for choosing the one(s) to keep ("keep" mode deletes everything else).
   const [selectMode, setSelectMode] = useState(false)
   const [pickedIds, setPickedIds] = useState(() => new Set())
-  const [editOpen, setEditOpen] = useState(false)
 
   // Paging through THIS item's own images (e.g. a multi-page manga fetch)
   // is bound to Left/Right, not Up/Down — the mouse wheel already moves to

@@ -792,12 +792,18 @@ export default function EditFields({ item, onClose, onSaved }){
     // this from the gallery's lightbox (PreviewPane.jsx) used to render it
     // fully hidden behind that still-open backdrop, since paint order
     // follows z-index, not DOM order, for stacked position:fixed elements.
-    <div style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1500}} onClick={onClose}>
+    <div
+      style={{position:'fixed', left:0, right:0, top:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1500}}
+      onClick={onClose}
+      onWheel={e=>e.stopPropagation()}
+    >
       <div
         style={{width:540, maxWidth:'92%', margin:'3% auto', background:'#1e293b',
           borderRadius:12, padding:'20px 24px', maxHeight:'92vh', overflowY:'auto',
+          overscrollBehavior:'contain',
           boxShadow:'0 12px 48px rgba(0,0,0,0.7)'}}
         onClick={e=>e.stopPropagation()}
+        onWheel={e=>e.stopPropagation()}
       >
         <ItemEditForm item={item} onClose={onClose} onSaved={(newItem)=>{ if(onSaved) onSaved(newItem); onClose() }} />
       </div>
