@@ -1141,6 +1141,70 @@ def _remove_preview_images(item, ids):
     return {'deleted': len(doomed), 'remaining': len(survivors), 'regions_dropped': dropped, 'regions_remapped': remapped}
 
 
+def _natural_sort_key(s):
+    """Sort key for natural/numerical ordering (e.g. 05.jpg < 21.jpg, 2.jpg < 10.jpg)."""
+    if not s:
+        return []
+    import re
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
+
+
+def _reorder_preview_images(item, new_ordered_ids):
+    """Reorder item's PreviewImages to match `new_ordered_ids`.
+    Also updates character_regions and translation_caches to follow the new positions.
+    """
+    from django.db import transaction
+
+    with transaction.atomic():
+        rows = list(item.preview_images.order_by('order'))
+        if not rows:
+            return {'count': 0, 'regions_remapped': 0}
+
+        row_map = {r.id: r for r in rows}
+        old_index_by_id = {r.id: idx for idx, r in enumerate(rows)}
+
+        # Filter new_ordered_ids to valid ones belonging to this item
+        valid_ids = [rid for rid in new_ordered_ids if rid in row_map]
+        # Any missing rows keep their relative order at the end
+        remaining = [r.id for r in rows if r.id not in set(valid_ids)]
+        final_ids = valid_ids + remaining
+
+        new_index_by_id = {rid: idx for idx, rid in enumerate(final_ids)}
+        pos_map = {old_index_by_id[rid]: new_index_by_id[rid] for rid in final_ids}
+
+        # Update PreviewImage order
+        for rid, new_idx in new_index_by_id.items():
+            if old_index_by_id[rid] != new_idx:
+                PreviewImage.objects.filter(pk=rid).update(order=new_idx)
+
+        # Update character_regions
+        remapped_regions = 0
+        if item.character_regions:
+            new_regions = []
+            for r in item.character_regions:
+                idx = r.get('image_index')
+                if idx is not None and idx in pos_map and pos_map[idx] != idx:
+                    r = {**r, 'image_index': pos_map[idx]}
+                    remapped_regions += 1
+                new_regions.append(r)
+            if remapped_regions > 0:
+                item.character_regions = new_regions
+                item.save(update_fields=['character_regions'])
+
+        # Update translation_caches (unique_together = ('item', 'image_index'))
+        caches = list(item.translation_caches.all())
+        if caches:
+            for c in caches:
+                if c.image_index in pos_map and pos_map[c.image_index] != c.image_index:
+                    c.image_index = 100000 + pos_map[c.image_index]
+                    c.save(update_fields=['image_index'])
+            for c in item.translation_caches.filter(image_index__gte=100000):
+                c.image_index = c.image_index - 100000
+                c.save(update_fields=['image_index'])
+
+        return {'count': len(final_ids), 'regions_remapped': remapped_regions}
+
+
 # How many of a post's images the suggestion pipeline analyses when the
 # caller didn't pick one. Each image costs a full tagger pass (+ person crops,
 # + CCIP), several to ~10 s on CPU, so a long post (a manga chapter) is
@@ -3240,7 +3304,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         imgs = item.preview_images.order_by('order')
         data = []
         for idx, img in enumerate(imgs):
-            data.append({'id': img.id, 'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': img.content_type})
+            data.append({
+                'id': img.id,
+                'index': idx,
+                'url': f"/api/items/{item.id}/previews/{idx}/",
+                'content_type': img.content_type,
+                'filename': getattr(img, 'filename', '') or '',
+            })
         return Response(data)
 
     @action(detail=True, methods=['delete'], url_path='previews/id/(?P<pid>[^/]+)')
@@ -3327,6 +3397,66 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to delete previews in bulk for item %s', item.pk)
             return Response({'detail': 'Failed to delete previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({'status': 'deleted', **result})
+
+    @action(detail=True, methods=['post'], url_path='reorder_previews')
+    def reorder_previews(self, request, pk=None):
+        """Reorder this item's preview images.
+
+        Body accepts:
+          {"order_ids": [id1, id2, ...]} -- explicit new order by PreviewImage id
+          OR
+          {"action": "sort_by_filename", "reverse": false} -- sort by PreviewImage.filename naturally
+          OR
+          {"action": "reverse"} -- reverse current order
+          OR
+          {"action": "move", "preview_id": id, "direction": -1 | 1} -- move image backward/forward
+        """
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        action_name = data.get('action')
+
+        rows = list(item.preview_images.order_by('order'))
+        if not rows:
+            return Response({'status': 'ok', 'previews': []})
+
+        if action_name == 'sort_by_filename':
+            reverse = bool(data.get('reverse', False))
+            sorted_rows = sorted(rows, key=lambda img: _natural_sort_key(img.filename or f"img_{img.order:05d}"), reverse=reverse)
+            new_ordered_ids = [r.id for r in sorted_rows]
+        elif action_name == 'reverse':
+            new_ordered_ids = [r.id for r in reversed(rows)]
+        elif action_name == 'move':
+            pid = data.get('preview_id')
+            direction = int(data.get('direction', 0))
+            current_ids = [r.id for r in rows]
+            try:
+                curr_idx = current_ids.index(int(pid))
+                new_idx = curr_idx + direction
+                if 0 <= new_idx < len(current_ids):
+                    current_ids[curr_idx], current_ids[new_idx] = current_ids[new_idx], current_ids[curr_idx]
+                new_ordered_ids = current_ids
+            except (ValueError, TypeError):
+                return Response({'detail': 'invalid preview_id'}, status=status.HTTP_400_BAD_REQUEST)
+        elif 'order_ids' in data:
+            order_ids = data.get('order_ids')
+            if not isinstance(order_ids, list):
+                return Response({'detail': 'order_ids must be a list of ids'}, status=status.HTTP_400_BAD_REQUEST)
+            new_ordered_ids = [int(i) for i in order_ids]
+        else:
+            return Response({'detail': 'must provide action or order_ids'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            result = _reorder_preview_images(item, new_ordered_ids)
+        except Exception as e:
+            logging.exception('Failed to reorder previews for item %s', item.pk)
+            return Response({'detail': 'Failed to reorder previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        updated_imgs = item.preview_images.order_by('order')
+        preview_list = [
+            {'id': img.id, 'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': img.content_type, 'filename': getattr(img, 'filename', '') or ''}
+            for idx, img in enumerate(updated_imgs)
+        ]
+        return Response({'status': 'reordered', **result, 'previews': preview_list})
 
     @action(detail=True, methods=['delete'], url_path='delete_item')
     def delete_item(self, request, pk=None):
@@ -3955,7 +4085,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         for idx, f in enumerate(files):
             try:
-                PreviewImage.objects.create(item=item, order=idx, data=f.read(), content_type=f.content_type or 'image/jpeg')
+                PreviewImage.objects.create(item=item, order=idx, data=f.read(), content_type=f.content_type or 'image/jpeg', filename=f.name or '')
             except Exception:
                 logging.exception('Failed to save manually-uploaded image %s for item %s', f.name, item.pk)
 
@@ -4007,6 +4137,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 PreviewImage.objects.create(
                     item=item, order=start_order + offset,
                     data=f.read(), content_type=f.content_type or 'image/jpeg',
+                    filename=f.name or '',
                 )
                 created += 1
             except Exception:

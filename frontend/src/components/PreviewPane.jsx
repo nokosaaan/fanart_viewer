@@ -81,6 +81,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [previews, setPreviews] = useState([]) // per-item preview list
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
+  const [reordering, setReordering] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [translationsMap, setTranslationsMap] = useState({})
   const [translating, setTranslating] = useState(false)
@@ -519,6 +520,53 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     runBulkDelete({ keep_ids: [pid] }, `いま表示している画像だけを残し、それ以外の${others}枚を削除しますか？ 元に戻せません。`)
   }
 
+  async function runReorder(body) {
+    if (selectedIndex === null) return
+    const it = previewItems[selectedIndex]
+    if (!it || reordering) return
+    setReordering(true)
+    try {
+      const resp = await fetch(`/api/items/${it.id}/reorder_previews/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const j = await resp.json().catch(() => ({}))
+      if (!resp.ok) {
+        alert('画像の並び替えに失敗しました: ' + (j.detail || j.error || resp.status))
+        return
+      }
+      if (j.previews) {
+        setPreviews(j.previews)
+        const curPid = selectedPreviewId || (previews[currentPreviewIdx] && previews[currentPreviewIdx].id)
+        if (curPid) {
+          const newPos = j.previews.findIndex(p => p.id === curPid)
+          if (newPos >= 0) setCurrentPreviewIdx(newPos)
+        }
+      }
+      notify('item-preview-updated', { id: it.id })
+    } catch (e) {
+      console.error(e)
+      alert('画像の並び替えに失敗しました')
+    } finally {
+      setReordering(false)
+    }
+  }
+
+  function reorderByFilename() {
+    runReorder({ action: 'sort_by_filename' })
+  }
+
+  function reverseOrder() {
+    runReorder({ action: 'reverse' })
+  }
+
+  function moveCurrentImage(direction) {
+    const curPid = selectedPreviewId || (previews[currentPreviewIdx] && previews[currentPreviewIdx].id)
+    if (!curPid) return
+    runReorder({ action: 'move', preview_id: curPid, direction })
+  }
+
   async function clearAllPreviews(){
     if(selectedIndex===null) return
     const it = previewItems[selectedIndex]
@@ -793,8 +841,17 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       <>
                         <button className="btn" style={{fontSize:12}} onClick={()=>{ setSelectMode(true); setPickedIds(new Set()) }}
                           title="複数の画像を選んで、まとめて削除する/選んだ画像だけ残す">☑ 複数選択</button>
-                        <button className="btn" style={{fontSize:12}} onClick={keepOnlyCurrent} disabled={deleting}
+                        <button className="btn" style={{fontSize:12}} onClick={keepOnlyCurrent} disabled={deleting || reordering}
                           title="いま大きく表示している画像だけを残して、他の画像をすべて削除します">★ この1枚だけ残す</button>
+                        <span style={{width: 1, height: 16, background: 'rgba(255,255,255,0.2)', margin: '0 2px'}} />
+                        <button className="btn" style={{fontSize:12}} onClick={reorderByFilename} disabled={deleting || reordering}
+                          title="ファイル名の番号順(01, 02... 10)で自動整列します">🔀 ファイル名順で整列</button>
+                        <button className="btn" style={{fontSize:12}} onClick={reverseOrder} disabled={deleting || reordering}
+                          title="ページの順序を前後に反転します">🔄 逆順</button>
+                        <button className="btn" style={{fontSize:12}} onClick={() => moveCurrentImage(-1)} disabled={deleting || reordering || currentPreviewIdx === 0}
+                          title="表示中の画像を1つ前(左)へ移動">◀ 前へ</button>
+                        <button className="btn" style={{fontSize:12}} onClick={() => moveCurrentImage(1)} disabled={deleting || reordering || currentPreviewIdx >= previews.filter(p => !deletedPreviewIds.has(p.id)).length - 1}
+                          title="表示中の画像を1つ後ろ(右)へ移動">次へ ▶</button>
                       </>
                     ) : (
                       <>
@@ -837,7 +894,12 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         <img src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
                           className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}
                           style={selectMode && pickedIds.has(p.id) ? {borderColor:'#3b82f6', opacity:1} : undefined}
+                          title={p.filename ? `${p.index + 1}. ${p.filename}` : `ページ ${p.index + 1}`}
                           onClick={()=> selectMode ? togglePicked(p.id) : selectPreviewIndex(p.index)} />
+                        <span style={{position:'absolute', bottom:2, right:2, background:'rgba(0,0,0,0.65)', color:'#fff',
+                          fontSize:9, padding:'1px 4px', borderRadius:2, pointerEvents:'none', lineHeight:1}}>
+                          {p.index + 1}
+                        </span>
                         {selectMode && (
                           <span aria-hidden="true" style={{position:'absolute', top:4, left:4, width:18, height:18, borderRadius:4,
                             background: pickedIds.has(p.id) ? '#2563eb' : 'rgba(0,0,0,0.55)', border:'1px solid #fff', color:'#fff',

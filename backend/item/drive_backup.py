@@ -552,6 +552,12 @@ def _quoted(cols):
     return ', '.join(f'"{c}"' for c in cols)
 
 
+def _backup_table_columns(cursor, table_name):
+    """Return set of column names present in the attached backup database table."""
+    cursor.execute(f'PRAGMA backup_src.table_info("{table_name}")')
+    return {row[1] for row in cursor.fetchall()}
+
+
 def _as_aware_utc(raw_value):
     """Normalize a DateTimeField's raw fetched value into a tz-aware UTC
     datetime. Python's sqlite3 module auto-converts a "datetime"-declared
@@ -714,7 +720,8 @@ def _merge_backup_sqlite(connection) -> dict:
             items_added += 1
 
         # --- PreviewImage: always follows its Item ---
-        pi_cols = _concrete_columns(PreviewImage)  # ['item_id', 'order', 'data', 'content_type']
+        available_pi_cols = _backup_table_columns(cursor, 'item_previewimage')
+        pi_cols = [c for c in _concrete_columns(PreviewImage) if c in available_pi_cols]
         cursor.execute(f'SELECT {_quoted(pi_cols)} FROM backup_src.item_previewimage')
         backup_previews = cursor.fetchall()
 

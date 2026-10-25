@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
+import { sortFilesNaturally } from '../lib/naturalSort'
 
 function getCookie(name) {
-  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*([^;]+)')
   return m ? m.pop() : ''
 }
 
@@ -18,6 +19,30 @@ export default function ManualAddItem({ onClose, onCreated }) {
   const [artist, setArtist] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+
+  function handleFileChange(e) {
+    const rawFiles = Array.from(e.target.files || [])
+    // Automatically sort files naturally so numbered manga pages (e.g. 05.jpg, 21.jpg)
+    // are ordered correctly even if selected in random order by the OS file dialog.
+    setFiles(sortFilesNaturally(rawFiles))
+  }
+
+  function sortFiles(reverse = false) {
+    setFiles(prev => sortFilesNaturally(prev, reverse))
+  }
+
+  function moveFile(idx, direction) {
+    const newIdx = idx + direction
+    if (newIdx < 0 || newIdx >= files.length) return
+    const next = [...files]
+    const [moved] = next.splice(idx, 1)
+    next.splice(newIdx, 0, moved)
+    setFiles(next)
+  }
+
+  function removeFile(idx) {
+    setFiles(prev => prev.filter((_, i) => i !== idx))
+  }
 
   async function create() {
     if (files.length === 0) { setError('画像ファイルを1枚以上選択してください'); return }
@@ -50,13 +75,13 @@ export default function ManualAddItem({ onClose, onCreated }) {
 
   return (
     <div className="cgm-panel-backdrop" onClick={onClose}>
-      <div className="cgm-panel" style={{ width: 480 }} onClick={e => e.stopPropagation()}>
+      <div className="cgm-panel" style={{ width: 520, maxWidth: '95vw' }} onClick={e => e.stopPropagation()}>
         <div className="cgm-panel-header">
           <strong>手動でアイテムを追加</strong>
           <button className="cgm-panel-close" onClick={onClose}>✕</button>
         </div>
 
-        <div className="cgm-panel-body" style={{ padding: '16px 20px' }}>
+        <div className="cgm-panel-body" style={{ padding: '16px 20px', maxHeight: '80vh', overflowY: 'auto' }}>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
             元投稿のURLが死んでいる(削除・凍結・404など)が、画像は手元に保存してある場合に使います。
             URLへの取得は一切行わず、選択した画像ファイルをそのままアイテムとして登録します。
@@ -69,11 +94,41 @@ export default function ManualAddItem({ onClose, onCreated }) {
             <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>画像ファイル(複数選択可)</label>
             <input
               type="file" accept="image/*" multiple
-              onChange={e => setFiles(Array.from(e.target.files || []))}
+              onChange={handleFileChange}
             />
             {files.length > 0 && (
-              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
-                {files.length}枚選択中: {files.map(f => f.name).join(', ')}
+              <div style={{ marginTop: 8, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>
+                    {files.length}枚選択中 (番号順に自動整列済み):
+                  </span>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button type="button" className="btn" style={{ fontSize: 11, padding: '2px 6px' }} onClick={() => sortFiles(false)} title="ファイル名の自然順(01, 02... 10)で整列">
+                      名前順 ↑
+                    </button>
+                    <button type="button" className="btn" style={{ fontSize: 11, padding: '2px 6px' }} onClick={() => sortFiles(true)} title="ファイル名の逆順で整列">
+                      名前順 ↓
+                    </button>
+                  </div>
+                </div>
+                <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: 12, background: '#fff', border: '1px solid #cbd5e1', borderRadius: 4, padding: 4 }}>
+                  {files.map((f, i) => (
+                    <div key={`${f.name}-${i}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 6px', borderBottom: i < files.length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 350 }} title={f.name}>
+                        <strong style={{ color: '#64748b', marginRight: 6 }}>{i + 1}.</strong>
+                        <span style={{ color: '#0f172a' }}>{f.name}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                        <button type="button" style={{ border: 'none', background: 'transparent', cursor: i === 0 ? 'default' : 'pointer', opacity: i === 0 ? 0.3 : 1, padding: '0 4px', fontSize: 11 }}
+                          disabled={i === 0} onClick={() => moveFile(i, -1)} title="前へ">▲</button>
+                        <button type="button" style={{ border: 'none', background: 'transparent', cursor: i === files.length - 1 ? 'default' : 'pointer', opacity: i === files.length - 1 ? 0.3 : 1, padding: '0 4px', fontSize: 11 }}
+                          disabled={i === files.length - 1} onClick={() => moveFile(i, 1)} title="次へ">▼</button>
+                        <button type="button" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ef4444', padding: '0 4px', fontSize: 11 }}
+                          onClick={() => removeFile(i)} title="削除">✕</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

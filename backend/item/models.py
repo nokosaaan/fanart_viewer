@@ -74,6 +74,7 @@ class PreviewImage(models.Model):
     order = models.IntegerField(default=0)
     data = models.BinaryField()
     content_type = models.CharField(max_length=100, blank=True, null=True)
+    filename = models.CharField(max_length=255, blank=True, default='')
 
     class Meta:
         ordering = ['order']
@@ -471,7 +472,7 @@ class CharacterDanbooruLink(models.Model):
     conflict_resolved = models.BooleanField(default=False)
 
     class Meta:
-        indexes = [models.Index(fields=['danbooru_tag'])]
+        indexes = [models.Index(fields=['danbooru_tag'], name='item_charac_danboor_1786a2_idx')]
 
     def __str__(self):
         return f"{self.character_name} -> {self.danbooru_tag or '(unresolved)'}"
@@ -506,7 +507,7 @@ class TitleDanbooruLink(models.Model):
     conflict_resolved = models.BooleanField(default=False)
 
     class Meta:
-        indexes = [models.Index(fields=['danbooru_tag'])]
+        indexes = [models.Index(fields=['danbooru_tag'], name='item_tdl_danbooru_tag_idx')]
 
     def __str__(self):
         return f"{self.title_name} -> {self.danbooru_tag or '(unresolved)'}"

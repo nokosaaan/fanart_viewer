@@ -3,6 +3,7 @@ import EditFields from './EditFields'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 import { notify } from '../lib/crossWindowSync'
 import { getPlatformIcon } from '../lib/platformIcon'
+import { sortFilesNaturally } from '../lib/naturalSort'
 
 // Shows the platform badge (Twitter/Pixiv/Poipiku) when the link is
 // recognized, falling back to the generic "opens externally" icon
@@ -128,8 +129,9 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
   // ManualAddItem.jsx's upload, but appends to an EXISTING item (see
   // ItemViewSet.upload_preview).
   async function onUploadLocalFiles(e){
-    const files = Array.from((e && e.target && e.target.files) || [])
-    if(files.length === 0) return
+    const rawFiles = Array.from((e && e.target && e.target.files) || [])
+    if(rawFiles.length === 0) return
+    const files = sortFilesNaturally(rawFiles)
     setUploadingLocal(true)
     try{
       const formData = new FormData()

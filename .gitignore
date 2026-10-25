@@ -29,3 +29,4 @@ claudeflared
 /exe/__pycache__/
 /backend/item/migrations/__pycache__/
 /backend/item/management/commands/__pycache__/
+*.sqlite3
