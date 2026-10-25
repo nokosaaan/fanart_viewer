@@ -14,6 +14,9 @@ class ItemSerializer(serializers.ModelSerializer):
         read_only_fields = ('preview_content_type', 'has_preview')
 
     def get_has_preview(self, obj):
+        # Use annotated boolean if precomputed by queryset (avoids N+1 queries)
+        if hasattr(obj, 'annotated_has_preview'):
+            return bool(obj.annotated_has_preview)
         # Prefer to check PreviewImage related rows; fall back to legacy preview_data
         try:
             # use hasattr to avoid accidental DB hits if relation broken

@@ -1,4 +1,4 @@
-"""In-image text translation using Gemini 1.5 Flash multimodal API.
+"""In-image text translation using Gemini multimodal API.
 Detects non-Japanese text (English, Korean, Chinese, etc.) and provides
 bounding boxes (0-1000 normalized coordinates) and Japanese translations.
 """
@@ -10,7 +10,8 @@ import urllib.error
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = "gemini-1.5-flash"
+# Cached model name discovered from ListModels
+_CACHED_MODEL = None
 
 
 def detect_image_mime(data: bytes) -> str:
@@ -51,21 +52,75 @@ If no non-Japanese text is found, return an empty array [].
 """
 
 
+def resolve_available_models(api_key: str) -> list[str]:
+    """Fetch active models from ModelService.ListModels supporting `generateContent`."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    req = urllib.request.Request(url, headers={'User-Agent': 'FanartViewer/1.0'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        logger.warning("ListModels request failed: %s", e)
+        return []
+
+    available = []
+    for m in data.get('models', []):
+        name = m.get('name', '')  # e.g. "models/gemini-2.0-flash"
+        methods = m.get('supportedGenerationMethods', [])
+        if 'generateContent' in methods:
+            clean = name.replace('models/', '')
+            available.append(clean)
+    return available
+
+
+def pick_best_model(api_key: str) -> list[str]:
+    """Return an ordered list of model names to try, preferring fast flash models."""
+    global _CACHED_MODEL
+    preferred_order = [
+        'gemini-2.0-flash',
+        'gemini-2.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash-002',
+        'gemini-1.5-flash-001',
+        'gemini-1.5-flash',
+        'gemini-2.0-flash-exp',
+        'gemini-1.5-pro-latest',
+        'gemini-1.5-pro',
+    ]
+
+    available = resolve_available_models(api_key)
+    candidates = []
+
+    if _CACHED_MODEL and _CACHED_MODEL in available:
+        candidates.append(_CACHED_MODEL)
+
+    if available:
+        for pref in preferred_order:
+            if pref in available and pref not in candidates:
+                candidates.append(pref)
+        for m in available:
+            if 'flash' in m.lower() and m not in candidates:
+                candidates.append(m)
+        for m in available:
+            if 'gemini' in m.lower() and m not in candidates:
+                candidates.append(m)
+    else:
+        # Fallback list if ListModels was blocked or unavailable
+        candidates = preferred_order[:]
+
+    return candidates
+
+
 def translate_image_with_gemini(image_bytes: bytes, api_key: str) -> list[dict]:
-    """Call Gemini 1.5 Flash API with the image bytes, returning a list of translation blocks.
-    Each item has:
-        - box_2d: [ymin, xmin, ymax, xmax] (0..1000)
-        - source_lang: str
-        - original_text: str
-        - translated_text: str
+    """Call Gemini API with the image bytes, returning a list of translation blocks.
+    Automatically discovers and falls back across available model versions.
     """
+    global _CACHED_MODEL
     if not api_key:
         raise ValueError("Gemini API key is not configured.")
 
     mime_type = detect_image_mime(image_bytes)
     b64_img = base64.b64encode(image_bytes).decode('ascii')
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}"
 
     payload = {
         "contents": [
@@ -88,36 +143,58 @@ def translate_image_with_gemini(image_bytes: bytes, api_key: str) -> list[dict]:
             "temperature": 0.2
         }
     }
-
     req_data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        url,
-        data=req_data,
-        headers={
-            'Content-Type': 'application/json',
-            'User-Agent': 'FanartViewer/1.0'
-        },
-        method='POST'
-    )
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp_body = resp.read().decode('utf-8')
-    except urllib.error.HTTPError as e:
-        err_msg = f"HTTP {e.code}: {e.reason}"
+    models_to_try = pick_best_model(api_key)
+    logger.info("Attempting Gemini translation with models: %s", models_to_try)
+
+    last_error = None
+    resp_body = None
+
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={
+                'Content-Type': 'application/json',
+                'User-Agent': 'FanartViewer/1.0'
+            },
+            method='POST'
+        )
+
         try:
-            body = e.read().decode('utf-8', errors='ignore')
-            j = json.loads(body)
-            msg = j.get('error', {}).get('message', '')
-            if msg:
-                err_msg = msg
-        except Exception:
-            pass
-        logger.error("Gemini API request failed: %s", err_msg)
-        raise RuntimeError(f"Gemini API エラー: {err_msg}")
-    except Exception as e:
-        logger.error("Gemini API connection failed: %s", e)
-        raise RuntimeError(f"Gemini API 接続エラー: {str(e)}")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                resp_body = resp.read().decode('utf-8')
+                _CACHED_MODEL = model_name
+                logger.info("Successfully generated content using model: %s", model_name)
+                break
+        except urllib.error.HTTPError as e:
+            body = ''
+            msg = ''
+            try:
+                body = e.read().decode('utf-8', errors='ignore')
+                j = json.loads(body)
+                msg = j.get('error', {}).get('message', '')
+            except Exception:
+                pass
+            err_msg = msg or f"HTTP {e.code}: {e.reason}"
+            last_error = RuntimeError(f"Gemini API エラー ({model_name}): {err_msg}")
+
+            # If 404 (model not found), try next model
+            if e.code == 404:
+                logger.warning("Model %s returned 404, trying next candidate...", model_name)
+                continue
+            # For other errors (like quota or invalid key), don't loop endlessly
+            raise last_error
+        except Exception as e:
+            last_error = RuntimeError(f"Gemini API 接続エラー ({model_name}): {str(e)}")
+            break
+
+    if resp_body is None:
+        if last_error:
+            raise last_error
+        raise RuntimeError("利用可能な Gemini モデルが見つかりませんでした。")
 
     try:
         data = json.loads(resp_body)
@@ -158,4 +235,3 @@ def translate_image_with_gemini(image_bytes: bytes, api_key: str) -> list[dict]:
         })
 
     return results
-

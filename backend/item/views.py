@@ -9,7 +9,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
-from django.db.models import Q
+from django.db.models import Q, Exists, OuterRef
 from django.utils import timezone
 from collections import Counter, defaultdict
 import hashlib
@@ -2280,7 +2280,9 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
 
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
-    queryset = Item.objects.all().order_by('-id')
+    queryset = Item.objects.defer('preview_data').annotate(
+        annotated_has_preview=Exists(PreviewImage.objects.filter(item=OuterRef('pk')))
+    ).order_by('-id')
     serializer_class = ItemSerializer
 
     def list(self, request, *args, **kwargs):
