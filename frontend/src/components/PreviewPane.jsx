@@ -338,7 +338,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!active || !data) return
-        if (data.cached && data.translations && data.translations.length > 0) {
+        if (data.cached && data.translations && data.translations.length > 0
+            && (data.image_index == null || data.image_index === currentPreviewIdx)) {
           setTranslationsMap(prev => ({ ...prev, [key]: data.translations }))
         }
       })
@@ -366,7 +367,12 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
         }
         throw new Error(j.detail || `翻訳に失敗しました (${r.status})`)
       }
-      setTranslationsMap(prev => ({ ...prev, [key]: j.translations || [] }))
+      // Store under the image the server actually translated (never the
+      // first page by mistake), even if the user paged away meanwhile.
+      const resultIdx = (j.image_index != null) ? j.image_index : currentPreviewIdx
+      const resultKey = `${currentItem.id}_${resultIdx}`
+      setTranslationsMap(prev => ({ ...prev, [resultKey]: j.translations || [] }))
+      if (resultKey !== key) return
       setTranslationVisible(true)
       const info = j.model ? ` [${j.model} / ${((j.elapsed_ms || 0) / 1000).toFixed(1)}秒]` : ''
       if (!j.translations || j.translations.length === 0) {

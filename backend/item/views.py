@@ -4262,8 +4262,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         item = self.get_object()
 
-        # Parse index
-        idx_raw = request.data.get('index') if request.method == 'POST' else request.query_params.get('index')
+        # Parse index from the JSON body OR the query string: the frontend POSTs
+        # with ?index=N, which the old body-only check ignored for POST — every
+        # translation then ran on (and was cached as) image 0, so all pages of
+        # a multi-image item showed the first page's result.
+        idx_raw = request.data.get('index') if request.method == 'POST' else None
+        if idx_raw is None:
+            idx_raw = request.query_params.get('index')
         try:
             image_index = int(idx_raw) if idx_raw is not None else 0
         except (ValueError, TypeError):
