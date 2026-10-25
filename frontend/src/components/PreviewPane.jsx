@@ -338,7 +338,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (!active || !data) return
-        if (data.cached && data.translations) {
+        if (data.cached && data.translations && data.translations.length > 0) {
           setTranslationsMap(prev => ({ ...prev, [key]: data.translations }))
         }
       })
@@ -349,7 +349,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   async function handleTranslate(force = false) {
     if (!currentItem) return
     const key = `${currentItem.id}_${currentPreviewIdx}`
-    if (!force && translationsMap[key]) {
+    if (!force && translationsMap[key] && translationsMap[key].length > 0) {
       setTranslationVisible(v => !v)
       return
     }
@@ -368,10 +368,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       }
       setTranslationsMap(prev => ({ ...prev, [key]: j.translations || [] }))
       setTranslationVisible(true)
+      const info = j.model ? ` [${j.model} / ${((j.elapsed_ms || 0) / 1000).toFixed(1)}秒]` : ''
       if (!j.translations || j.translations.length === 0) {
-        setTranslationNotice('外国語テキストは見つかりませんでした（日本語のみ、またはテキストなし）。')
+        setTranslationNotice(`外国語テキストは見つかりませんでした（日本語のみ、またはテキストなし）。${info}`)
       } else {
-        setTranslationNotice(`${j.translations.length}件のテキストを翻訳しました。`)
+        setTranslationNotice(`${j.translations.length}件のテキストを翻訳しました。${info}`)
       }
     } catch (e) {
       setTranslationNotice(`エラー: ${e.message}`)

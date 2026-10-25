@@ -4269,11 +4269,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (ValueError, TypeError):
             image_index = 0
 
-        force = False
-        if request.method == 'POST':
-            force = bool(request.data.get('force'))
-        else:
-            force = request.query_params.get('force', '').lower() in ('true', '1', 'yes')
+        # Accept `force` from either the JSON body or the query string: the
+        # frontend's re-translate button POSTs with ?force=true, which the old
+        # body-only check ignored (so re-translate kept returning the cache).
+        force_raw = request.data.get('force') if request.method == 'POST' else None
+        if force_raw is None:
+            force_raw = request.query_params.get('force', '')
+        force = str(force_raw).lower() in ('true', '1', 'yes')
 
         image_bytes, resolved_index = _select_image_bytes(item, image_index)
         if not image_bytes:
@@ -4293,27 +4295,44 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     'translations': cache.translations,
                 })
 
+        # GET is a cache lookup only (the preview pane calls it every time an
+        # image is shown); actually running Gemini requires an explicit POST.
+        if request.method != 'POST':
+            return Response({
+                'item_id': item.id,
+                'image_index': actual_index,
+                'cached': False,
+                'translations': None,
+            })
+
         # Run translation via Gemini
         try:
-            translations = translate_image_with_gemini(image_bytes, api_key)
+            translations, meta = translate_image_with_gemini(image_bytes, api_key, return_meta=True)
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Update cache
-        cache, _ = ItemImageTranslationCache.objects.update_or_create(
-            item=item,
-            image_index=actual_index,
-            defaults={
-                'image_hash': img_hash,
-                'translations': translations,
-            }
-        )
+        # Update cache. An empty result is not cached: it is far more often a
+        # recognition miss than a truly text-free image, and caching it would
+        # keep returning "no text" until the user explicitly forces a re-run.
+        if translations:
+            ItemImageTranslationCache.objects.update_or_create(
+                item=item,
+                image_index=actual_index,
+                defaults={
+                    'image_hash': img_hash,
+                    'translations': translations,
+                }
+            )
+        else:
+            ItemImageTranslationCache.objects.filter(item=item, image_index=actual_index).delete()
 
         return Response({
             'item_id': item.id,
             'image_index': actual_index,
             'cached': False,
             'translations': translations,
+            'model': meta.get('model'),
+            'elapsed_ms': meta.get('elapsed_ms'),
         })
 
 
