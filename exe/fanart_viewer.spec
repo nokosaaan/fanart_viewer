@@ -73,6 +73,7 @@ datas += collect_data_files('playwright')
 # FileNotFoundError for pykakasi/data/kanwadict4.db in a build built
 # without this).
 datas += collect_data_files('pykakasi')
+datas += collect_data_files('rest_framework')
 
 # torch/torchvision (requirements-timm.txt's optional canary/timm tagger
 # backend -- see item/tagger.py's HAVE_TIMM) are only installed in some
