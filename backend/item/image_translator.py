@@ -10,8 +10,12 @@ import urllib.error
 
 logger = logging.getLogger(__name__)
 
-# Cached model name discovered from ListModels
+# Cached model name discovered from successful call
 _CACHED_MODEL = None
+
+EXCLUDE_MODEL_SUBSTRINGS = (
+    'tts', 'audio', 'embedding', 'embed', 'imagen', 'aqa', 'bison', 'robotics'
+)
 
 
 def detect_image_mime(data: bytes) -> str:
@@ -53,7 +57,9 @@ If no non-Japanese text is found, return an empty array [].
 
 
 def resolve_available_models(api_key: str) -> list[str]:
-    """Fetch active models from ModelService.ListModels supporting `generateContent`."""
+    """Fetch active models from ModelService.ListModels supporting `generateContent`,
+    strictly excluding audio/TTS/embedding models.
+    """
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     req = urllib.request.Request(url, headers={'User-Agent': 'FanartViewer/1.0'})
     try:
@@ -65,33 +71,46 @@ def resolve_available_models(api_key: str) -> list[str]:
 
     available = []
     for m in data.get('models', []):
-        name = m.get('name', '')  # e.g. "models/gemini-2.0-flash"
+        name = m.get('name', '')  # e.g. "models/gemini-1.5-flash-latest"
         methods = m.get('supportedGenerationMethods', [])
-        if 'generateContent' in methods:
-            clean = name.replace('models/', '')
-            available.append(clean)
+        clean = name.replace('models/', '').lower()
+
+        # Must support generateContent
+        if 'generateContent' not in methods:
+            continue
+
+        # Exclude non-vision models (TTS, speech, audio, embeddings)
+        if any(sub in clean for sub in EXCLUDE_MODEL_SUBSTRINGS):
+            continue
+
+        available.append(clean)
     return available
 
 
-def pick_best_model(api_key: str) -> list[str]:
-    """Return an ordered list of model names to try, preferring fast flash models."""
+def pick_best_models(api_key: str) -> list[str]:
+    """Return an ordered list of candidate models to try.
+    Prioritizes proven 1.5-flash series which have full vision input support.
+    """
     global _CACHED_MODEL
+    # Proven stable multimodal models supporting image input
     preferred_order = [
-        'gemini-2.0-flash',
-        'gemini-2.5-flash',
         'gemini-1.5-flash-latest',
+        'gemini-1.5-flash',
         'gemini-1.5-flash-002',
         'gemini-1.5-flash-001',
-        'gemini-1.5-flash',
-        'gemini-2.0-flash-exp',
+        'gemini-1.5-flash-8b',
+        'gemini-1.5-flash-8b-latest',
         'gemini-1.5-pro-latest',
+        'gemini-1.5-pro-002',
         'gemini-1.5-pro',
+        'gemini-2.0-flash-exp',
+        'gemini-2.0-flash',
     ]
 
     available = resolve_available_models(api_key)
     candidates = []
 
-    if _CACHED_MODEL and _CACHED_MODEL in available:
+    if _CACHED_MODEL and (not available or _CACHED_MODEL in available):
         candidates.append(_CACHED_MODEL)
 
     if available:
@@ -99,14 +118,16 @@ def pick_best_model(api_key: str) -> list[str]:
             if pref in available and pref not in candidates:
                 candidates.append(pref)
         for m in available:
-            if 'flash' in m.lower() and m not in candidates:
+            if 'flash' in m and m not in candidates:
                 candidates.append(m)
         for m in available:
-            if 'gemini' in m.lower() and m not in candidates:
+            if 'gemini' in m and m not in candidates:
                 candidates.append(m)
     else:
-        # Fallback list if ListModels was blocked or unavailable
-        candidates = preferred_order[:]
+        # Fallback list if ListModels was blocked or failed
+        for pref in preferred_order:
+            if pref not in candidates:
+                candidates.append(pref)
 
     return candidates
 
@@ -145,8 +166,8 @@ def translate_image_with_gemini(image_bytes: bytes, api_key: str) -> list[dict]:
     }
     req_data = json.dumps(payload).encode('utf-8')
 
-    models_to_try = pick_best_model(api_key)
-    logger.info("Attempting Gemini translation with models: %s", models_to_try)
+    models_to_try = pick_best_models(api_key)
+    logger.info("Attempting Gemini translation with candidate models: %s", models_to_try)
 
     last_error = None
     resp_body = None
@@ -181,11 +202,16 @@ def translate_image_with_gemini(image_bytes: bytes, api_key: str) -> list[dict]:
             err_msg = msg or f"HTTP {e.code}: {e.reason}"
             last_error = RuntimeError(f"Gemini API エラー ({model_name}): {err_msg}")
 
-            # If 404 (model not found), try next model
-            if e.code == 404:
-                logger.warning("Model %s returned 404, trying next candidate...", model_name)
+            # Check if this model failed due to not existing (404) or image modality not supported (400)
+            is_modality_or_not_found = (
+                e.code == 404 or
+                (e.code == 400 and ('modality' in err_msg.lower() or 'not supported' in err_msg.lower()))
+            )
+            if is_modality_or_not_found:
+                logger.warning("Model %s unsupported for image generateContent (%s), trying next candidate...", model_name, err_msg)
                 continue
-            # For other errors (like quota or invalid key), don't loop endlessly
+
+            # For severe errors (quota exceeded 429, invalid key 403), stop immediately
             raise last_error
         except Exception as e:
             last_error = RuntimeError(f"Gemini API 接続エラー ({model_name}): {str(e)}")
@@ -194,7 +220,7 @@ def translate_image_with_gemini(image_bytes: bytes, api_key: str) -> list[dict]:
     if resp_body is None:
         if last_error:
             raise last_error
-        raise RuntimeError("利用可能な Gemini モデルが見つかりませんでした。")
+        raise RuntimeError("画像入力に対応した有効な Gemini モデルが見つかりませんでした。")
 
     try:
         data = json.loads(resp_body)

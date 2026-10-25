@@ -321,6 +321,33 @@ def _poller_loop(platform, command):
             return
 
 
+def _migrate_if_needed():
+    """Runs migrate only when there are actually unapplied migrations,
+    avoiding the massive post_migrate ContentType/Permission scan and table
+    checks on every normal startup."""
+    from django.db import connection
+    from django.db.migrations.executor import MigrationExecutor
+    from django.core.management import call_command
+
+    try:
+        # Enable WAL mode and normal synchronous for fast SQLite performance
+        with connection.cursor() as cursor:
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
+        if plan:
+            logging.getLogger(__name__).info("Unapplied migrations found (%d steps). Running migrate...", len(plan))
+            call_command('migrate', interactive=False)
+        else:
+            logging.getLogger(__name__).info("Database schema is up to date. Skipping migrate.")
+    except Exception as e:
+        logging.getLogger(__name__).warning("Migration check fallback (%s), running standard migrate...", e)
+        call_command('migrate', interactive=False)
+
+
 def _start_backend(window):
     """Runs on a background thread — see webview.start() below — so the
     loading window (already showing) doesn't have to wait for Django and
@@ -361,10 +388,8 @@ def _start_backend(window):
 
     _set_status(window, 'データベースを準備中…')
 
-    # Idempotent — safe to run on every launch, not just the first. This
-    # is the packaged build's replacement for `docker compose exec web
-    # python manage.py migrate`, which obviously isn't available here.
-    call_command('migrate', interactive=False)
+    # Run migrate only when unapplied migrations exist, skipping on normal starts
+    _migrate_if_needed()
 
     # Unattended background fetching without having asked first isn't
     # something a personal, per-user install should just start doing on
@@ -427,7 +452,7 @@ def _run_training_mode():
 
     from django.core.management import call_command, execute_from_command_line
 
-    call_command('migrate', interactive=False)
+    _migrate_if_needed()
 
     extra_args = [a for a in sys.argv[1:] if a != TRAIN_FLAG]
     logging.getLogger(__name__).info('Starting train_character_classifier %s', extra_args)
