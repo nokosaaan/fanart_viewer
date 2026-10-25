@@ -2,6 +2,7 @@ import React, {useEffect, useState, useRef, useMemo} from 'react'
 import { notify } from '../lib/crossWindowSync'
 import { getPlatformIcon } from '../lib/platformIcon'
 import EditFields from './EditFields'
+import ImageTranslationOverlay from './ImageTranslationOverlay'
 
 const PANE_PAGE_SIZE = 50
 
@@ -81,6 +82,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0)
   const [selectedPreviewId, setSelectedPreviewId] = useState(null)
   const [editOpen, setEditOpen] = useState(false)
+  const [translationsMap, setTranslationsMap] = useState({})
+  const [translating, setTranslating] = useState(false)
+  const [translationVisible, setTranslationVisible] = useState(true)
+  const [translationNotice, setTranslationNotice] = useState('')
   // Ids deleted from THIS item's own filmstrip but not yet reflected by a
   // fresh fetch — see deleteCurrentPreview. Deleting one image used to
   // immediately refetch/replace `previews`, which reindexes every later
@@ -314,6 +319,64 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       setSelectedPreviewId((selected && selected.id) || null)
     }catch(e){
       setSelectedPreviewId(null)
+    }
+  }
+
+  const currentItem = selectedIndex !== null ? previewItems[selectedIndex] : null
+  const translationKey = currentItem ? `${currentItem.id}_${currentPreviewIdx}` : ''
+  const currentTranslations = translationsMap[translationKey] || null
+
+  // Check cached translations when current item or currentPreviewIdx changes
+  useEffect(() => {
+    setTranslationNotice('')
+    if (!currentItem) return
+    const key = `${currentItem.id}_${currentPreviewIdx}`
+    if (translationsMap[key] !== undefined) return
+
+    let active = true
+    fetch(`/api/items/${currentItem.id}/translate-image/?index=${currentPreviewIdx}`, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!active || !data) return
+        if (data.cached && data.translations) {
+          setTranslationsMap(prev => ({ ...prev, [key]: data.translations }))
+        }
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [currentItem?.id, currentPreviewIdx])
+
+  async function handleTranslate(force = false) {
+    if (!currentItem) return
+    const key = `${currentItem.id}_${currentPreviewIdx}`
+    if (!force && translationsMap[key]) {
+      setTranslationVisible(v => !v)
+      return
+    }
+
+    setTranslating(true)
+    setTranslationNotice('')
+    try {
+      const url = `/api/items/${currentItem.id}/translate-image/?index=${currentPreviewIdx}${force ? '&force=true' : ''}`
+      const r = await fetch(url, { method: 'POST', credentials: 'same-origin' })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        if (j.code === 'NO_API_KEY') {
+          throw new Error('Gemini APIキーが設定されていません。ヘッダーメニューの「画像翻訳 (Gemini) 設定」から設定してください。')
+        }
+        throw new Error(j.detail || `翻訳に失敗しました (${r.status})`)
+      }
+      setTranslationsMap(prev => ({ ...prev, [key]: j.translations || [] }))
+      setTranslationVisible(true)
+      if (!j.translations || j.translations.length === 0) {
+        setTranslationNotice('外国語テキストは見つかりませんでした（日本語のみ、またはテキストなし）。')
+      } else {
+        setTranslationNotice(`${j.translations.length}件のテキストを翻訳しました。`)
+      }
+    } catch (e) {
+      setTranslationNotice(`エラー: ${e.message}`)
+    } finally {
+      setTranslating(false)
     }
   }
 
@@ -600,7 +663,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   {allDeleted ? (
                     <div className="preview-modal-all-deleted">この投稿の画像はすべて削除されました</div>
                   ) : (
-                    <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
+                    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', maxWidth: '70vw', maxHeight: '78vh' }}>
+                      <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
+                      <ImageTranslationOverlay translations={currentTranslations} visible={translationVisible} />
+                    </div>
                   )}
                 </div>
                 <div className="modal-meta">
@@ -624,6 +690,55 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                     画像を新しいタブで開く(保存用)
                   </a>
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <button
+                        className="btn"
+                        onClick={() => handleTranslate(false)}
+                        disabled={translating}
+                        style={{
+                          background: (currentTranslations && currentTranslations.length > 0)
+                            ? (translationVisible ? '#2563eb' : '#334155')
+                            : '#1e293b',
+                          border: '1px solid #3b82f6',
+                          color: '#fff',
+                          padding: '6px 12px',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                        title="画像内の外国語テキスト（英語・韓国語・中国語）を検出して日本語訳を表示します"
+                      >
+                        <span style={{ fontSize: 14 }}>🌐</span>
+                        <span>
+                          {translating
+                            ? '翻訳中…'
+                            : (currentTranslations !== null)
+                            ? (currentTranslations.length > 0
+                              ? `翻訳: ${translationVisible ? '表示中' : '非表示'} (${currentTranslations.length}件)`
+                              : '翻訳: テキストなし')
+                            : '画像内の外国語を翻訳'}
+                        </span>
+                      </button>
+                      {currentTranslations && !translating && (
+                        <button
+                          className="btn"
+                          onClick={() => handleTranslate(true)}
+                          style={{ padding: '6px 8px', fontSize: 11, background: '#1e293b', border: '1px solid #475569', color: '#cbd5e1' }}
+                          title="キャッシュを無視してGeminiで再翻訳"
+                        >
+                          ↻ 再翻訳
+                        </button>
+                      )}
+                    </div>
+                    {translationNotice && (
+                      <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
+                        {translationNotice}
+                      </div>
+                    )}
+                  </div>
                   {!readOnly && (
                     <div style={{marginTop:12}}>
                       {/* Same "sweep" glyph ScrollList.jsx's own Clear-previews button uses

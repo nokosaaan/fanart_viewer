@@ -4235,6 +4235,85 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         result = resolve_own_account()
         return Response(result)
 
+    @action(detail=True, methods=['get', 'post'], url_path='translate-image')
+    def translate_image(self, request, pk=None):
+        """Translate in-image non-Japanese text to Japanese via Gemini 1.5 Flash.
+
+        Query params / JSON body:
+            index: int (0-based PreviewImage order, default 0 or best)
+            force: bool (if True, ignore cached results and re-run Gemini)
+        """
+        import hashlib
+        from . import gemini_creds
+        from .image_translator import translate_image_with_gemini
+        from .models import ItemImageTranslationCache
+
+        api_key = gemini_creds.get_api_key()
+        if not api_key:
+            return Response(
+                {
+                    'detail': 'Gemini APIキーが設定されていません。ヘッダーメニューの「画像翻訳 (Gemini) 設定」からAPIキーを登録してください。',
+                    'code': 'NO_API_KEY'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        item = self.get_object()
+
+        # Parse index
+        idx_raw = request.data.get('index') if request.method == 'POST' else request.query_params.get('index')
+        try:
+            image_index = int(idx_raw) if idx_raw is not None else 0
+        except (ValueError, TypeError):
+            image_index = 0
+
+        force = False
+        if request.method == 'POST':
+            force = bool(request.data.get('force'))
+        else:
+            force = request.query_params.get('force', '').lower() in ('true', '1', 'yes')
+
+        image_bytes, resolved_index = _select_image_bytes(item, image_index)
+        if not image_bytes:
+            return Response({'detail': '画像が見つかりません。'}, status=status.HTTP_404_NOT_FOUND)
+
+        actual_index = resolved_index if resolved_index is not None else 0
+        img_hash = hashlib.sha256(image_bytes).hexdigest()
+
+        # Check cache unless force
+        if not force:
+            cache = ItemImageTranslationCache.objects.filter(item=item, image_index=actual_index).first()
+            if cache and cache.image_hash == img_hash:
+                return Response({
+                    'item_id': item.id,
+                    'image_index': actual_index,
+                    'cached': True,
+                    'translations': cache.translations,
+                })
+
+        # Run translation via Gemini
+        try:
+            translations = translate_image_with_gemini(image_bytes, api_key)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Update cache
+        cache, _ = ItemImageTranslationCache.objects.update_or_create(
+            item=item,
+            image_index=actual_index,
+            defaults={
+                'image_hash': img_hash,
+                'translations': translations,
+            }
+        )
+
+        return Response({
+            'item_id': item.id,
+            'image_index': actual_index,
+            'cached': False,
+            'translations': translations,
+        })
+
 
 def items_from_db(request):
     """Return all items serialized from the Django DB.

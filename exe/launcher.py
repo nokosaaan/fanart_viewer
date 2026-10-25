@@ -214,6 +214,7 @@ os.environ.setdefault('TWITTER_CREDS_ENC_KEY', _persistent_fernet_key('twitter_c
 os.environ.setdefault('PIXIV_CREDS_ENC_KEY', _persistent_fernet_key('pixiv_creds_key.txt'))
 os.environ.setdefault('DRIVE_CREDS_ENC_KEY', _persistent_fernet_key('drive_creds_key.txt'))
 os.environ.setdefault('POIPIKU_CREDS_ENC_KEY', _persistent_fernet_key('poipiku_creds_key.txt'))
+os.environ.setdefault('GEMINI_CREDS_ENC_KEY', _persistent_fernet_key('gemini_creds_key.txt'))
 
 
 def _bundle_path(relative):

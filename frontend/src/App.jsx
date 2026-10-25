@@ -18,6 +18,7 @@ import TwitterFetchManager from './components/TwitterFetchManager'
 import TwitterCredsManager from './components/TwitterCredsManager'
 import PixivCredsManager from './components/PixivCredsManager'
 import PoipikuCredsManager from './components/PoipikuCredsManager'
+import GeminiCredsManager from './components/GeminiCredsManager'
 import HeaderMenu from './components/HeaderMenu'
 import Pagination from './components/Pagination'
 import Tour from './components/Tour'
@@ -220,6 +221,7 @@ function AppMain({ role, onLogout }){
   const [twitterCredsOpen, setTwitterCredsOpen] = useState(false)
   const [pixivCredsOpen, setPixivCredsOpen] = useState(false)
   const [poipikuCredsOpen, setPoipikuCredsOpen] = useState(false)
+  const [geminiCredsOpen, setGeminiCredsOpen] = useState(false)
   // Opens a queue manager as its own browser window (same origin, so
   // cookies/localStorage — and thus auth — carry over automatically) instead
   // of an overlay in this one, so the two can sit side by side. See
@@ -887,6 +889,7 @@ function AppMain({ role, onLogout }){
                 ],
               },
               { label: <MenuIconLabel icon="/icons/poipiku.svg" text="Poipiku 認証情報" />, onClick: () => setPoipikuCredsOpen(true), tourId: 'menu-poipiku-creds' },
+              { label: <MenuIconLabel iconNode={<span style={{fontSize:16, lineHeight:1}}>🌐</span>} text="画像翻訳 (Gemini) 設定" />, onClick: () => setGeminiCredsOpen(true), tourId: 'menu-gemini-creds' },
               { label: <MenuIconLabel iconNode={<BackupIcon />} text="バックアップ" />, onClick: () => setBackupOpen(true), tourId: 'menu-backup' },
               { label: <MenuIconLabel iconNode={<BrainGearIcon />} text="分類器の学習" />, onClick: () => setTrainClassifierOpen(true), tourId: 'menu-train-classifier' },
             ]),
@@ -1071,6 +1074,7 @@ function AppMain({ role, onLogout }){
       {twitterCredsOpen && <TwitterCredsManager onClose={()=>setTwitterCredsOpen(false)} />}
       {pixivCredsOpen && <PixivCredsManager onClose={()=>setPixivCredsOpen(false)} />}
       {poipikuCredsOpen && <PoipikuCredsManager onClose={()=>setPoipikuCredsOpen(false)} />}
+      {geminiCredsOpen && <GeminiCredsManager onClose={()=>setGeminiCredsOpen(false)} />}
     </div>
   )
 }

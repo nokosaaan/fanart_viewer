@@ -16,6 +16,7 @@ from .pixiv_poll_views import pixiv_poll_status_view
 from .poipiku_poll_views import poipiku_poll_status_view
 from .poller_settings_views import poller_settings_status_view, poller_settings_set_view
 from .drive_creds_views import drive_creds_status_view, drive_creds_set_view, drive_creds_authenticate_view
+from .gemini_creds_views import gemini_creds_status_view, gemini_creds_set_view, gemini_creds_test_view
 from .train_classifier_views import train_classifier_status_view, train_classifier_start_view, train_classifier_stop_view
 from .browser_login_views import (
     browser_login_status_view, browser_login_open_view, browser_login_capture_view, browser_login_cancel_view,
@@ -52,6 +53,9 @@ urlpatterns = [
     path('drive_creds/status/', drive_creds_status_view),
     path('drive_creds/set/', drive_creds_set_view),
     path('drive_creds/authenticate/', drive_creds_authenticate_view),
+    path('gemini_creds/status/', gemini_creds_status_view),
+    path('gemini_creds/set/', gemini_creds_set_view),
+    path('gemini_creds/test/', gemini_creds_test_view),
     path('train_classifier/status/', train_classifier_status_view),
     path('train_classifier/start/', train_classifier_start_view),
     path('train_classifier/stop/', train_classifier_stop_view),

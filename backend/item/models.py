@@ -212,6 +212,19 @@ class DriveCredential(models.Model):
         return f"DriveCredential(updated_at={self.updated_at})"
 
 
+class GeminiCredential(models.Model):
+    """Single-row store for Gemini API key (see item.gemini_creds). Mirrors
+    TwitterCredential/PixivCredential/DriveCredential: Fernet-encrypted,
+    decryption key lives only in GEMINI_CREDS_ENC_KEY outside the DB.
+    Never exposed via any API response — write-only.
+    """
+    encrypted_api_key = models.BinaryField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"GeminiCredential(updated_at={self.updated_at})"
+
+
 class PixivPollState(models.Model):
     """Singleton health-state row for the Pixiv bookmark poller, mirroring
     TwitterPollState (see item.management.commands.poll_pixiv_bookmarks).
@@ -399,6 +412,24 @@ class DanbooruDescriptionLinkCache(models.Model):
 
     def __str__(self):
         return f"{self.description_hash[:12]}... -> title={self.matched_title_name!r}, characters={self.matched_character_names!r}"
+
+
+class ItemImageTranslationCache(models.Model):
+    """Caches in-image translation results (via Gemini API) for an Item's preview image.
+    Keyed by item and image_index.
+    """
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='translation_caches')
+    image_index = models.IntegerField(default=0)
+    image_hash = models.CharField(max_length=64, db_index=True)
+    translations = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('item', 'image_index')
+
+    def __str__(self):
+        return f"ItemImageTranslationCache(item={self.item_id}, index={self.image_index}, {len(self.translations)} translations)"
 
 
 class CharacterDanbooruLink(models.Model):
