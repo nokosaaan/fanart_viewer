@@ -139,6 +139,11 @@ splash = Splash(
     text_default='起動中...',
 )
 
+# UPX compression: disabled by default for massive build speedup and to avoid
+# antivirus false-positives (especially on large torch/onnx/playwright binaries).
+# Pass -Upx to build.ps1 (or ENABLE_UPX=1) to enable.
+ENABLE_UPX = os.environ.get('ENABLE_UPX', '0').lower() in ('1', 'true', 'yes')
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -148,7 +153,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=ENABLE_UPX,
     upx_exclude=[],
     # Windowed, not console — the pywebview window in launcher.py is the
     # visible/interactive surface now, and stdout/stderr are redirected to
@@ -175,7 +180,7 @@ coll = COLLECT(
     a.datas,
     splash.binaries,
     strip=False,
-    upx=True,
+    upx=ENABLE_UPX,
     upx_exclude=[],
     name='fanart_viewer',
 )
