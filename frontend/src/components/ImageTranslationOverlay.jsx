@@ -22,7 +22,7 @@ export default function ImageTranslationOverlay({ translations = [], visible = t
         height: '100%',
         pointerEvents: 'none',
         zIndex: 10,
-        overflow: 'hidden',
+        overflow: 'visible', // Allow speech bubbles to expand naturally into window margins
       }}
     >
       {translations.map((item, idx) => {
@@ -36,9 +36,14 @@ export default function ImageTranslationOverlay({ translations = [], visible = t
 
         const isHovered = hoveredIdx === idx
 
-        // Determine tooltip placement:
+        // Determine tooltip vertical placement:
         // If box is in top 40% of image, place tooltip below the box; else above the box.
         const placeBelow = top < 40
+
+        // Determine horizontal anchoring:
+        // If box is in the right half (> 60%), anchor the card to the right side of the bubble
+        // so it expands leftward or smoothly extends into adjacent window space without being cut off.
+        const isRightHalf = left > 60
 
         return (
           <React.Fragment key={idx}>
@@ -73,26 +78,29 @@ export default function ImageTranslationOverlay({ translations = [], visible = t
               onMouseLeave={() => setHoveredIdx(null)}
               style={{
                 position: 'absolute',
-                left: `${Math.min(85, Math.max(2, left))}%`,
+                left: isRightHalf ? undefined : `${Math.max(0, left)}%`,
+                right: isRightHalf ? `${Math.max(-5, 100 - (left + width))}%` : undefined,
                 top: placeBelow
                   ? `${Math.min(92, top + height + 1)}%`
                   : undefined,
                 bottom: !placeBelow
                   ? `${Math.min(92, 100 - top + 1)}%`
                   : undefined,
-                maxWidth: '45%',
-                minWidth: 120,
-                background: isHovered ? 'rgba(15, 23, 42, 0.98)' : 'rgba(15, 23, 42, 0.90)',
-                border: isHovered ? '1.5px solid #60a5fa' : '1px solid rgba(59, 130, 246, 0.6)',
+                maxWidth: 'min(380px, 45vw)',
+                minWidth: 130,
+                maxHeight: '40vh',
+                overflowY: 'auto',
+                background: isHovered ? 'rgba(15, 23, 42, 0.98)' : 'rgba(15, 23, 42, 0.92)',
+                border: isHovered ? '1.5px solid #60a5fa' : '1px solid rgba(59, 130, 246, 0.65)',
                 borderRadius: 8,
                 padding: '6px 10px',
                 color: '#f8fafc',
                 fontSize: 13,
                 lineHeight: 1.45,
-                boxShadow: '0 4px 16px rgba(0, 0, 0, 0.65)',
-                backdropFilter: 'blur(4px)',
+                boxShadow: '0 4px 20px rgba(0, 0, 0, 0.75)',
+                backdropFilter: 'blur(6px)',
                 pointerEvents: 'auto',
-                zIndex: isHovered ? 20 : 12,
+                zIndex: isHovered ? 25 : 15,
                 transform: isHovered ? 'scale(1.02)' : 'none',
                 transition: 'transform 0.15s ease, border-color 0.15s ease, background 0.15s ease',
                 wordBreak: 'break-word',
@@ -128,7 +136,7 @@ export default function ImageTranslationOverlay({ translations = [], visible = t
                   </span>
                 </div>
               )}
-              <div style={{ fontWeight: 500, color: '#f1f5f9' }}>
+              <div style={{ fontWeight: 500, color: '#f1f5f9', whiteSpace: 'pre-wrap' }}>
                 {item.translated_text}
               </div>
             </div>
@@ -138,4 +146,3 @@ export default function ImageTranslationOverlay({ translations = [], visible = t
     </div>
   )
 }
-
