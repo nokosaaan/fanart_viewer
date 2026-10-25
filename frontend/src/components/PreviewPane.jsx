@@ -85,7 +85,22 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [editOpen, setEditOpen] = useState(false)
   const [translationsMap, setTranslationsMap] = useState({})
   const [translating, setTranslating] = useState(false)
-  const [translationVisible, setTranslationVisible] = useState(true)
+  // Translation display mode: 'always' (常時表示) | 'hover' (カーソル時のみ表示) | 'hidden' (非表示)
+  const [translationMode, setTranslationMode] = useState(() => {
+    try {
+      return localStorage.getItem('fv_translation_mode') || 'always'
+    } catch {
+      return 'always'
+    }
+  })
+
+  function changeTranslationMode(newMode) {
+    setTranslationMode(newMode)
+    try {
+      localStorage.setItem('fv_translation_mode', newMode)
+    } catch {}
+  }
+
   const [translationNotice, setTranslationNotice] = useState('')
   // Ids deleted from THIS item's own filmstrip but not yet reflected by a
   // fresh fetch — see deleteCurrentPreview. Deleting one image used to
@@ -352,7 +367,9 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     if (!currentItem) return
     const key = `${currentItem.id}_${currentPreviewIdx}`
     if (!force && translationsMap[key] && translationsMap[key].length > 0) {
-      setTranslationVisible(v => !v)
+      // Cycle modes on main button click: always -> hover -> hidden -> always
+      const nextMode = translationMode === 'always' ? 'hover' : (translationMode === 'hover' ? 'hidden' : 'always')
+      changeTranslationMode(nextMode)
       return
     }
 
@@ -374,7 +391,9 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       const resultKey = `${currentItem.id}_${resultIdx}`
       setTranslationsMap(prev => ({ ...prev, [resultKey]: j.translations || [] }))
       if (resultKey !== key) return
-      setTranslationVisible(true)
+      if (translationMode === 'hidden') {
+        changeTranslationMode('always')
+      }
       const info = j.model ? ` [${j.model} / ${((j.elapsed_ms || 0) / 1000).toFixed(1)}秒]` : ''
       if (!j.translations || j.translations.length === 0) {
         setTranslationNotice(`外国語テキストは見つかりませんでした（日本語のみ、またはテキストなし）。${info}`)
@@ -720,7 +739,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   ) : (
                     <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', maxWidth: '70vw', maxHeight: '78vh' }}>
                       <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
-                      <ImageTranslationOverlay translations={currentTranslations} visible={translationVisible} />
+                      <ImageTranslationOverlay translations={currentTranslations} mode={translationMode} />
                     </div>
                   )}
                 </div>
@@ -753,7 +772,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         disabled={translating}
                         style={{
                           background: (currentTranslations && currentTranslations.length > 0)
-                            ? (translationVisible ? '#2563eb' : '#334155')
+                            ? (translationMode !== 'hidden' ? '#2563eb' : '#334155')
                             : '#1e293b',
                           border: '1px solid #3b82f6',
                           color: '#fff',
@@ -764,7 +783,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                           alignItems: 'center',
                           gap: 6,
                         }}
-                        title="画像内の外国語テキスト（英語・韓国語・中国語）を検出して日本語訳を表示します"
+                        title="画像内の外国語テキスト（英語・韓国語・中国語）を検出して日本語訳を表示します。クリックで表示モード切り替え（常時→カーソル時→非表示）"
                       >
                         <span style={{ fontSize: 14 }}>🌐</span>
                         <span>
@@ -772,7 +791,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                             ? '翻訳中…'
                             : (currentTranslations !== null)
                             ? (currentTranslations.length > 0
-                              ? `翻訳: ${translationVisible ? '表示中' : '非表示'} (${currentTranslations.length}件)`
+                              ? `翻訳: ${translationMode === 'always' ? '常時表示' : (translationMode === 'hover' ? 'カーソル時表示' : '非表示')} (${currentTranslations.length}件)`
                               : '翻訳: テキストなし')
                             : '画像内の外国語を翻訳'}
                         </span>
@@ -788,6 +807,62 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         </button>
                       )}
                     </div>
+                    {currentTranslations && currentTranslations.length > 0 && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'rgba(15, 23, 42, 0.75)', padding: '2px 4px', borderRadius: 6, border: '1px solid rgba(59, 130, 246, 0.3)', width: 'fit-content' }}>
+                        <span style={{ fontSize: 11, color: '#94a3b8', padding: '0 4px' }}>表示:</span>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => changeTranslationMode('always')}
+                          style={{
+                            fontSize: 11,
+                            padding: '2px 7px',
+                            background: translationMode === 'always' ? '#2563eb' : 'transparent',
+                            color: translationMode === 'always' ? '#fff' : '#94a3b8',
+                            border: 'none',
+                            borderRadius: 4,
+                            fontWeight: translationMode === 'always' ? 600 : 400,
+                          }}
+                          title="すべての吹き出しを常時表示します"
+                        >
+                          👁 常時
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => changeTranslationMode('hover')}
+                          style={{
+                            fontSize: 11,
+                            padding: '2px 7px',
+                            background: translationMode === 'hover' ? '#2563eb' : 'transparent',
+                            color: translationMode === 'hover' ? '#fff' : '#94a3b8',
+                            border: 'none',
+                            borderRadius: 4,
+                            fontWeight: translationMode === 'hover' ? 600 : 400,
+                          }}
+                          title="該当のセリフ部分にカーソルを合わせたときのみ翻訳を表示します"
+                        >
+                          👆 カーソル時
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => changeTranslationMode('hidden')}
+                          style={{
+                            fontSize: 11,
+                            padding: '2px 7px',
+                            background: translationMode === 'hidden' ? '#475569' : 'transparent',
+                            color: translationMode === 'hidden' ? '#fff' : '#94a3b8',
+                            border: 'none',
+                            borderRadius: 4,
+                            fontWeight: translationMode === 'hidden' ? 600 : 400,
+                          }}
+                          title="翻訳を非表示にします"
+                        >
+                          ✕ 非表示
+                        </button>
+                      </div>
+                    )}
                     {translationNotice && (
                       <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
                         {translationNotice}
