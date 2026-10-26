@@ -40,6 +40,8 @@ _CACHED_MODEL = None
 _MODELS_CACHE = None
 # thinkingConfig that each model accepted last time (avoids repeating 400 retries)
 _THINKING_OK = {}
+# Rate limit / quota cooldowns: model_name -> cooldown expire time (monotonic)
+_EXHAUSTED_MODELS = {}
 _UNSET = object()
 
 EXCLUDE_MODEL_SUBSTRINGS = (
@@ -48,15 +50,24 @@ EXCLUDE_MODEL_SUBSTRINGS = (
     'thinking-exp', 'learnlm', 'gemma', 'veo', 'lyria', 'deep-research',
 )
 
-# Fast vision-capable models, best first. Only names that ListModels actually
-# reports are used (when ListModels works), so stale names are harmless.
+# Fast vision-capable models, best first.
+# Models with high daily quota (RPD 500 on Gemini 3.1/3.5 Flash Lite) are prioritized
+# over standard Flash models (RPD 20), avoiding premature quota exhaustion.
 PREFERRED_MODELS = (
-    'gemini-flash-latest',
+    'gemini-3.5-flash-lite',
+    'gemini-3.5-flash-lite-preview',
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-flash-lite-latest',
+    'gemini-2.5-flash-lite',
+    'gemini-3.8-flash',
+    'gemini-3.8-flash-preview',
+    'gemini-3.6-flash',
+    'gemini-3.6-flash-preview',
     'gemini-3-flash',
     'gemini-3-flash-preview',
     'gemini-2.5-flash',
-    'gemini-flash-lite-latest',
-    'gemini-2.5-flash-lite',
+    'gemini-flash-latest',
     'gemini-2.0-flash',
     'gemini-2.0-flash-001',
     'gemini-1.5-flash-latest',
@@ -187,7 +198,8 @@ def resolve_available_models(api_key: str) -> list[str]:
 
 
 def _model_rank(name: str) -> tuple:
-    """Heuristic ranking for models not in PREFERRED_MODELS: flash > flash-lite > pro,
+    """Heuristic ranking for models not in PREFERRED_MODELS:
+    Flash-Lite (v3+ 500 RPD) > Flash-Lite (other) > standard Flash (20 RPD) > Pro,
     non-preview first, newer version first."""
     is_flash = 'flash' in name
     is_lite = 'lite' in name
@@ -200,7 +212,18 @@ def _model_rank(name: str) -> tuple:
             ver = float(mv.group(1))
         except ValueError:
             pass
-    tier = 0 if (is_flash and not is_lite) else 1 if is_lite else 2 if is_pro else 3
+
+    if is_flash and is_lite and ver >= 3.0:
+        tier = 0
+    elif is_flash and is_lite:
+        tier = 1
+    elif is_flash and not is_lite:
+        tier = 2
+    elif is_pro:
+        tier = 3
+    else:
+        tier = 4
+
     return (tier, is_preview, -ver, name)
 
 
@@ -225,7 +248,12 @@ def pick_best_models(api_key: str) -> list[str]:
             if pref not in candidates:
                 candidates.append(pref)
 
-    return candidates[:6]
+    # Deprioritize models that recently hit rate-limits (RPM) or quota exhaustion (RPD)
+    now = time.monotonic()
+    fresh = [m for m in candidates if _EXHAUSTED_MODELS.get(m, 0) <= now]
+    exhausted = [m for m in candidates if _EXHAUSTED_MODELS.get(m, 0) > now]
+    ordered = fresh + exhausted
+    return ordered[:6]
 
 
 def _thinking_attempts_for(model_name: str) -> list:
@@ -408,10 +436,27 @@ def translate_image_with_gemini(image_bytes: bytes, api_key: str, return_meta: b
                 if e.code == 400 and th and ('thinking' in low or 'budget' in low or 'level' in low):
                     logger.info("Model %s rejected thinkingConfig (%s); retrying without it", model_name, err_msg)
                     continue  # retry same model without thinking config
-                if e.code in (404, 400, 500, 503) or (e.code == 429 and 'quota' not in low):
+
+                # Invalid API key: stop immediately across all models
+                if e.code in (400, 403) and ('api key not valid' in low or 'api_key_invalid' in low):
+                    raise last_error
+
+                # Rate limited (RPM) or Quota exhausted (RPD): cool down and fall back to next model
+                if e.code == 429:
+                    cooldown = 3600 if ('quota' in low or 'day' in low or 'limit' in low) else 60
+                    _EXHAUSTED_MODELS[model_name] = time.monotonic() + cooldown
+                    if _CACHED_MODEL == model_name:
+                        _CACHED_MODEL = None
+                    logger.warning("Model %s hit rate limit/quota (%s); cooling down for %ds, trying next candidate...",
+                                   model_name, err_msg, cooldown)
+                    break
+
+                # Model not found, bad request (not thinking config), or server error: try next model
+                if e.code in (404, 400, 500, 502, 503, 504):
                     logger.warning("Model %s failed (%s), trying next candidate...", model_name, err_msg)
                     break  # next model
-                # Invalid key (403) / exhausted quota: stop immediately
+
+                # Other HTTP errors: stop and raise
                 raise last_error
             except Exception as e:
                 last_error = RuntimeError(f"Gemini API 接続エラー ({model_name}): {e}")
