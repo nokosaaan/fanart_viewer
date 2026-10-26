@@ -1432,29 +1432,35 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
             for box in boxes:
                 box_infos.append((box, whole_scores))
 
-        assigned_chars = set()
         box_assignments = [None] * len(box_infos)
 
-        pair_scores = []
-        for b_idx, (box, scores) in enumerate(box_infos):
-            for c_idx, c_name in enumerate(char_names):
-                score = scores.get(c_name, 0.0)
-                rank_bonus = max(0.0, (len(char_names) - c_idx) * 0.01)
-                pair_scores.append((score + rank_bonus, b_idx, c_name))
+        if len(char_names) == 1:
+            # Solo character manga/illustration: every detected person is that same character
+            box_assignments = [char_names[0]] * len(box_infos)
+        else:
+            # Multi-character item: allow the same character to appear in multiple boxes
+            # (e.g. manga with multiple panels containing the same character)
+            for b_idx, (box, scores) in enumerate(box_infos):
+                best_c = None
+                best_s = 0.0
+                for c_idx, c_name in enumerate(char_names):
+                    s = scores.get(c_name, 0.0)
+                    bonus = max(0.0, (len(char_names) - c_idx) * 0.001)
+                    total_s = s + bonus
+                    if total_s > best_s:
+                        best_s = total_s
+                        best_c = c_name
+                # If score is confident (> 0.05), assign it regardless of other boxes
+                if best_s > 0.05:
+                    box_assignments[b_idx] = best_c
 
-        pair_scores.sort(key=lambda x: -x[0])
-
-        used_boxes = set()
-        for score, b_idx, c_name in pair_scores:
-            if b_idx not in used_boxes and c_name not in assigned_chars:
-                used_boxes.add(b_idx)
-                assigned_chars.add(c_name)
-                box_assignments[b_idx] = c_name
-
-        remaining_candidates = [c for c in char_names if c not in assigned_chars]
-        for b_idx in range(len(box_infos)):
-            if box_assignments[b_idx] is None and remaining_candidates:
-                box_assignments[b_idx] = remaining_candidates.pop(0)
+            # Fallback for unassigned boxes: if there are item characters not yet assigned
+            # to any box, assign them to unassigned boxes in candidate order
+            assigned_set = {c for c in box_assignments if c is not None}
+            remaining = [c for c in char_names if c not in assigned_set]
+            for b_idx in range(len(box_infos)):
+                if box_assignments[b_idx] is None and remaining:
+                    box_assignments[b_idx] = remaining.pop(0)
 
         for b_idx, (box, _scores) in enumerate(box_infos):
             assigned = box_assignments[b_idx]

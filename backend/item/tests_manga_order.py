@@ -73,6 +73,50 @@ class PreviewReorderTestCase(TestCase):
         self.assertEqual(self.p1.order, 1)
         self.assertEqual(self.p2.order, 0)
 
+
+class ProposedRegionsMultipleOccurrencesTestCase(TestCase):
+    def test_single_character_assigned_to_all_boxes(self):
+        from item.views import _derive_proposed_regions
+        # Manga page with 3 panels, item only has 1 character "Alice"
+        results = [(0, {
+            'crops': [
+                {'box': [10, 10, 50, 50], 'characters': []},
+                {'box': [60, 60, 100, 100], 'characters': []},
+                {'box': [110, 110, 150, 150], 'characters': []},
+            ],
+            'boxes': [[10, 10, 50, 50], [60, 60, 100, 100], [110, 110, 150, 150]],
+        })]
+        proposed = _derive_proposed_regions(results, ['Alice'], 'onnx', image_indices=[0])
+        self.assertEqual(len(proposed), 3)
+        self.assertEqual(proposed[0]['characters'], ['Alice'])
+        self.assertEqual(proposed[1]['characters'], ['Alice'])
+        self.assertEqual(proposed[2]['characters'], ['Alice'])
+
+    def test_same_character_in_multiple_boxes_multi_char(self):
+        from unittest.mock import patch
+        from item.views import _derive_proposed_regions
+        # 3 boxes, Alice in box 0 and box 2, Bob in box 1
+        results = [(0, {
+            'crops': [
+                {'box': [10, 10, 50, 50]},
+                {'box': [60, 60, 100, 100]},
+                {'box': [110, 110, 150, 150]},
+            ],
+            'boxes': [[10, 10, 50, 50], [60, 60, 100, 100], [110, 110, 150, 150]],
+        })]
+        mock_scores = [
+            {'Alice': 0.9, 'Bob': 0.1},
+            {'Alice': 0.1, 'Bob': 0.9},
+            {'Alice': 0.85, 'Bob': 0.2},
+        ]
+        with patch('item.views._predict_crop_character_scores', side_effect=mock_scores):
+            proposed = _derive_proposed_regions(results, ['Alice', 'Bob'], 'onnx', image_indices=[0])
+            self.assertEqual(len(proposed), 3)
+            self.assertEqual(proposed[0]['characters'], ['Alice'])
+            self.assertEqual(proposed[1]['characters'], ['Bob'])
+            self.assertEqual(proposed[2]['characters'], ['Alice'])
+
+
     def test_reorder_api_move(self):
         # move p1 (currently index 0) forward
         resp = self.client.post(f'/api/items/{self.item.id}/reorder_previews/', {'action': 'move', 'preview_id': self.p1.id, 'direction': 1}, format='json')
@@ -81,4 +125,48 @@ class PreviewReorderTestCase(TestCase):
         self.p2.refresh_from_db()
         self.assertEqual(self.p1.order, 1)
         self.assertEqual(self.p2.order, 0)
+
+
+class ProposedRegionsMultipleOccurrencesTestCase(TestCase):
+    def test_single_character_assigned_to_all_boxes(self):
+        from item.views import _derive_proposed_regions
+        # Manga page with 3 panels, item only has 1 character "Alice"
+        results = [(0, {
+            'crops': [
+                {'box': [10, 10, 50, 50], 'characters': []},
+                {'box': [60, 60, 100, 100], 'characters': []},
+                {'box': [110, 110, 150, 150], 'characters': []},
+            ],
+            'boxes': [[10, 10, 50, 50], [60, 60, 100, 100], [110, 110, 150, 150]],
+        })]
+        proposed = _derive_proposed_regions(results, ['Alice'], 'onnx', image_indices=[0])
+        self.assertEqual(len(proposed), 3)
+        self.assertEqual(proposed[0]['characters'], ['Alice'])
+        self.assertEqual(proposed[1]['characters'], ['Alice'])
+        self.assertEqual(proposed[2]['characters'], ['Alice'])
+
+    def test_same_character_in_multiple_boxes_multi_char(self):
+        from unittest.mock import patch
+        from item.views import _derive_proposed_regions
+        # 3 boxes, Alice in box 0 and box 2, Bob in box 1
+        results = [(0, {
+            'crops': [
+                {'box': [10, 10, 50, 50]},
+                {'box': [60, 60, 100, 100]},
+                {'box': [110, 110, 150, 150]},
+            ],
+            'boxes': [[10, 10, 50, 50], [60, 60, 100, 100], [110, 110, 150, 150]],
+        })]
+        mock_scores = [
+            {'Alice': 0.9, 'Bob': 0.1},
+            {'Alice': 0.1, 'Bob': 0.9},
+            {'Alice': 0.85, 'Bob': 0.2},
+        ]
+        with patch('item.views._predict_crop_character_scores', side_effect=mock_scores):
+            proposed = _derive_proposed_regions(results, ['Alice', 'Bob'], 'onnx', image_indices=[0])
+            self.assertEqual(len(proposed), 3)
+            self.assertEqual(proposed[0]['characters'], ['Alice'])
+            self.assertEqual(proposed[1]['characters'], ['Bob'])
+            self.assertEqual(proposed[2]['characters'], ['Alice'])
+
 
