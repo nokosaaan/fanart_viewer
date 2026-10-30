@@ -3587,12 +3587,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         ONE place any remaining gap gets tracked and resolved from now on
         (see its own docstring) — this queue never looks at it again.
 
-        Excludes situation SOLO (only one person — nothing to disambiguate)
-        and R18 (per explicit user request — kept out of this queue for
-        now), and anything with no image to annotate at all.
+        Excludes situation SOLO (only one person — nothing to disambiguate),
+        and anything with no image to annotate at all.
         """
         queryset = (
-            Item.objects.exclude(situation__in=['SOLO', 'R18'])
+            Item.objects.exclude(situation='SOLO')
             .filter(character_regions=[])
             .exclude(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
             .order_by('-id')
@@ -3657,7 +3656,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         region_q = (
             Q(character_regions=[])
-            & ~Q(situation__in=['SOLO', 'R18'])
+            & ~Q(situation='SOLO')
             & ~(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
         )
 
@@ -3685,7 +3684,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             # with region_q's own preview-existence condition above without
             # a second DB hit per item.
             entry['needs_region'] = (
-                item.situation not in ('SOLO', 'R18')
+                item.situation != 'SOLO'
                 and not item.character_regions
                 and bool(entry.get('has_preview'))
             )

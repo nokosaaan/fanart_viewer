@@ -27,12 +27,12 @@ function isFieldMissing(it, field){
 
 // Mirrors ItemViewSet.region_label_queue's server-side eligibility filter
 // (see needs_attention_queue's own OR of this exact condition with the
-// missing-fields one below) — situation SOLO/R18 has nothing to
+// missing-fields one below) — situation SOLO has nothing to
 // disambiguate, and an item that's already been touched at all
 // (character_regions non-empty) belongs to the 'mismatch' tab from then on,
 // never back here.
 function isEligibleForRegion(it){
-  if (it.situation === 'SOLO' || it.situation === 'R18') return false
+  if (it.situation === 'SOLO') return false
   return !Array.isArray(it.character_regions) || it.character_regions.length === 0
 }
 
@@ -527,7 +527,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       <div className="cgm-panel-search" style={{ fontSize: 12, color: 'var(--muted)' }}>
         {mode === 'mismatch'
           ? '一度は領域ラベルを保存したものの、編集キューのキャラ一覧と完全には一致していないアイテムです。両方の一覧を見比べて、どちらを採用するか・そのままでよいか・ここで矩形を追加して解決するかを選んでください。'
-          : 'タイトル・キャラ・タグ・シチュエーション・作者のいずれかが未設定、または(SOLO・R18以外で)まだ領域ラベルを一度も保存していないアイテムが対象です。フィールドの編集と領域ラベル付けを1つの保存ボタンでまとめて行えます。'}
+          : 'タイトル・キャラ・タグ・シチュエーション・作者のいずれかが未設定、または(SOLO以外で)まだ領域ラベルを一度も保存していないアイテムが対象です。フィールドの編集と領域ラベル付けを1つの保存ボタンでまとめて行えます。'}
       </div>
 
       {mode === 'attention' && (

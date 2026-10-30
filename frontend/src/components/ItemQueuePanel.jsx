@@ -12,10 +12,9 @@ import { handleGroupingResponse } from '../lib/groupChoice'
 // owns one combined "保存" button instead.
 //
 // Region section visibility tracks the situation field LIVE (before it's
-// even saved) via ItemEditForm's onSituationChange — a SOLO/R18 item has
-// nothing to disambiguate, so switching an item's situation into/out of one
-// of those two values shows/hides the section immediately, without forcing
-// a save first just to see it.
+// even saved) via ItemEditForm's onSituationChange — a SOLO item has
+// only one person (nothing to disambiguate), so switching an item's situation into/out of SOLO
+// shows/hides the section immediately, without forcing a save first just to see it.
 export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, closeLabel = 'スキップ（後で対応）', initialSuggestion = null }){
   const [situationDraft, setSituationDraft] = useState((item.situation || '').toUpperCase())
   const [titlesDraft, setTitlesDraft] = useState(item.titles || [])
@@ -35,10 +34,10 @@ export default function ItemQueuePanel({ item, onClose, onSaved, onDirtyChange, 
   const fieldsRef = useRef(null)
   const boxesRef = useRef(null)
 
-  const showRegionSection = situationDraft !== 'SOLO' && situationDraft !== 'R18'
+  const showRegionSection = situationDraft !== 'SOLO'
 
   // RegionAnnotator unmounts the instant the section hides (switching
-  // situation to SOLO/R18) — its boxesRef/onDirtyChange calls stop then and
+  // situation to SOLO) — its boxesRef/onDirtyChange calls stop then and
   // there, so anything it had recorded must be cleared here too, or a stale
   // boxesRef.current (from before the unmount) would get saved anyway on
   // the next handleSave despite the section no longer being shown.
