@@ -620,9 +620,15 @@ def _get_screen_name(tweet_obj: dict) -> str | None:
     return _extract_user_screen_name(user)
 
 
-def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
-    """指定アカウントのタイムラインを新しい順に走査し、ネイティブRTを
-    最大 max_items 件、画像URL・本文つきで集めて返す。
+def fetch_account_retweets(
+    screen_name: str,
+    max_items: int = None,
+    known_ids: set | None = None,
+    max_pages: int = None,
+) -> dict:
+    """指定アカウントのタイムラインを新しい順に走査し、ネイティブRTのうち
+    未収載（known_idsに含まれない）のものを最大 max_items 件、画像URL・本文つきで
+    集めて返す。
 
     views.py から呼び出すエントリポイント。TWITTER_AUTH_TOKEN / TWITTER_CT0
     環境変数を使う。UserTweets は1回の呼び出しで最大40件程度のタイムライン
@@ -632,8 +638,13 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
     使えなくなる」ことが確認されているため、この呼び出し回数の少なさが
     そのまま安全マージンになる。
 
+    `known_ids` が指定されている場合、すでにDB登録済みのツイートはスキップし、
+    未登録のRTを求めて max_pages ページまで走査を継続する（最新N件が
+    登録済みであっても過去の未登録RTまでページをめくる）。
+
     戻り値: {
         'screen_name': str, 'user_id': str, 'pages_fetched': int,
+        'already_archived': int,
         'retweets': [{'tweet_id': str, 'screen_name': str|None,
                       'media_urls': [str, ...], 'description': str}, ...],
     }
@@ -656,6 +667,10 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
         max_items = _ACCOUNT_RETWEETS_DEFAULT_MAX
     max_items = max(1, min(int(max_items), _ACCOUNT_RETWEETS_HARD_CAP))
 
+    if max_pages is None:
+        max_pages = _ACCOUNT_RETWEETS_MAX_PAGES
+    max_pages = max(1, min(int(max_pages), _ACCOUNT_RETWEETS_MAX_PAGES))
+
     screen_name = screen_name.lstrip("@")
     user_id = _resolve_user_id(screen_name, auth_token, ct0)
     headers = _build_headers(auth_token, ct0)
@@ -663,6 +678,7 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
 
     retweets: list[dict] = []
     seen_ids: set[str] = set()
+    already_archived_count = 0
     # user_id -> screen_name, populated by the _resolve_screen_name_by_user_id
     # fallback below. Keeps a prolific artist appearing in many RTs on this
     # timeline to a single extra lookup instead of one per retweet.
@@ -670,7 +686,7 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
     cursor: str | None = None
     pages = 0
 
-    while len(retweets) < max_items and pages < _ACCOUNT_RETWEETS_MAX_PAGES:
+    while len(retweets) < max_items and pages < max_pages:
         variables = {
             "userId": user_id,
             "count": 40,
@@ -773,11 +789,22 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
             tweet_id = _get_rest_id(original)
             if not tweet_id or tweet_id in seen_ids:
                 continue
+            seen_ids.add(tweet_id)
+
+            tweet_id_int = None
+            try:
+                tweet_id_int = int(tweet_id)
+            except (ValueError, TypeError):
+                pass
+
+            # 既に item に登録されているなら skip
+            if known_ids and (tweet_id in known_ids or tweet_id_int in known_ids):
+                already_archived_count += 1
+                continue
+
             media_urls = _extract_media_urls(original)
             if not media_urls:
                 continue  # テキストのみのRTは保存対象外
-
-            seen_ids.add(tweet_id)
 
             screen_name_for_rt = _get_screen_name(original)
             if not screen_name_for_rt:
@@ -810,7 +837,7 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
             break
         cursor = next_cursor
 
-        if len(retweets) < max_items and pages < _ACCOUNT_RETWEETS_MAX_PAGES:
+        if len(retweets) < max_items and pages < max_pages:
             time.sleep(1.5)  # ページ間の礼儀的なポーズ
 
     return {
@@ -818,6 +845,7 @@ def fetch_account_retweets(screen_name: str, max_items: int = None) -> dict:
         "user_id": user_id,
         "retweets": retweets,
         "pages_fetched": pages,
+        "already_archived": already_archived_count,
     }
 
 

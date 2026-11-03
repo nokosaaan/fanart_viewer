@@ -211,6 +211,15 @@ def _run_bookmark_fetch_job(item_id, target_url, data=None):
 
 
 
+def _item_has_preview(item):
+    if not item:
+        return False
+    try:
+        return item.preview_images.exists() or bool(item.preview_data)
+    except Exception:
+        return False
+
+
 def _run_account_retweets_job(screen_name, max_items):
     """Scan `screen_name`'s timeline for native retweets and archive each one
     not already in the DB, outside the request thread (this can take a
@@ -225,8 +234,9 @@ def _run_account_retweets_job(screen_name, max_items):
     be pure waste. Only plain CDN GETs to pbs.twimg.com happen per item here,
     which sit outside the GraphQL endpoint's separate rate-limit bucket.
     """
+    known_ids = _known_twitter_ids()
     try:
-        result = fetch_account_retweets(screen_name, max_items=max_items)
+        result = fetch_account_retweets(screen_name, max_items=max_items, known_ids=known_ids)
     except Exception:
         logging.exception('Account retweets fetch failed for screen_name=%s', screen_name)
         return
@@ -272,24 +282,28 @@ def _archive_social_candidate(cand, source):
     author = cand.get('screen_name') or ''
     url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
 
-    if _find_item_by_url(url):
+    existing = _find_item_by_url(url)
+    if existing and _item_has_preview(existing):
         return 'skipped'
 
-    try:
-        item = Item.objects.create(
-            external_id=int(tweet_id),
-            source=source,
-            situation='',
-            titles=[],
-            characters=[],
-            artist=author,
-            link=url,
-            tags=None,
-            description=cand.get('description') or '',
-        )
-    except Exception:
-        logging.exception('Failed to create Item for tweet %s (source=%s)', tweet_id, source)
-        return 'failed'
+    if existing:
+        item = existing
+    else:
+        try:
+            item = Item.objects.create(
+                external_id=int(tweet_id),
+                source=source,
+                situation='',
+                titles=[],
+                characters=[],
+                artist=author,
+                link=url,
+                tags=None,
+                description=cand.get('description') or '',
+            )
+        except Exception:
+            logging.exception('Failed to create Item for tweet %s (source=%s)', tweet_id, source)
+            return 'failed'
 
     saved_any = False
     for idx, media_url in enumerate(cand.get('media_urls') or []):
@@ -320,10 +334,18 @@ _TWITTER_SOURCES_FOR_DEDUPE = ['twitter_bookmark', 'twitter_like', 'twitter_rt']
 def _known_twitter_ids():
     known_ids = set(
         Item.objects.filter(source__in=_TWITTER_SOURCES_FOR_DEDUPE)
+        .annotate(_has_preview_images=Exists(PreviewImage.objects.filter(item_id=OuterRef('pk'))))
+        .filter(Q(_has_preview_images=True) | Q(preview_data__isnull=False))
         .values_list('external_id', flat=True)
     )
-    known_ids |= set(SocialFetchQueueItem.objects.values_list('external_id', flat=True))
-    return known_ids
+    known_ids |= set(
+        SocialFetchQueueItem.objects.filter(platform='twitter')
+        .exclude(status='failed')
+        .values_list('external_id', flat=True)
+    )
+    known_ids.discard(None)
+    # Support both int and str lookups
+    return known_ids | {str(x) for x in known_ids}
 
 
 def _get_bookmarks_resume_cursor():
@@ -3099,38 +3121,43 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         except (TypeError, ValueError):
             max_items = 30
 
+        known_ids = _known_twitter_ids()
         try:
-            result = fetch_account_retweets(screen_name, max_items=max_items)
+            result = fetch_account_retweets(screen_name, max_items=max_items, known_ids=known_ids)
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:
             logging.exception('Account retweets scan failed for %s', screen_name)
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
 
-        already_archived = 0
+        already_archived = result.get('already_archived', 0)
         created_items = []
         for rt in result.get('retweets', []):
             author = rt.get('screen_name') or ''
             tweet_id = rt.get('tweet_id')
             url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
-            if _find_item_by_url(url):
+            existing = _find_item_by_url(url)
+            if existing and _item_has_preview(existing):
                 already_archived += 1
                 continue
-            try:
-                item = Item.objects.create(
-                    external_id=int(tweet_id),
-                    source='twitter_rt',
-                    situation='',
-                    titles=[],
-                    characters=[],
-                    artist=author,
-                    link=url,
-                    tags=None,
-                    description=rt.get('description') or '',
-                )
-            except Exception:
-                logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
-                continue
+            if existing:
+                item = existing
+            else:
+                try:
+                    item = Item.objects.create(
+                        external_id=int(tweet_id),
+                        source='twitter_rt',
+                        situation='',
+                        titles=[],
+                        characters=[],
+                        artist=author,
+                        link=url,
+                        tags=None,
+                        description=rt.get('description') or '',
+                    )
+                except Exception:
+                    logging.exception('Failed to create Item for retweeted tweet %s', tweet_id)
+                    continue
             created_items.append({'id': item.id, 'link': item.link})
 
         return Response({
@@ -3218,24 +3245,28 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             author = cand.get('screen_name') or ''
             tweet_id = cand.get('tweet_id')
             url = f'https://x.com/{author}/status/{tweet_id}' if author else f'https://x.com/i/status/{tweet_id}'
-            if _find_item_by_url(url):
+            existing = _find_item_by_url(url)
+            if existing and _item_has_preview(existing):
                 already_archived += 1
                 continue
-            try:
-                item = Item.objects.create(
-                    external_id=int(tweet_id),
-                    source='twitter_bookmark',
-                    situation='',
-                    titles=[],
-                    characters=[],
-                    artist=author,
-                    link=url,
-                    tags=None,
-                    description=cand.get('description') or '',
-                )
-            except Exception:
-                logging.exception('Failed to create Item for bookmarked tweet %s', tweet_id)
-                continue
+            if existing:
+                item = existing
+            else:
+                try:
+                    item = Item.objects.create(
+                        external_id=int(tweet_id),
+                        source='twitter_bookmark',
+                        situation='',
+                        titles=[],
+                        characters=[],
+                        artist=author,
+                        link=url,
+                        tags=None,
+                        description=cand.get('description') or '',
+                    )
+                except Exception:
+                    logging.exception('Failed to create Item for bookmarked tweet %s', tweet_id)
+                    continue
             created_items.append({'id': item.id, 'link': item.link})
 
         return Response({
