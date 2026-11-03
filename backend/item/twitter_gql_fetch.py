@@ -249,10 +249,62 @@ def _unwrap_tweet(tweet_obj: dict) -> dict:
     return tweet_obj.get("tweet", tweet_obj)
 
 
+def _extract_tweets_and_cursor_from_instructions(instructions: list) -> tuple[list[dict], str | None]:
+    """Twitterタイムラインのinstructions配列から、ツイート一覧(ネストされたモジュール・
+    ピン留め含む)と、次ページのカーソルを漏れなく抽出して返す。
+    """
+    raw_entries = []
+    cursor = None
+
+    for instr in instructions:
+        itype = instr.get("type")
+        if itype == "TimelineAddEntries":
+            raw_entries.extend(instr.get("entries") or [])
+        elif itype == "TimelinePinEntry":
+            entry = instr.get("entry")
+            if entry:
+                raw_entries.insert(0, entry)
+        elif itype == "TimelineReplaceEntry":
+            entry = instr.get("entry") or {}
+            entry_id = entry.get("entryId") or ""
+            if entry_id.startswith("cursor-bottom-"):
+                val = (entry.get("content") or {}).get("value")
+                if val:
+                    cursor = val
+
+    tweets = []
+    for entry in raw_entries:
+        entry_id = entry.get("entryId") or ""
+        if entry_id.startswith("cursor-bottom-"):
+            val = (entry.get("content") or {}).get("value")
+            if val:
+                cursor = val
+            continue
+
+        content = entry.get("content") or {}
+        # 1. 単独ツイート項目 (tweet-..., pinned-tweet-...)
+        item_content = content.get("itemContent")
+        if item_content:
+            tw = (item_content.get("tweet_results") or {}).get("result")
+            if tw:
+                tweets.append(tw)
+
+        # 2. 会話・モジュール項目内のアイテム (profile-conversation-..., items配列)
+        items = content.get("items")
+        if isinstance(items, list):
+            for sub in items:
+                sub_ic = (sub.get("item") or {}).get("itemContent") or sub.get("itemContent") or {}
+                tw = (sub_ic.get("tweet_results") or {}).get("result")
+                if tw:
+                    tweets.append(tw)
+
+    return tweets, cursor
+
+
 def _get_rest_id(tweet_obj: dict) -> str | None:
     """tweet result から tweet ID を返す。"""
     t = _unwrap_tweet(tweet_obj)
-    return t.get("rest_id") or t.get("legacy", {}).get("id_str")
+    return t.get("rest_id") or t.get("id_str") or (t.get("legacy") or {}).get("id_str")
 
 
 def _get_author_id(tweet_obj: dict) -> str | None:
@@ -738,26 +790,17 @@ def fetch_account_retweets(
                     raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
 
             try:
-                instructions = data["data"]["user"]["result"]["timeline"]["timeline"]["instructions"]
+                user_res = (data.get("data") or {}).get("user", {}).get("result") or {}
+                timeline_data = user_res.get("timeline") or user_res.get("timeline_v2") or {}
+                instructions = (timeline_data.get("timeline") or {}).get("instructions") or []
             except (KeyError, TypeError):
-                entries = []
+                instructions = []
                 break
 
-            entries = []
-            for instr in instructions:
-                if instr.get("type") == "TimelineAddEntries":
-                    entries.extend(instr.get("entries") or [])
+            tweets_in_page, next_cursor = _extract_tweets_and_cursor_from_instructions(instructions)
 
             incomplete = False
-            for entry in entries:
-                entry_id = entry.get("entryId") or ""
-                if not entry_id.startswith("tweet-"):
-                    continue
-                content = entry.get("content") or {}
-                item_content = content.get("itemContent") or {}
-                tweet = (item_content.get("tweet_results") or {}).get("result")
-                if not tweet:
-                    continue
+            for tweet in tweets_in_page:
                 if "core" not in _unwrap_tweet(tweet):
                     incomplete = True
                     break
@@ -767,21 +810,7 @@ def fetch_account_retweets(
             time.sleep(1.5)
 
         pages += 1
-        next_cursor = None
-        for entry in entries:
-            entry_id = entry.get("entryId") or ""
-            if entry_id.startswith("cursor-bottom-"):
-                next_cursor = (entry.get("content") or {}).get("value")
-                continue
-            if not entry_id.startswith("tweet-"):
-                continue
-
-            content = entry.get("content") or {}
-            item_content = content.get("itemContent") or {}
-            tweet = (item_content.get("tweet_results") or {}).get("result")
-            if not tweet:
-                continue
-
+        for tweet in tweets_in_page:
             original = _extract_retweet_original(tweet)
             if not original:
                 continue  # native retweetでなければスキップ

@@ -67,7 +67,9 @@ export default function RetweetFetchManager({ onClose, onEnqueueFetch, embedded 
       if (!r.ok) throw new Error(j.detail || `検索に失敗しました (${r.status})`)
       const newItems = j.items || []
       if (newItems.length === 0) {
-        setNotice(j.already_archived > 0 ? '新規のRTは見つかりませんでした(すべて登録済みです)。' : 'RTが見つかりませんでした。')
+        setNotice(j.already_archived > 0
+          ? `新規のRTは見つかりませんでした (${j.already_archived}件のRTはすべて登録済みです)。`
+          : `@${name} のタイムラインに新規の画像付きRTが見つかりませんでした (${j.pages_fetched || 0}ページ走査)。アカウント名(@screen_name)が正しいか確認してください。`)
         return
       }
 
