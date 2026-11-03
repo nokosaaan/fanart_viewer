@@ -41,6 +41,12 @@ try:
 except Exception:
     HAVE_PIXIV_PLAYWRIGHT = False
 try:
+    from .twitter_playwright_fetch import fetch_account_retweets_playwright
+    HAVE_PLAYWRIGHT_TWITTER = True
+except Exception:
+    fetch_account_retweets_playwright = None
+    HAVE_PLAYWRIGHT_TWITTER = False
+try:
     from .ytdlp_fetch import fetch_twitter_media_ytdlp
     HAVE_YTDLP = True
 except Exception:
@@ -220,7 +226,7 @@ def _item_has_preview(item):
         return False
 
 
-def _run_account_retweets_job(screen_name, max_items):
+def _run_account_retweets_job(screen_name, max_items, fetch_method='api'):
     """Scan `screen_name`'s timeline for native retweets and archive each one
     not already in the DB, outside the request thread (this can take a
     while: a handful of GraphQL page requests plus one CDN download per
@@ -236,9 +242,14 @@ def _run_account_retweets_job(screen_name, max_items):
     """
     known_ids = _known_twitter_ids()
     try:
-        result = fetch_account_retweets(screen_name, max_items=max_items, known_ids=known_ids)
+        if fetch_method == 'playwright':
+            if not fetch_account_retweets_playwright:
+                raise RuntimeError("Playwright fetcher not available")
+            result = fetch_account_retweets_playwright(screen_name, max_items=max_items, known_ids=known_ids)
+        else:
+            result = fetch_account_retweets(screen_name, max_items=max_items, known_ids=known_ids, use_replies=True)
     except Exception:
-        logging.exception('Account retweets fetch failed for screen_name=%s', screen_name)
+        logging.exception('Account retweets fetch (%s) failed for screen_name=%s', fetch_method, screen_name)
         return
 
     created, skipped, failed = 0, 0, 0
@@ -252,8 +263,8 @@ def _run_account_retweets_job(screen_name, max_items):
             failed += 1
 
     logging.info(
-        'Account retweets fetch for %s: created=%d skipped=%d failed=%d pages=%d',
-        screen_name, created, skipped, failed, result.get('pages_fetched', 0),
+        'Account retweets fetch (%s) for %s: created=%d skipped=%d failed=%d pages=%d',
+        fetch_method, screen_name, created, skipped, failed, result.get('pages_fetched', 0),
     )
 
 
@@ -3079,18 +3090,24 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             max_items = int(data.get('max_items') or 30)
         except (TypeError, ValueError):
             max_items = 30
+        fetch_method = (data.get('fetch_method') or 'api').strip().lower()
 
         try:
             threading.Thread(
                 target=_run_account_retweets_job,
-                args=(screen_name, max_items),
+                args=(screen_name, max_items, fetch_method),
                 daemon=True,
             ).start()
         except Exception:
             logging.exception('Failed to start background retweets fetch job for %s', screen_name)
             return Response({'detail': 'Failed to start background job'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({'status': 'processing', 'screen_name': screen_name, 'max_items': max_items}, status=status.HTTP_202_ACCEPTED)
+        return Response({
+            'status': 'processing',
+            'screen_name': screen_name,
+            'max_items': max_items,
+            'fetch_method': fetch_method,
+        }, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=False, methods=['post'], url_path='scan_account_retweets')
     def scan_account_retweets_view(self, request):
@@ -3120,14 +3137,20 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             max_items = int(data.get('max_items') or 30)
         except (TypeError, ValueError):
             max_items = 30
+        fetch_method = (data.get('fetch_method') or 'api').strip().lower()
 
         known_ids = _known_twitter_ids()
         try:
-            result = fetch_account_retweets(screen_name, max_items=max_items, known_ids=known_ids)
+            if fetch_method == 'playwright':
+                if not fetch_account_retweets_playwright:
+                    return Response({'detail': 'Playwright fetcher not available'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+                result = fetch_account_retweets_playwright(screen_name, max_items=max_items, known_ids=known_ids)
+            else:
+                result = fetch_account_retweets(screen_name, max_items=max_items, known_ids=known_ids, use_replies=True)
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:
-            logging.exception('Account retweets scan failed for %s', screen_name)
+            logging.exception('Account retweets scan (%s) failed for %s', fetch_method, screen_name)
             return Response({'detail': f'Failed to fetch: {e}'}, status=status.HTTP_502_BAD_GATEWAY)
 
         already_archived = result.get('already_archived', 0)

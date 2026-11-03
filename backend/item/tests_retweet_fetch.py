@@ -222,3 +222,34 @@ class ScanAccountRetweetsViewTestCase(TestCase):
         self.assertEqual(data['items'][0]['id'], empty_item.id)
         self.assertEqual(Item.objects.filter(external_id=555).count(), 1)
 
+    @patch('item.views._have_twitter_creds', return_value=True)
+    @patch('item.views.fetch_account_retweets_playwright')
+    def test_scan_account_retweets_playwright_method(self, mock_pw_fetch, mock_creds):
+        mock_pw_fetch.return_value = {
+            "screen_name": "pwuser",
+            "pages_fetched": 3,
+            "already_archived": 1,
+            "retweets": [
+                {
+                    "tweet_id": "777",
+                    "screen_name": "pw_artist",
+                    "media_urls": ["https://pbs.twimg.com/media/pw.jpg"],
+                    "description": "Playwright Art tweet",
+                }
+            ]
+        }
+
+        resp = self.client.post('/api/items/scan_account_retweets/', {
+            'screen_name': 'pwuser',
+            'fetch_method': 'playwright',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        mock_pw_fetch.assert_called_once()
+        self.assertEqual(len(data['items']), 1)
+        self.assertEqual(data['already_archived'], 1)
+        self.assertEqual(data['items'][0]['link'], 'https://x.com/pw_artist/status/777')
+        item = Item.objects.get(external_id=777)
+        self.assertEqual(item.artist, 'pw_artist')
+

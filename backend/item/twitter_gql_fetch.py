@@ -70,6 +70,7 @@ _TWEET_DETAIL_FIELD_TOGGLES = {
 # confirming the query ID itself is current).
 _USER_BY_SCREEN_NAME_QUERY_ID = "ck5KkZ8t5cOmoLssopN99Q"
 _USER_TWEETS_QUERY_ID = "E8Wq-_jFSaU7hxVcuOPR9g"
+_USER_TWEETS_AND_REPLIES_QUERY_ID = "-O3QOHrVn1aOm_cF5wyTCQ"
 # UserByRestId — resolves a numeric user id to a screen_name. Used as a
 # fallback when a retweet's original tweet result is missing its inline
 # `core.user_results` hydration (observed on real, live, non-deleted tweets —
@@ -677,6 +678,7 @@ def fetch_account_retweets(
     max_items: int = None,
     known_ids: set | None = None,
     max_pages: int = None,
+    use_replies: bool = False,
 ) -> dict:
     """指定アカウントのタイムラインを新しい順に走査し、ネイティブRTのうち
     未収載（known_idsに含まれない）のものを最大 max_items 件、画像URL・本文つきで
@@ -726,7 +728,9 @@ def fetch_account_retweets(
     screen_name = screen_name.lstrip("@")
     user_id = _resolve_user_id(screen_name, auth_token, ct0)
     headers = _build_headers(auth_token, ct0)
-    endpoint = f"https://twitter.com/i/api/graphql/{_USER_TWEETS_QUERY_ID}/UserTweets"
+    query_id = _USER_TWEETS_AND_REPLIES_QUERY_ID if use_replies else _USER_TWEETS_QUERY_ID
+    op_name = "UserTweetsAndReplies" if use_replies else "UserTweets"
+    endpoint = f"https://twitter.com/i/api/graphql/{query_id}/{op_name}"
 
     retweets: list[dict] = []
     seen_ids: set[str] = set()

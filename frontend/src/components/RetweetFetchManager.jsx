@@ -23,6 +23,7 @@ const HEADERS = { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('
 // as one tab of a combined RT/ブックマーク panel instead of its own modal.
 export default function RetweetFetchManager({ onClose, onEnqueueFetch, embedded = false }) {
   const [mode, setMode] = useState('queue')
+  const [fetchMethod, setFetchMethod] = useState('playwright')
   const [screenName, setScreenName] = useState('')
   const [maxItems, setMaxItems] = useState(30)
   const [submitting, setSubmitting] = useState(false)
@@ -39,11 +40,11 @@ export default function RetweetFetchManager({ onClose, onEnqueueFetch, embedded 
     try {
       const r = await fetch('/api/items/fetch_account_retweets/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ screen_name: name, max_items: maxItems }),
+        body: JSON.stringify({ screen_name: name, max_items: maxItems, fetch_method: fetchMethod }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `開始に失敗しました (${r.status})`)
-      setNotice(`@${name} のRT取得をバックグラウンドで開始しました（最大${maxItems}件）。完了しても通知は出ないので、しばらくしてから一覧を再読み込みしてください。`)
+      setNotice(`@${name} のRT取得 (${fetchMethod === 'playwright' ? 'Playwright方式' : 'API方式'}) をバックグラウンドで開始しました（最大${maxItems}件）。完了しても通知は出ないので、しばらくしてから一覧を再読み込みしてください。`)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -61,7 +62,7 @@ export default function RetweetFetchManager({ onClose, onEnqueueFetch, embedded 
     try {
       const r = await fetch('/api/items/scan_account_retweets/', {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ screen_name: name, max_items: maxItems }),
+        body: JSON.stringify({ screen_name: name, max_items: maxItems, fetch_method: fetchMethod }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `検索に失敗しました (${r.status})`)
@@ -124,6 +125,25 @@ export default function RetweetFetchManager({ onClose, onEnqueueFetch, embedded 
               <input type="radio" checked={mode === 'auto'} onChange={() => setMode('auto')} />
               自動で取得・保存(お任せ)
             </label>
+          </div>
+
+          <div style={{ background: '#1e293b', padding: '10px 14px', borderRadius: 6, marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6, fontWeight: 600 }}>取得方式</label>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: '#f1f5f9' }}>
+                <input type="radio" checked={fetchMethod === 'playwright'} onChange={() => setFetchMethod('playwright')} />
+                ブラウザ方式 (Playwright)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', color: '#f1f5f9' }}>
+                <input type="radio" checked={fetchMethod === 'api'} onChange={() => setFetchMethod('api')} />
+                API方式 (GraphQL直接)
+              </label>
+            </div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
+              {fetchMethod === 'playwright'
+                ? '※ ブラウザで https://x.com/<ユーザー名>/all を開き、描画されたRTを直接インターセプトします。APIで出たり消えたりするアカウントでも最も確実に取得できます（推奨）。'
+                : '※ Twitter GraphQL APIを直接叩いて高速に取得します。'}
+            </div>
           </div>
 
           <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
