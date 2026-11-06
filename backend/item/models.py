@@ -303,6 +303,11 @@ class SocialFetchQueueItem(models.Model):
     # call.
     description = models.TextField(blank=True, default='')
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default='pending')
+    # Failed fetch attempts so far (see item.social_queue): a failure keeps the
+    # row 'pending' (retried after every row with fewer attempts) until
+    # MAX_ATTEMPTS, so a network outage doesn't turn a run of items into
+    # permanent 'failed' rows.
+    attempts = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
 

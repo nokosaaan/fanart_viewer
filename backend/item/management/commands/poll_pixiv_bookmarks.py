@@ -17,6 +17,8 @@ from django.core.management.base import BaseCommand
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
+from item.social_queue import next_pending, record_fetch_result
+from item.social_scan import ScanInterrupted
 from item.models import Item, PixivPollState, PollerSettings, PreviewImage, SocialFetchQueueItem
 from item.notify import notify_discord
 from item.pixiv_bookmarks_fetch import (
@@ -110,13 +112,22 @@ class Command(BaseCommand):
 
         max_pages = backfill_pages_per_tick if not known_ids else MAX_PAGES_STEADY
 
-        candidates, resume_offset = fetch_account_bookmarks(
-            user_id, known_ids, max_pages=max_pages, start_offset=state.resume_offset,
-        )
+        # On a part-way failure, ScanInterrupted carries what was found and the
+        # failed page's offset: queue it, store the offset (the next tick
+        # restarts at that page), then report the original error.
+        error = None
+        try:
+            candidates, resume_offset = fetch_account_bookmarks(
+                user_id, known_ids, max_pages=max_pages, start_offset=state.resume_offset,
+            )
+        except ScanInterrupted as e:
+            candidates, resume_offset, error = e.candidates, e.resume, e.cause
         state.resume_offset = resume_offset
         state.save(update_fields=['resume_offset'])
 
         self._enqueue_new(candidates)
+        if error is not None:
+            raise error
 
     def _enqueue_new(self, candidates):
         # candidates arrive newest-first; reverse so the oldest-in-this-
@@ -178,7 +189,7 @@ class Command(BaseCommand):
     def _drain(self, max_items: int):
         fetched = 0
         while fetched < max_items:
-            row = SocialFetchQueueItem.objects.filter(status='pending', platform='pixiv').order_by('id').first()
+            row = next_pending('pixiv')
             if row is None:
                 return
 
@@ -203,9 +214,9 @@ class Command(BaseCommand):
 
             ok = self._fetch_item(item, row.url)
 
-            row.status = 'done' if ok else 'failed'
-            row.processed_at = timezone.now()
-            row.save(update_fields=['status', 'processed_at'])
+            record_fetch_result(row, ok)
+            if not ok:
+                return  # likely a network/site problem: retry later rather than burn through the queue
             fetched += 1
 
     @staticmethod

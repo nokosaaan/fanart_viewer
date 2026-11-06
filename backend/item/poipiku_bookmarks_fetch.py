@@ -19,6 +19,8 @@ import logging
 import re
 from urllib.parse import urljoin
 
+from .social_scan import ScanInterrupted
+
 logger = logging.getLogger(__name__)
 
 _BASE_URL = 'https://poipiku.com/MyBookmarkListPcV.jsp'
@@ -137,28 +139,39 @@ def fetch_account_bookmarks(known_ids: set, max_pages: int = 1, start_url: str |
     candidates = []
     page_url = start_url or _BASE_URL
 
-    for _ in range(max_pages):
-        try:
-            resp = session.get(page_url, timeout=20)
-        except Exception as e:
-            raise PoipikuBookmarksError(f'お気に入り一覧の取得に失敗しました: {e}') from e
-        if resp.status_code != 200:
-            raise PoipikuBookmarksError(f'HTTP {resp.status_code}')
+    try:
+        for _ in range(max_pages):
+            try:
+                resp = session.get(page_url, timeout=20)
+            except Exception as e:
+                raise PoipikuBookmarksError(f'お気に入り一覧の取得に失敗しました: {e}') from e
+            if resp.status_code != 200:
+                raise PoipikuBookmarksError(f'HTTP {resp.status_code}')
 
-        page_candidates, next_page_url = _parse_bookmarks_page(resp.text, page_url)
-        if not page_candidates:
-            return candidates, ''  # empty page -- nothing more to backfill
+            page_candidates, next_page_url = _parse_bookmarks_page(resp.text, page_url)
+            if not page_candidates:
+                return candidates, ''  # empty page -- nothing more to backfill
 
-        caught_up = False
-        for cand in page_candidates:
-            if cand['illust_id'] in known_ids:
-                caught_up = True
-                break
-            candidates.append(cand)
+            page_known = 0
+            page_new = 0
+            for cand in page_candidates:
+                if cand['illust_id'] in known_ids:
+                    page_known += 1
+                    continue  # already fetched/queued: skip, go on to the next one
+                page_new += 1
+                candidates.append(cand)
 
-        if caught_up or not next_page_url:
-            return candidates, ''
+            # A page that still has unfetched items keeps the scan going; a
+            # page with fetched items and nothing left to fetch means we are
+            # back in finished ground.
+            if (page_known and not page_new) or not next_page_url:
+                return candidates, ''
 
-        page_url = next_page_url
+            page_url = next_page_url
+    except Exception as e:
+        if candidates or page_url != (start_url or _BASE_URL):
+            # page_url is the page that was being fetched/parsed when it failed
+            raise ScanInterrupted(e, candidates, page_url) from e
+        raise
 
     return candidates, page_url

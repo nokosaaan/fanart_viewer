@@ -30,6 +30,8 @@ import time
 
 import requests
 
+from .social_scan import ScanInterrupted
+
 logger = logging.getLogger(__name__)
 
 # Twitter web-app bearer token — embedded in Twitter's JS, publicly known.
@@ -931,6 +933,12 @@ def _fetch_social_timeline(
     打ち切る。最大max_pagesページまで(未知のIDばかりが続く初回実行など
     向けの安全弁)。画像/動画の無いツイートは保存対象外として除外する。
 
+    既に取得済み(known_ids)のツイートに当たっても打ち切らず、読み飛ばして
+    次へ進む。終了条件は「取得済みを含み、かつ未取得が1件も無いページに
+    当たった」「末端に達した」「max_pages尽きた」のいずれか。途中のページで
+    通信エラー等が起きた場合は、それまでに見つけた候補と失敗したページの
+    cursorを載せた ScanInterrupted を送出する(item.social_scan 参照)。
+
     `start_cursor`: 前回この関数を呼んだ時にmax_pages尽きるまで既知のIDに
     辿り着けなかった場合、続きから辿るためのcursor(Noneなら最新から)。
     タイムライン自体はcursorを跨いで永続化されないと1回のmax_pages分しか
@@ -961,105 +969,115 @@ def _fetch_social_timeline(
     resolved_authors: dict[str, str | None] = {}
     resume_cursor: str | None = None
 
-    for _page in range(max_pages):
-        page_variables = dict(variables)
-        if cursor:
-            page_variables["cursor"] = cursor
+    try:
+        for _page in range(max_pages):
+            page_variables = dict(variables)
+            if cursor:
+                page_variables["cursor"] = cursor
 
-        params = {
-            "variables": json.dumps(page_variables, separators=(",", ":")),
-            "features": json.dumps(_USER_TWEETS_FEATURES, separators=(",", ":")),
-        }
-        if field_toggles:
-            params["fieldToggles"] = json.dumps(field_toggles, separators=(",", ":"))
+            params = {
+                "variables": json.dumps(page_variables, separators=(",", ":")),
+                "features": json.dumps(_USER_TWEETS_FEATURES, separators=(",", ":")),
+            }
+            if field_toggles:
+                params["fieldToggles"] = json.dumps(field_toggles, separators=(",", ":"))
 
-        try:
-            resp = _get_with_ratelimit_backoff(endpoint, params, headers)
-        except requests.RequestException as e:
-            raise TwitterGQLError(f"Request failed: {e}") from e
+            try:
+                resp = _get_with_ratelimit_backoff(endpoint, params, headers)
+            except requests.RequestException as e:
+                raise TwitterGQLError(f"Request failed: {e}") from e
 
-        if resp.status_code in (401, 403):
-            raise TwitterAuthError(
-                "auth_token または ct0 が期限切れです。"
-                "ブラウザの x.com Cookie から再取得してください。"
-            )
-        if not resp.ok:
-            raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
+            if resp.status_code in (401, 403):
+                raise TwitterAuthError(
+                    "auth_token または ct0 が期限切れです。"
+                    "ブラウザの x.com Cookie から再取得してください。"
+                )
+            if not resp.ok:
+                raise TwitterGQLError(f"Twitter GraphQL returned HTTP {resp.status_code}: {resp.text[:200]}")
 
-        try:
-            data = resp.json()
-        except ValueError as e:
-            raise TwitterGQLError(f"Invalid JSON response: {e}") from e
+            try:
+                data = resp.json()
+            except ValueError as e:
+                raise TwitterGQLError(f"Invalid JSON response: {e}") from e
 
-        errors = data.get("errors") or []
-        for err in errors:
-            code = err.get("code")
-            if code in (32, 64, 135, 326):
-                raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
+            errors = data.get("errors") or []
+            for err in errors:
+                code = err.get("code")
+                if code in (32, 64, 135, 326):
+                    raise TwitterAuthError(f"Twitter auth error code {code}: {err.get('message')}")
 
-        try:
-            instructions = _walk_timeline_instructions(data, path_keys)
-        except (KeyError, TypeError):
-            if errors:
-                raise TwitterGQLError(f"Twitter GraphQL errors: {errors}")
-            break
-
-        entries = _entries_from_instructions(instructions)
-
-        next_cursor = None
-        stop = False
-        for entry in entries:
-            entry_id = entry.get("entryId") or ""
-            if entry_id.startswith("cursor-bottom-"):
-                next_cursor = (entry.get("content") or {}).get("value")
-                continue
-            if not entry_id.startswith("tweet-"):
-                continue
-
-            content = entry.get("content") or {}
-            item_content = content.get("itemContent") or {}
-            tweet = (item_content.get("tweet_results") or {}).get("result")
-            if not tweet:
-                continue
-
-            tweet_id = _get_rest_id(tweet)
-            if not tweet_id:
-                continue
-            tweet_id_int = int(tweet_id)
-            if tweet_id_int in known_ids:
-                stop = True
+            try:
+                instructions = _walk_timeline_instructions(data, path_keys)
+            except (KeyError, TypeError):
+                if errors:
+                    raise TwitterGQLError(f"Twitter GraphQL errors: {errors}")
                 break
 
-            media_urls = _extract_media_urls(tweet)
-            if not media_urls:
-                continue  # 画像/動画の無いブックマーク・いいねは保存対象外
+            entries = _entries_from_instructions(instructions)
 
-            screen_name = _get_screen_name(tweet)
-            if not screen_name:
-                author_id = _get_author_id(tweet)
-                if author_id:
-                    if author_id not in resolved_authors:
-                        resolved_authors[author_id] = _resolve_screen_name_by_user_id(author_id, auth_token, ct0)
-                    screen_name = resolved_authors[author_id]
+            next_cursor = None
+            page_known = 0  # already fetched / already queued: nothing to do, move on
+            page_new = 0    # not fetched yet
+            for entry in entries:
+                entry_id = entry.get("entryId") or ""
+                if entry_id.startswith("cursor-bottom-"):
+                    next_cursor = (entry.get("content") or {}).get("value")
+                    continue
+                if not entry_id.startswith("tweet-"):
+                    continue
 
-            candidates.append({
-                "tweet_id": tweet_id,
-                "screen_name": screen_name,
-                "media_urls": media_urls,
-                "description": _extract_full_text(tweet),
-            })
+                content = entry.get("content") or {}
+                item_content = content.get("itemContent") or {}
+                tweet = (item_content.get("tweet_results") or {}).get("result")
+                if not tweet:
+                    continue
 
-        if stop or not next_cursor or next_cursor == cursor:
-            break  # caught up to known content, or genuinely out of pages — resume_cursor stays None
-        cursor = next_cursor
-        time.sleep(1.5)
-    else:
-        # Loop ran out of max_pages without ever hitting `break` above —
-        # every page was still all-new content, so there's likely more
-        # backlog beyond what this call fetched. `cursor` here is the
-        # NEXT page's cursor (already advanced in the last iteration),
-        # ready for the caller to resume from next time.
-        resume_cursor = cursor
+                tweet_id = _get_rest_id(tweet)
+                if not tweet_id:
+                    continue
+                if int(tweet_id) in known_ids:
+                    page_known += 1
+                    continue  # skip and go on to the next one; do not end the scan here
+
+                media_urls = _extract_media_urls(tweet)
+                if not media_urls:
+                    continue  # 画像/動画の無いブックマーク・いいねは保存対象外
+
+                page_new += 1
+                screen_name = _get_screen_name(tweet)
+                if not screen_name:
+                    author_id = _get_author_id(tweet)
+                    if author_id:
+                        if author_id not in resolved_authors:
+                            resolved_authors[author_id] = _resolve_screen_name_by_user_id(author_id, auth_token, ct0)
+                        screen_name = resolved_authors[author_id]
+
+                candidates.append({
+                    "tweet_id": tweet_id,
+                    "screen_name": screen_name,
+                    "media_urls": media_urls,
+                    "description": _extract_full_text(tweet),
+                })
+
+            # A page with already-fetched items and nothing left to fetch means
+            # we are back in ground that is done; a page that still has
+            # unfetched items keeps the scan going (known items on it are
+            # simply skipped).
+            if (page_known and not page_new) or not next_cursor or next_cursor == cursor:
+                break  # caught up, or genuinely out of pages -- resume_cursor stays None
+            cursor = next_cursor
+            time.sleep(1.5)
+        else:
+            # Loop ran out of max_pages without ever hitting `break` above —
+            # every page still had unfetched items, so there's likely more
+            # backlog beyond what this call fetched. `cursor` here is the
+            # NEXT page's cursor (already advanced in the last iteration),
+            # ready for the caller to resume from next time.
+            resume_cursor = cursor
+    except Exception as e:
+        if candidates or cursor != start_cursor:
+            raise ScanInterrupted(e, candidates, cursor) from e
+        raise
 
     return candidates, resume_cursor
 

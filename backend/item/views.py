@@ -17,6 +17,7 @@ import json
 import re
 from urllib.parse import urljoin, urlparse
 
+from .social_scan import ScanInterrupted
 from .models import Item, PreviewImage, CharacterGroup, CharacterDanbooruLink, TitleDanbooruLink, CharacterAliasGroup, SocialFetchQueueItem, TwitterPollState
 from .twitter_creds import has_credentials as _have_twitter_creds
 from . import danbooru_lookup
@@ -164,10 +165,16 @@ def _find_item_by_url(url):
         if qs.exists():
             return qs.first()
 
-    candidates = {normalized}
+    # _normalize_lookup_url drops 'www.', so a link saved as given
+    # (https://www.pixiv.net/artworks/1) must be tried in that form too --
+    # otherwise the pollers never find the Item they created for a queue row
+    # and a retried fetch would create a second Item.
+    candidates = {normalized, (url or '').strip().rstrip('/')}
     try:
         parsed = urlparse(normalized)
         path = (parsed.path or '').rstrip('/')
+        if parsed.netloc:
+            candidates.add(f'{parsed.scheme}://www.{parsed.netloc}{path}')
         for host in ('twitter.com', 'x.com', 'www.twitter.com', 'www.x.com'):
             candidates.add(f'https://{host}{path}')
     except Exception:
@@ -405,10 +412,16 @@ def _run_account_bookmarks_job(max_pages):
     ground the poller has already covered.
     """
     known_ids = _known_twitter_ids()
+    interrupted = False
     try:
         candidates, resume_cursor = fetch_account_bookmarks(
             known_ids, max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
         )
+    except ScanInterrupted as e:
+        # Failed part-way (network error): keep what pages before it found and
+        # remember the failed page's cursor, so the next run starts right there.
+        logging.error('Account bookmarks fetch interrupted: %s', e.cause)
+        candidates, resume_cursor, interrupted = e.candidates, e.resume, True
     except Exception:
         logging.exception('Account bookmarks fetch failed')
         return
@@ -425,8 +438,8 @@ def _run_account_bookmarks_job(max_pages):
             failed += 1
 
     logging.info(
-        'Account bookmarks fetch: created=%d skipped=%d failed=%d (max_pages=%d)',
-        created, skipped, failed, max_pages,
+        'Account bookmarks fetch%s: created=%d skipped=%d failed=%d (max_pages=%d)',
+        ' (interrupted)' if interrupted else '', created, skipped, failed, max_pages,
     )
 
 
@@ -3246,6 +3259,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             max_pages = 5
         max_pages = max(1, min(max_pages, 20))
 
+        interrupted = ''
         try:
             # Shares the poller's own pagination frontier — see
             # _get_bookmarks_resume_cursor's own docstring: this picks up
@@ -3255,6 +3269,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             candidates, resume_cursor = fetch_account_bookmarks(
                 _known_twitter_ids(), max_pages=max_pages, start_cursor=_get_bookmarks_resume_cursor(),
             )
+        except ScanInterrupted as e:
+            # Failed part-way: queue what the earlier pages found, remember the
+            # failed page's cursor (the next scan restarts there), and tell the
+            # caller it was cut short.
+            candidates, resume_cursor, interrupted = e.candidates, e.resume, str(e.cause)
         except TwitterAuthError as e:
             return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception as e:
@@ -3296,6 +3315,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'items': created_items,
             'already_archived': already_archived,
             'max_pages': max_pages,
+            'interrupted': interrupted,
         })
 
     @action(detail=True, methods=['post'], url_path='save_previews')

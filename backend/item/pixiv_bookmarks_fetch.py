@@ -53,6 +53,8 @@ import json
 import logging
 import re
 
+from .social_scan import ScanInterrupted
+
 logger = logging.getLogger(__name__)
 
 _UA = (
@@ -270,6 +272,12 @@ def fetch_account_bookmarks(
     illust is seen (same early-stop logic as Twitter's Bookmarks scan) --
     costing just one page per tick once caught up.
 
+    Already-fetched/queued illusts are skipped, not a stop signal: the scan
+    ends on a page that has such items and nothing left to fetch (or on
+    max_pages / the end of the list). A failure part-way raises
+    ScanInterrupted carrying the candidates so far and the failed page's
+    offset (see item.social_scan).
+
     next_offset resumes a still-catching-up scan across ticks (mirrors
     TwitterPollState's resume cursor -- see that module's own docstring):
     0 once caught up (nothing to resume), otherwise the offset to
@@ -282,55 +290,65 @@ def fetch_account_bookmarks(
     """
     candidates = []
     offset = start_offset
-    with _pixiv_request_context() as ctx:
-        for _ in range(max_pages):
-            resp = ctx.request.get(
-                f'https://www.pixiv.net/ajax/user/{user_id}/illusts/bookmarks',
-                params={'tag': '', 'offset': offset, 'limit': _PAGE_SIZE, 'rest': 'show'},
-                headers={
-                    'User-Agent': _UA, 'Accept': 'application/json',
-                    'Referer': f'https://www.pixiv.net/users/{user_id}/bookmarks/artworks',
-                },
-                timeout=20000,
-            )
-            if resp.status == 401:
-                raise PixivAuthError('Pixivセッションが無効です(PHPSESSIDの期限切れの可能性)')
-            if resp.status != 200:
-                raise PixivAPIError(f'HTTP {resp.status}')
+    try:
+        with _pixiv_request_context() as ctx:
+            for _ in range(max_pages):
+                resp = ctx.request.get(
+                    f'https://www.pixiv.net/ajax/user/{user_id}/illusts/bookmarks',
+                    params={'tag': '', 'offset': offset, 'limit': _PAGE_SIZE, 'rest': 'show'},
+                    headers={
+                        'User-Agent': _UA, 'Accept': 'application/json',
+                        'Referer': f'https://www.pixiv.net/users/{user_id}/bookmarks/artworks',
+                    },
+                    timeout=20000,
+                )
+                if resp.status == 401:
+                    raise PixivAuthError('Pixivセッションが無効です(PHPSESSIDの期限切れの可能性)')
+                if resp.status != 200:
+                    raise PixivAPIError(f'HTTP {resp.status}')
 
-            data = resp.json()
-            if data.get('error'):
-                raise PixivAPIError(data.get('message') or 'unknown error')
+                data = resp.json()
+                if data.get('error'):
+                    raise PixivAPIError(data.get('message') or 'unknown error')
 
-            works = (data.get('body') or {}).get('works') or []
-            if not works:
-                return candidates, 0  # nothing more to backfill
+                works = (data.get('body') or {}).get('works') or []
+                if not works:
+                    return candidates, 0  # nothing more to backfill
 
-            caught_up = False
-            for w in works:
-                illust_id = int(w['id'])
-                if illust_id in known_ids:
-                    caught_up = True
-                    break
-                tags = _tags_from_work(w)
-                if tags is None:
-                    try:
-                        tags = fetch_illust_tags(ctx, illust_id)
-                    except PixivAuthError:
-                        raise
-                    except Exception:
-                        # Tags are an enrichment: a failed lookup must not
-                        # drop the bookmark itself, just leave the title.
-                        logger.exception('pixiv_bookmarks_fetch: tag lookup failed for illust %s', illust_id)
-                        tags = []
-                candidates.append({
-                    'illust_id': illust_id,
-                    'user_name': w.get('userName') or '',
-                    'description': build_description(w.get('title') or '', tags),
-                })
+                page_known = 0
+                page_new = 0
+                for w in works:
+                    illust_id = int(w['id'])
+                    if illust_id in known_ids:
+                        page_known += 1
+                        continue  # already fetched/queued: skip, go on to the next one
+                    page_new += 1
+                    tags = _tags_from_work(w)
+                    if tags is None:
+                        try:
+                            tags = fetch_illust_tags(ctx, illust_id)
+                        except PixivAuthError:
+                            raise
+                        except Exception:
+                            # Tags are an enrichment: a failed lookup must not
+                            # drop the bookmark itself, just leave the title.
+                            logger.exception('pixiv_bookmarks_fetch: tag lookup failed for illust %s', illust_id)
+                            tags = []
+                    candidates.append({
+                        'illust_id': illust_id,
+                        'user_name': w.get('userName') or '',
+                        'description': build_description(w.get('title') or '', tags),
+                    })
 
-            offset += len(works)
-            if caught_up:
-                return candidates, 0
+                # A page that still has unfetched items keeps the scan going; a
+                # page with fetched items and nothing left to fetch means we
+                # are back in finished ground.
+                if page_known and not page_new:
+                    return candidates, 0
+                offset += len(works)
+    except Exception as e:
+        if candidates or offset != start_offset:
+            raise ScanInterrupted(e, candidates, offset) from e
+        raise
 
     return candidates, offset

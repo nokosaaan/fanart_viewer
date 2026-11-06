@@ -40,6 +40,8 @@ from django.core.management.base import BaseCommand
 from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
+from item.social_queue import next_pending, record_fetch_result
+from item.social_scan import ScanInterrupted
 from item.models import Item, PollerSettings, PreviewImage, SocialFetchQueueItem, TwitterPollState
 from item.notify import notify_discord
 from item.twitter_creds import has_credentials
@@ -173,16 +175,31 @@ class Command(BaseCommand):
         # reasoning. Kept at the same max_pages either way: catching up
         # happens gradually, one tick's worth of pages at a time, never by
         # widening a single call's budget.
-        bookmarks, bookmarks_resume = fetch_account_bookmarks(
-            known_ids, max_pages=max_pages, start_cursor=state.bookmarks_resume_cursor or None,
-        )
-        if state.screen_name:
-            likes, likes_resume = fetch_account_likes(
-                state.screen_name, known_ids, max_pages=max_pages,
-                start_cursor=state.likes_resume_cursor or None,
+        # A scan that dies part-way (network error on page N) hands back what
+        # pages 1..N-1 found and the failed page's cursor (ScanInterrupted):
+        # queue those and store that cursor so the next tick restarts at the
+        # failed page, then report the original error.
+        error = None
+        try:
+            bookmarks, bookmarks_resume = fetch_account_bookmarks(
+                known_ids, max_pages=max_pages, start_cursor=state.bookmarks_resume_cursor or None,
             )
+        except ScanInterrupted as e:
+            bookmarks, bookmarks_resume, error = e.candidates, e.resume, e.cause
+
+        likes, likes_resume = [], state.likes_resume_cursor or None
+        if error is not None:
+            pass  # the network is likely down: leave Likes (and its cursor) for the next tick
+        elif state.screen_name:
+            try:
+                likes, likes_resume = fetch_account_likes(
+                    state.screen_name, known_ids, max_pages=max_pages,
+                    start_cursor=state.likes_resume_cursor or None,
+                )
+            except ScanInterrupted as e:
+                likes, likes_resume, error = e.candidates, e.resume, e.cause
         else:
-            likes, likes_resume = [], ''
+            likes_resume = ''
 
         state.bookmarks_resume_cursor = bookmarks_resume or ''
         state.likes_resume_cursor = likes_resume or ''
@@ -190,6 +207,9 @@ class Command(BaseCommand):
 
         self._enqueue_new(bookmarks, 'bookmark')
         self._enqueue_new(likes, 'like')
+
+        if error is not None:
+            raise error
 
     def _enqueue_new(self, candidates, kind):
         # candidates arrive newest-first; reverse so the oldest-in-this-
@@ -261,7 +281,7 @@ class Command(BaseCommand):
     def _drain(self, max_items: int):
         fetched = 0
         while fetched < max_items:
-            row = SocialFetchQueueItem.objects.filter(status='pending', platform='twitter').order_by('id').first()
+            row = next_pending('twitter')
             if row is None:
                 return
 
@@ -286,9 +306,9 @@ class Command(BaseCommand):
 
             ok = self._fetch_item(item, row.url)
 
-            row.status = 'done' if ok else 'failed'
-            row.processed_at = timezone.now()
-            row.save(update_fields=['status', 'processed_at'])
+            record_fetch_result(row, ok)
+            if not ok:
+                return  # likely a network/site problem: retry later rather than burn through the queue
             fetched += 1
 
     @staticmethod
