@@ -222,7 +222,7 @@ def _bundle_path(relative):
     extraction dir, since they're static per-build (rebuilt fresh every
     release) and the app never writes to them at runtime."""
     base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, relative)
+    return os.path.normpath(os.path.join(base, relative))
 
 
 os.environ.setdefault('FRONTEND_DIST', _bundle_path('frontend_dist'))
@@ -231,7 +231,9 @@ os.environ.setdefault('FRONTEND_DIST', _bundle_path('frontend_dist'))
 # wherever this build's own files actually live (the onedir folder here;
 # a temp extraction dir for a `--onefile` build), and this script lives
 # alongside `backend/` there (see fanart_viewer.spec's Analysis() datas).
-sys.path.insert(0, _bundle_path('.'))
+_bundle_root = _bundle_path('.')
+if all(os.path.normcase(os.path.normpath(p)) != os.path.normcase(_bundle_root) for p in sys.path):
+    sys.path.insert(0, _bundle_root)
 
 # Ensure on-disk .py files under _internal/{backend,item,security} always
 # take precedence over any bytecode that might exist in PYZ, allowing
@@ -401,66 +403,70 @@ def _start_backend(window):
         pyi_splash.close()
     _set_status(window, 'アプリを初期化中…')
 
-    import django
+    try:
+        import django
 
-    django.setup()
+        django.setup()
 
-    from django.core.management import call_command
+        from django.core.management import call_command
 
-    _set_status(window, 'データベースを準備中…')
+        _set_status(window, 'データベースを準備中…')
 
-    # Run migrate only when unapplied migrations exist, skipping on normal starts
-    _migrate_if_needed()
+        # Run migrate only when unapplied migrations exist, skipping on normal starts
+        _migrate_if_needed()
 
-    # Unattended background fetching without having asked first isn't
-    # something a personal, per-user install should just start doing on
-    # its own — unlike PollerSettings' own field-level default (True,
-    # which matches the existing always-on docker `poller` service's
-    # behavior for anyone already relying on it), this only ever creates
-    # each platform's row disabled, and only if it doesn't already exist
-    # yet (so a choice made through the settings panel on an earlier
-    # launch is never overwritten back to disabled).
-    from item.models import PollerSettings
+        # Unattended background fetching without having asked first isn't
+        # something a personal, per-user install should just start doing on
+        # its own — unlike PollerSettings' own field-level default (True,
+        # which matches the existing always-on docker `poller` service's
+        # behavior for anyone already relying on it), this only ever creates
+        # each platform's row disabled, and only if it doesn't already exist
+        # yet (so a choice made through the settings panel on an earlier
+        # launch is never overwritten back to disabled).
+        from item.models import PollerSettings
 
-    PollerSettings.objects.get_or_create(platform='twitter', defaults={'enabled': False})
-    PollerSettings.objects.get_or_create(platform='pixiv', defaults={'enabled': False})
-    PollerSettings.objects.get_or_create(platform='poipiku', defaults={'enabled': False})
+        PollerSettings.objects.get_or_create(platform='twitter', defaults={'enabled': False})
+        PollerSettings.objects.get_or_create(platform='pixiv', defaults={'enabled': False})
+        PollerSettings.objects.get_or_create(platform='poipiku', defaults={'enabled': False})
 
-    from waitress import serve
+        from waitress import serve
 
-    from backend.wsgi import application
+        from backend.wsgi import application
 
-    _set_status(window, 'サーバーを起動中…')
+        _set_status(window, 'サーバーを起動中…')
 
-    threading.Thread(target=_poller_loop, args=('twitter', 'poll_twitter_updates'), daemon=True).start()
-    threading.Thread(target=_poller_loop, args=('pixiv', 'poll_pixiv_bookmarks'), daemon=True).start()
-    threading.Thread(target=_poller_loop, args=('poipiku', 'poll_poipiku_bookmarks'), daemon=True).start()
-    threading.Thread(target=lambda: serve(application, host=HOST, port=PORT), daemon=True).start()
+        threading.Thread(target=_poller_loop, args=('twitter', 'poll_twitter_updates'), daemon=True).start()
+        threading.Thread(target=_poller_loop, args=('pixiv', 'poll_pixiv_bookmarks'), daemon=True).start()
+        threading.Thread(target=_poller_loop, args=('poipiku', 'poll_poipiku_bookmarks'), daemon=True).start()
+        threading.Thread(target=lambda: serve(application, host=HOST, port=PORT), daemon=True).start()
 
-    logging.getLogger(__name__).info(
-        'fanart_viewer starting at http://%s:%s/ (data: %s)', HOST, PORT, USER_DATA_DIR
-    )
+        logging.getLogger(__name__).info(
+            'fanart_viewer starting at http://%s:%s/ (data: %s)', HOST, PORT, USER_DATA_DIR
+        )
 
-    import urllib.request
+        import urllib.request
 
-    # Any HTTP response (even a 404/500) proves waitress is accepting
-    # connections, which is all this needs to know -- urlopen() raises
-    # HTTPError for those, so they must be caught separately from a
-    # genuine "not listening yet" connection failure (URLError), or
-    # every retry here would burn its full timeout for no reason.
-    import urllib.error
+        # Any HTTP response (even a 404/500) proves waitress is accepting
+        # connections, which is all this needs to know -- urlopen() raises
+        # HTTPError for those, so they must be caught separately from a
+        # genuine "not listening yet" connection failure (URLError), or
+        # every retry here would burn its full timeout for no reason.
+        import urllib.error
 
-    url = f'http://{HOST}:{PORT}/'
-    for _ in range(60):
-        try:
-            urllib.request.urlopen(url, timeout=1)
-            break
-        except urllib.error.HTTPError:
-            break
-        except Exception:
-            time.sleep(0.5)
+        url = f'http://{HOST}:{PORT}/'
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(url, timeout=1)
+                break
+            except urllib.error.HTTPError:
+                break
+            except Exception:
+                time.sleep(0.5)
 
-    window.load_url(url)
+        window.load_url(url)
+    except Exception as exc:
+        logging.getLogger(__name__).exception('Failed to start backend')
+        _set_status(window, f'起動エラー: {exc} (詳細は .fanart_viewer/server.log を確認してください)')
 
 
 def _run_training_mode():
