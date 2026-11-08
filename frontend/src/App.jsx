@@ -333,12 +333,23 @@ function AppMain({ role, onLogout }){
       setBulkFetchProgress({ done: i, total: pendingItems.length })
       const it = pendingItems[i]
       try{
-        const res = await fetchPreviewCandidates(it.id, it.link, { force_method: forceMethodParam, signal: bulkFetchAbortRef.current.signal })
+        let streamedForThisItem = 0
+        const res = await fetchPreviewCandidates(it.id, it.link, {
+          force_method: forceMethodParam,
+          signal: bulkFetchAbortRef.current.signal,
+          onBatch: (batchImages) => {
+            if (bulkFetchCancelledRef.current) return
+            enqueueFetchResult({ itemId: it.id, images: batchImages })
+            streamedForThisItem += batchImages.length
+          },
+        })
         if(bulkFetchCancelledRef.current) break  // cancelled while this request was in flight — discard its result
         const body = res.body || {}
         if(res.ok && body.status === 'saved'){
           savedDirect++
           notify('item-preview-updated', { id: it.id })
+        } else if(res.ok && streamedForThisItem > 0){
+          queued++
         } else if(res.ok && body.preview_only && Array.isArray(body.images) && body.images.length > 0){
           enqueueFetchResult({ itemId: it.id, images: body.images })
           queued++

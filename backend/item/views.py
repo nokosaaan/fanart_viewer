@@ -3026,6 +3026,71 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
 
+    @action(detail=True, methods=['post'], url_path='gallerydl_start')
+    def gallerydl_start(self, request, pk=None):
+        """Start a background gallery-dl download for this item's link.
+
+        The download can take many minutes for multi-page galleries (sites
+        throttle requests), so instead of one long request the client gets a
+        job id and polls `gallerydl_poll` for finished files in batches.
+        """
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        target_url = data.get('url') or item.link
+        if not target_url:
+            return Response({'detail': 'No link available on item'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            validate_url(target_url)
+        except SSRFError as e:
+            return Response({'detail': f'URL not allowed: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+        if not HAVE_GALLERYDL:
+            return Response({'detail': 'gallery-dl is not available'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        from .gallerydl_jobs import start_job
+        return Response({'job_id': start_job(target_url), 'url': target_url})
+
+    @action(detail=False, methods=['get'], url_path='gallerydl_poll')
+    def gallerydl_poll(self, request):
+        """Return the next batch of files a gallery-dl job has finished."""
+        from .gallerydl_jobs import poll_job, encode_batch
+        job_id = request.query_params.get('job_id') or ''
+        base_url = request.query_params.get('url') or ''
+        try:
+            since = max(0, int(request.query_params.get('since', 0)))
+        except ValueError:
+            since = 0
+        res = poll_job(job_id, since=since, limit=10)
+        if res is None:
+            return Response({'detail': 'Unknown or expired job'}, status=status.HTTP_404_NOT_FOUND)
+
+        images = [img for img in encode_batch(res['images'], base_url, since) if img['size'] >= MIN_IMAGE_FETCH_BYTES]
+
+        description = res['description']
+        item_id = request.query_params.get('item_id')
+        if description and item_id and res['drained']:
+            try:
+                item = Item.objects.get(pk=item_id)
+                if not item.description:
+                    item.description = description
+                    item.save(update_fields=['description'])
+            except Exception:
+                logging.exception('Failed to save gallery-dl description for item %s', item_id)
+
+        return Response({
+            'status': res['status'],
+            'images': images,
+            'next': res['next'],
+            'total_ready': res['total_ready'],
+            'description': description,
+            'error': res['error'],
+            'drained': res['drained'],
+        })
+
+    @action(detail=False, methods=['post'], url_path='gallerydl_cancel')
+    def gallerydl_cancel(self, request):
+        from .gallerydl_jobs import cancel_job
+        data = request.data if isinstance(request.data, dict) else {}
+        return Response({'cancelled': cancel_job(data.get('job_id') or '')})
+
     @csrf_exempt
     @action(detail=False, methods=['post'], url_path='bookmark_fetch')
     def bookmark_fetch(self, request):

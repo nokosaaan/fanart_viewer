@@ -185,8 +185,22 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
     setLoading(true)
     // first fetch candidates (preview-only)
     const forceMethodParam = (fetchMethod === 'api' || fetchMethod === 'playwright' || fetchMethod === 'gallerydl') ? fetchMethod : undefined
-    const candRes = await fetchPreviewCandidates(it.id, url, { force_method: forceMethodParam })
+    let streamedCount = 0
+    const candRes = await fetchPreviewCandidates(it.id, url, {
+      force_method: forceMethodParam,
+      // gallery-dl runs as a background job: finished files are queued in
+      // groups as they arrive instead of after the whole gallery is done.
+      onBatch: (images) => {
+        streamedCount += images.length
+        onEnqueueFetch({ itemId: it.id, images })
+        showToast(`取得キューに追加しました(計${streamedCount}件・取得は継続中) ✓`, 'success')
+      },
+    })
     setLoading(false)
+    if(candRes.ok && candRes.body && candRes.body.streamed){
+      showToast(`gallery-dl: ${candRes.body.streamed}件の取得が完了し、取得キューに追加しました ✓`, 'success')
+      return
+    }
     if(!candRes.ok){
       const detail = candRes.body && candRes.body.detail
       // If HTML scraping found nothing and user didn't explicitly choose API or gallery-dl,
