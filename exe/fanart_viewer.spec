@@ -93,6 +93,7 @@ def _compute_spec_cache_fingerprint():
         except OSError:
             file_sigs.append([os.path.abspath(fpath), -1, 0.0])
     return {
+        'cache_version': 2,
         'python': sys.executable,
         'version': sys.version,
         'platform': sys.platform,
@@ -142,13 +143,13 @@ else:
     collected_hidden = []
     collected_hidden += collect_submodules('rest_framework')
     collected_hidden += collect_submodules('item.migrations')
-    # gallery_dl.job discovers its ~300 site-specific extractor modules the
-    # same dynamic/directory-scanning way Django discovers migrations/
-    # management commands -- same silent-gap-in-a-frozen-build issue,
-    # confirmed live: ModuleNotFoundError: No module named
-    # 'gallery_dl.extractor.2ch' (the first one it happens to try) via
-    # exe/launcher.py's --run-gallery-dl mode.
-    collected_hidden += collect_submodules('gallery_dl.extractor')
+    # gallery_dl dynamically imports submodules in extractor/, downloader/
+    # (e.g. gallery_dl.downloader.http), and postprocessor/ (e.g.
+    # gallery_dl.postprocessor.metadata for --write-info-json) via __import__,
+    # which PyInstaller's static analysis cannot see. Collect all submodules
+    # of gallery_dl so both --dump-json and actual file downloads work in the
+    # frozen exe.
+    collected_hidden += collect_submodules('gallery_dl')
     # call_command('poll_twitter_updates', ...) (launcher.py's in-process
     # poller loop) discovers management commands the same pkgutil-based way
     # MigrationLoader discovers migrations — same silent-failure-in-frozen-

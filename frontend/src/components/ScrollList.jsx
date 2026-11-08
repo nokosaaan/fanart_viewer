@@ -189,9 +189,9 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
     setLoading(false)
     if(!candRes.ok){
       const detail = candRes.body && candRes.body.detail
-      // If HTML scraping found nothing and user didn't explicitly choose API,
+      // If HTML scraping found nothing and user didn't explicitly choose API or gallery-dl,
       // offer to retry using API to give the user control over which method to use.
-      if(detail && detail.toLowerCase().includes('no image candidates') && fetchMethod !== 'api'){
+      if(detail && detail.toLowerCase().includes('no image candidates') && fetchMethod !== 'api' && fetchMethod !== 'gallerydl'){
         const tryApi = window.confirm('HTML scraping found no image candidates. Try API-based fetch?')
         if(tryApi){
           setLoading(true)

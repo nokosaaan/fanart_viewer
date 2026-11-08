@@ -102,6 +102,10 @@ def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], st
         # array of [type, data] entries: type 2 carries the tweet's own
         # metadata dict (content/hashtags/etc — shared across all its
         # media), type 3 carries a bare media URL string.
+        sub_env = os.environ.copy()
+        sub_env["PYTHONIOENCODING"] = "utf-8"
+        sub_env["PYTHONUTF8"] = "1"
+
         proc = subprocess.run(
             [
                 *_GALLERYDL_CMD,
@@ -111,6 +115,9 @@ def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], st
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=sub_env,
             timeout=60,
             # In the frozen exe, this launches the exe itself again (see
             # _GALLERYDL_CMD) -- without this, Windows briefly flashes a
@@ -215,7 +222,7 @@ def _write_generic_config(cookies_path: str | None = None, pixiv_phpsessid: str 
     return path
 
 
-def fetch_media_gallerydl(url: str, timeout: int = 300) -> tuple[list[tuple[bytes, str]], str]:
+def fetch_media_gallerydl(url: str, timeout: int = 120) -> tuple[list[tuple[bytes, str]], str]:
     """Fetch media from a web page or multi-page gallery URL using gallery-dl.
 
     Unlike `fetch_twitter_media_gallerydl` (which dumps bare URLs via `-j`),
@@ -248,29 +255,91 @@ def fetch_media_gallerydl(url: str, timeout: int = 300) -> tuple[list[tuple[byte
 
         stdout_text = ""
         stderr_text = ""
+        sub_env = os.environ.copy()
+        sub_env["PYTHONIOENCODING"] = "utf-8"
+        sub_env["PYTHONUTF8"] = "1"
+        # Run as a streaming Popen (not subprocess.run) so that:
+        #  - stderr lines (verbose -v) are written to the server log live, so
+        #    a stalled run still shows WHERE it stalled (subprocess.run's
+        #    capture_output discards everything when killed on timeout);
+        #  - the timeout is an *idle* timeout (no new file and no output for
+        #    `timeout` seconds) rather than a fixed total, so a large gallery
+        #    that keeps making progress is never cut short.
+        import threading
+        import time
+
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        last_activity = [time.monotonic()]
+
+        def _pump(stream, sink, is_err):
+            try:
+                for raw in iter(stream.readline, ""):
+                    sink.append(raw)
+                    last_activity[0] = time.monotonic()
+                    if is_err and raw.strip():
+                        logger.info("gallery-dl: %s", raw.rstrip()[:400])
+            except Exception:
+                pass
+
+        proc = subprocess.Popen(
+            [
+                *_GALLERYDL_CMD,
+                "-v",
+                "--config", config_path,
+                "-D", tmpdir,
+                "--no-mtime",
+                "--no-colors",
+                "--write-info-json",
+                url,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=sub_env,
+            **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
+        )
+        pumps = [
+            threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks, False), daemon=True),
+            threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks, True), daemon=True),
+        ]
+        for t in pumps:
+            t.start()
+
+        seen_files = 0
+        timed_out = False
+        while proc.poll() is None:
+            time.sleep(1.0)
+            try:
+                n = len(os.listdir(tmpdir))
+            except OSError:
+                n = seen_files
+            if n != seen_files:
+                seen_files = n
+                last_activity[0] = time.monotonic()
+            if time.monotonic() - last_activity[0] > timeout:
+                timed_out = True
+                proc.kill()
+                break
         try:
-            proc = subprocess.run(
-                [
-                    *_GALLERYDL_CMD,
-                    "--config", config_path,
-                    "-D", tmpdir,
-                    "--no-mtime",
-                    "--no-colors",
-                    "--write-info-json",
-                    url,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
+            proc.wait(timeout=10)
+        except Exception:
+            pass
+        for t in pumps:
+            t.join(timeout=5)
+
+        stdout_text = "".join(stdout_chunks)
+        stderr_text = "".join(stderr_chunks)
+        if timed_out:
+            logger.warning(
+                "gallery-dl made no progress for %ss on %s (files so far: %d); collecting what was downloaded",
+                timeout, url, seen_files,
             )
-            stdout_text = proc.stdout or ""
-            stderr_text = proc.stderr or ""
-            if proc.returncode not in (0, 1):
-                logger.warning("gallery-dl exited %s for %s: %s", proc.returncode, url, stderr_text[:300])
-        except subprocess.TimeoutExpired as exc:
-            stdout_text = (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""))
-            logger.warning("gallery-dl timed out after %ss for %s; collecting any files already downloaded", timeout, url)
+        elif proc.returncode not in (0, 1):
+            logger.warning("gallery-dl exited %s for %s: %s", proc.returncode, url, stderr_text[-300:])
 
         description = ""
         info_path = os.path.join(tmpdir, "info.json")

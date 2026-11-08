@@ -54,6 +54,10 @@ function Sync-AppCodeAndFrontend {
         $dstPkg = Join-Path $InternalDir $pkg
         Sync-DirectoryIncremental -Source $srcPkg -Destination $dstPkg
     }
+    $venvGalleryDl = Join-Path $PSScriptRoot "..\.venv\Lib\site-packages\gallery_dl"
+    if (Test-Path $venvGalleryDl) {
+        Sync-DirectoryIncremental -Source (Resolve-Path $venvGalleryDl) -Destination (Join-Path $InternalDir "gallery_dl")
+    }
     if (Test-Path $FrontendDist) {
         $dstFrontend = Join-Path $InternalDir "frontend_dist"
         Sync-DirectoryIncremental -Source (Resolve-Path $FrontendDist) -Destination $dstFrontend
@@ -72,12 +76,10 @@ $RebuildReason = ""
 if ($CanFastSync) {
     $stampTime = (Get-Item $FastSyncStamp).LastWriteTimeUtc
     $triggerFiles = @(
-        (Join-Path $PSScriptRoot "fanart_viewer.spec"),
         (Join-Path $PSScriptRoot "splash.png"),
         (Join-Path $PSScriptRoot "requirements.txt"),
         (Join-Path $BackendRoot "requirements.txt"),
-        (Join-Path $BackendRoot "requirements-timm.txt"),
-        (Join-Path $PSScriptRoot "..\.venv\Lib\site-packages")
+        (Join-Path $BackendRoot "requirements-timm.txt")
     )
     foreach ($tf in $triggerFiles) {
         if (Test-Path $tf) {

@@ -82,6 +82,12 @@ if pyi_splash:
         pyi_splash.update_text('起動準備中…')
 
 if IS_GALLERYDL_MODE:
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, 'reconfigure'):
+            try:
+                _stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
     _flag_index = sys.argv.index(RUN_GALLERYDL_FLAG)
     _gallerydl_argv = sys.argv[_flag_index + 1:]
     import gallery_dl

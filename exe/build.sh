@@ -57,7 +57,7 @@ fi
 CAN_FAST_SYNC=0
 if [ "$CLEAN" -eq 0 ] && [ "$FULL" -eq 0 ] && [ "$UPX" -eq 0 ] && [ -f "$EXE_PATH" ] && [ -f "$FAST_SYNC_STAMP" ]; then
     CAN_FAST_SYNC=1
-    for tf in fanart_viewer.spec splash.png requirements.txt ../backend/requirements.txt ../backend/requirements-timm.txt; do
+    for tf in splash.png requirements.txt ../backend/requirements.txt ../backend/requirements-timm.txt; do
         if [ -e "$tf" ] && [ "$tf" -nt "$FAST_SYNC_STAMP" ]; then
             CAN_FAST_SYNC=0
             echo "$(basename "$tf") の更新を検出したため、PyInstaller フルビルドを実行します..."
