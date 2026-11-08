@@ -521,7 +521,7 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
               </span>
             </div>
           </div>
-          <button className="cgm-panel-close" onClick={onClose} aria-label="閉じる">✕</button>
+          <button className="cgm-panel-close" onClick={onClose}>✕</button>
         </div>
 
         {/* Search & Help bar */}

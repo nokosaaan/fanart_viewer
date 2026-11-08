@@ -213,9 +213,35 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       if(e.key==='Escape') closeLightbox()
 
       if(readerLayout === 'comic'){
-        // In comic vertical reader, Left/Right navigate between items, while native vertical scroll handles pages
-        if(e.key==='ArrowLeft'){ e.preventDefault(); prev(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0 }
-        if(e.key==='ArrowRight'){ e.preventDefault(); next(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0 }
+        // In comic vertical reader, Left/Right navigate between items
+        if(e.key==='ArrowLeft'){ e.preventDefault(); prev(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0; return }
+        if(e.key==='ArrowRight'){ e.preventDefault(); next(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0; return }
+
+        // Keyboard scrolling support for comic mode
+        if(e.key==='ArrowDown' || e.key==='PageDown' || e.key===' '){
+          if(comicContainerRef.current){
+            e.preventDefault()
+            const delta = e.key==='ArrowDown' ? 140 : Math.round(comicContainerRef.current.clientHeight * 0.8)
+            comicContainerRef.current.scrollTop += delta
+          }
+          return
+        }
+        if(e.key==='ArrowUp' || e.key==='PageUp'){
+          if(comicContainerRef.current){
+            e.preventDefault()
+            const delta = e.key==='ArrowUp' ? 140 : Math.round(comicContainerRef.current.clientHeight * 0.8)
+            comicContainerRef.current.scrollTop -= delta
+          }
+          return
+        }
+        if(e.key==='Home'){
+          if(comicContainerRef.current){ e.preventDefault(); comicContainerRef.current.scrollTop = 0 }
+          return
+        }
+        if(e.key==='End'){
+          if(comicContainerRef.current){ e.preventDefault(); comicContainerRef.current.scrollTop = comicContainerRef.current.scrollHeight }
+          return
+        }
       } else {
         // Single page mode: Up/Down move to prev/next item, Left/Right page through current item's images
         if(e.key==='ArrowUp') prev()
@@ -241,8 +267,18 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       if(selectedIndex===null) return
       // When edit modal is open, scroll only inside the edit window — do not switch items in the background
       if(editOpen) return
-      // In comic vertical reader mode, let the user scroll smoothly through the comic pages
-      if(readerLayout === 'comic') return
+
+      // In comic vertical reader mode, mouse wheel anywhere in modal scrolls the comic smoothly!
+      if(readerLayout === 'comic'){
+        if(comicContainerRef.current){
+          const delta = e.deltaY || e.deltaX || 0
+          if(delta !== 0){
+            comicContainerRef.current.scrollTop += delta
+          }
+        }
+        return
+      }
+
       // If event originated from an overlay/form/dialog outside lightbox main area, do not trigger item nav
       if(e.target && e.target.closest && (e.target.closest('[role="dialog"]') || e.target.closest('form'))) return
 
@@ -264,26 +300,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     return ()=> window.removeEventListener('wheel', handleWheel)
   }, [selectedIndex, previewItems, editOpen, readerLayout])
 
-  function handleComicScroll(e){
-    if(readerLayout !== 'comic') return
-    const container = e.currentTarget
-    if(!container) return
-    const containerTop = container.getBoundingClientRect().top
-    const threshold = containerTop + 140
-    const alive = (previews || []).filter(p => !deletedPreviewIds.has(p.id))
-    for(let i=0; i<alive.length; i++){
-      const el = document.getElementById(`comic-page-${alive[i].index}`)
-      if(el){
-        const rect = el.getBoundingClientRect()
-        if(rect.top <= threshold && rect.bottom >= threshold){
-          if(currentPreviewIdxRef.current !== alive[i].index){
-            selectPreviewIndex(alive[i].index)
-          }
-          break
-        }
-      }
-    }
-  }
+  const [showComicTimeline, setShowComicTimeline] = useState(false)
 
   function openLarge(i){
     const it = previewItems[i]
@@ -754,9 +771,9 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
             )}
 
             {/* Close button (top-right) */}
-            <button className="modal-close" onClick={closeLightbox} aria-label="Close">✕</button>
+            <button className="modal-close" onClick={closeLightbox}>✕</button>
 
-            <div className="modal-content" onClick={e=>e.stopPropagation()}>
+            <div className={`modal-content ${readerLayout === 'comic' ? 'comic-mode' : ''}`} onClick={e=>e.stopPropagation()}>
               {(() => {
                 const hasAnyPreview = (previews && previews.length>0)
                 const alivePreviews = (previews || []).filter(p => !deletedPreviewIds.has(p.id))
@@ -774,7 +791,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                     <div
                       ref={comicContainerRef}
                       className="comic-scroll-container"
-                      onScroll={handleComicScroll}
+                      tabIndex={0}
                     >
                       {previews.map(p => {
                         if (deletedPreviewIds.has(p.id)) return null
@@ -844,7 +861,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                     </div>
                   )}
                 </div>
-                <div className="modal-meta">
+                <div className={`modal-meta ${readerLayout === 'comic' ? 'comic-mode' : ''}`}>
                   {/* View layout mode switch */}
                   <div style={{ display: 'flex', gap: 4, background: 'rgba(15, 23, 42, 0.6)', padding: 3, borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', marginBottom: 8 }}>
                     <button
@@ -892,6 +909,29 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       <span>🖼</span> 単一ページ
                     </button>
                   </div>
+
+                  {readerLayout === 'comic' && previews && previews.length > 1 && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setShowComicTimeline(v => !v)}
+                      style={{
+                        fontSize: 11,
+                        padding: '4px 8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                        background: showComicTimeline ? '#334155' : 'rgba(15, 23, 42, 0.5)',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        marginBottom: 4
+                      }}
+                      title="下部のサムネイル一覧（目次）の表示/非表示を切り替えます"
+                    >
+                      <span>📑</span>
+                      <span>{showComicTimeline ? 'ページ一覧 (サムネイル) を隠す ▲' : 'ページ一覧 (サムネイル) を表示 ▼'}</span>
+                    </button>
+                  )}
 
                   <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
                     <div className="preview-title">{(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].titles || previewItems[selectedIndex].title || ''}</div>
@@ -1055,101 +1095,88 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               </div>
                 )
               })()}
-              <div className="modal-timeline-wrap">
-                {previews && previews.length>1 && (
-                  <div className="modal-timeline-hint">
-                    {readerLayout === 'comic'
-                      ? '縦スクロールで通し読み / サムネイルクリックで各ページへ移動 / ←・→キーで前後の作品へ'
-                      : '←/→キーでこのアイテムの前後のページへ / ↑/↓キーで前後の作品へ'}
-                  </div>
-                )}
-                {!readOnly && previews && previews.filter(p => !deletedPreviewIds.has(p.id)).length > 1 && (
-                  <div style={{display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', marginBottom:6, fontSize:12}}>
-                    {!selectMode ? (
-                      <>
-                        <button className="btn" style={{fontSize:12}} onClick={()=>{ setSelectMode(true); setPickedIds(new Set()) }}
-                          title="複数の画像を選んで、まとめて削除する/選んだ画像だけ残す">☑ 複数選択</button>
-                        <button className="btn" style={{fontSize:12}} onClick={keepOnlyCurrent} disabled={deleting || reordering}
-                          title="いま大きく表示している画像だけを残して、他の画像をすべて削除します">★ この1枚だけ残す</button>
-                        <span style={{width: 1, height: 16, background: 'rgba(255,255,255,0.2)', margin: '0 2px'}} />
-                        <button className="btn" style={{fontSize:12}} onClick={reorderByFilename} disabled={deleting || reordering}
-                          title="ファイル名の番号順(01, 02... 10)で自動整列します">🔀 ファイル名順で整列</button>
-                        <button className="btn" style={{fontSize:12}} onClick={reverseOrder} disabled={deleting || reordering}
-                          title="ページの順序を前後に反転します">🔄 逆順</button>
-                        <button className="btn" style={{fontSize:12}} onClick={() => moveCurrentImage(-1)} disabled={deleting || reordering || currentPreviewIdx === 0}
-                          title="表示中の画像を1つ前(左)へ移動">◀ 前へ</button>
-                        <button className="btn" style={{fontSize:12}} onClick={() => moveCurrentImage(1)} disabled={deleting || reordering || currentPreviewIdx >= previews.filter(p => !deletedPreviewIds.has(p.id)).length - 1}
-                          title="表示中の画像を1つ後ろ(右)へ移動">次へ ▶</button>
-                      </>
-                    ) : (
-                      <>
-                        <span style={{color:'#cbd5e1'}}>{pickedIds.size}枚選択中(画像をクリックで選択)</span>
-                        <button className="btn" style={{fontSize:12}} onClick={()=>setPickedIds(new Set(aliveIds()))}>すべて選択</button>
-                        <button className="btn" style={{fontSize:12}} onClick={()=>setPickedIds(new Set())}>選択解除</button>
-                        <button className="btn" style={{fontSize:12, background:'#a33', color:'#fff'}} disabled={deleting || pickedIds.size===0} onClick={deletePicked}
-                          title="選んだ画像を削除します">選んだ画像を削除</button>
-                        <button className="btn" style={{fontSize:12, background:'#166534', color:'#fff'}} disabled={deleting || pickedIds.size===0} onClick={keepPicked}
-                          title="選んだ画像だけを残し、それ以外を削除します">選んだ画像だけ残す</button>
-                        <button className="btn" style={{fontSize:12}} onClick={leaveSelectMode}>キャンセル</button>
-                      </>
+              {(readerLayout !== 'comic' || showComicTimeline) && (
+                <div className="modal-timeline-wrap">
+                  {previews && previews.length>1 && (
+                    <div className="modal-timeline-hint">
+                      {readerLayout === 'comic'
+                        ? '縦スクロールで通し読み / サムネイルクリックで各ページへ移動 / ←・→キーで前後の作品へ'
+                        : '←/→キーでこのアイテムの前後のページへ / ↑/↓キーで前後の作品へ'}
+                    </div>
+                  )}
+                  {!readOnly && previews && previews.filter(p => !deletedPreviewIds.has(p.id)).length > 1 && (
+                    <div style={{display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', marginBottom:6, fontSize:12}}>
+                      {!selectMode ? (
+                        <>
+                          <button className="btn" style={{fontSize:12}} onClick={()=>{ setSelectMode(true); setPickedIds(new Set()) }}
+                            title="複数の画像を選んで、まとめて削除する/選んだ画像だけ残す">☑ 複数選択</button>
+                          <button className="btn" style={{fontSize:12}} onClick={keepOnlyCurrent} disabled={deleting || reordering}
+                            title="いま大きく表示している画像だけを残して、他の画像をすべて削除します">★ この1枚だけ残す</button>
+                          <span style={{width: 1, height: 16, background: 'rgba(255,255,255,0.2)', margin: '0 2px'}} />
+                          <button className="btn" style={{fontSize:12}} onClick={reorderByFilename} disabled={deleting || reordering}
+                            title="ファイル名の番号順(01, 02... 10)で自動整列します">🔀 ファイル名順で整列</button>
+                          <button className="btn" style={{fontSize:12}} onClick={reverseOrder} disabled={deleting || reordering}
+                            title="ページの順序を前後に反転します">🔄 逆順</button>
+                          <button className="btn" style={{fontSize:12}} onClick={() => moveCurrentImage(-1)} disabled={deleting || reordering || currentPreviewIdx === 0}
+                            title="表示中の画像を1つ前(左)へ移動">◀ 前へ</button>
+                          <button className="btn" style={{fontSize:12}} onClick={() => moveCurrentImage(1)} disabled={deleting || reordering || currentPreviewIdx >= previews.filter(p => !deletedPreviewIds.has(p.id)).length - 1}
+                            title="表示中の画像を1つ後ろ(右)へ移動">次へ ▶</button>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{color:'#cbd5e1'}}>{pickedIds.size}枚選択中(画像をクリックで選択)</span>
+                          <button className="btn" style={{fontSize:12}} onClick={()=>setPickedIds(new Set(aliveIds()))}>すべて選択</button>
+                          <button className="btn" style={{fontSize:12}} onClick={()=>setPickedIds(new Set())}>選択解除</button>
+                          <button className="btn" style={{fontSize:12, background:'#a33', color:'#fff'}} disabled={deleting || pickedIds.size===0} onClick={deletePicked}
+                            title="選んだ画像を削除します">選んだ画像を削除</button>
+                          <button className="btn" style={{fontSize:12, background:'#166534', color:'#fff'}} disabled={deleting || pickedIds.size===0} onClick={keepPicked}
+                            title="選んだ画像だけを残し、それ以外を削除します">選んだ画像だけ残す</button>
+                          <button className="btn" style={{fontSize:12}} onClick={leaveSelectMode}>キャンセル</button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="modal-timeline">
+                    {previews && previews.length>0 ? previews.map(p=> (
+                      deletedPreviewIds.has(p.id) ? (
+                        <div key={p.id} className="timeline-thumb-deleted" title="削除済み">
+                          <span aria-hidden="true">🗑</span>
+                          <span>削除済み</span>
+                        </div>
+                      ) : (
+                        <div key={p.id} style={{position:'relative', flex:'0 0 auto', lineHeight:0}}>
+                          <img src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
+                            className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}
+                            style={selectMode && pickedIds.has(p.id) ? {borderColor:'#3b82f6', opacity:1} : undefined}
+                            title={p.filename ? `${p.index + 1}. ${p.filename}` : `ページ ${p.index + 1}`}
+                            onClick={()=>{
+                              if(selectMode){
+                                togglePicked(p.id)
+                              } else {
+                                selectPreviewIndex(p.index)
+                                if(readerLayout === 'comic'){
+                                  const el = document.getElementById(`comic-page-${p.index}`)
+                                  if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                                }
+                              }
+                            }} />
+                          <span style={{position:'absolute', bottom:2, right:2, background:'rgba(0,0,0,0.65)', color:'#fff',
+                            fontSize:9, padding:'1px 4px', borderRadius:2, pointerEvents:'none', lineHeight:1}}>
+                            {p.index + 1}
+                          </span>
+                          {selectMode && (
+                            <span aria-hidden="true" style={{position:'absolute', top:4, left:4, width:18, height:18, borderRadius:4,
+                              background: pickedIds.has(p.id) ? '#2563eb' : 'rgba(0,0,0,0.55)', border:'1px solid #fff', color:'#fff',
+                              fontSize:12, lineHeight:'16px', textAlign:'center', pointerEvents:'none'}}>{pickedIds.has(p.id) ? '✓' : ''}</span>
+                          )}
+                        </div>
+                      )
+                    )) : (
+                      <div className="timeline-empty">No previews</div>
                     )}
                   </div>
-                )}
-                <div className="modal-timeline">
-                  {previews && previews.length>0 ? previews.map(p=> (
-                    // key is the preview's own stable DB id, not its
-                    // position-based `index` -- deleting one image shifts
-                    // every later one's index down (see item/views.py's
-                    // preview_delete_by_id, which reindexes the remainder
-                    // contiguously), so a positional key made React keep
-                    // reusing DOM nodes by their OLD slot rather than
-                    // tracking the actual image across the reindex.
-                    //
-                    // A deleted one renders as its own placeholder, in its
-                    // OWN slot, instead of being removed from `previews`
-                    // outright (see deletedPreviewIds/markPreviewDeletedLocally)
-                    // -- every other thumbnail then stays exactly where it
-                    // was, so there's never any ambiguity about which one
-                    // was actually removed regardless of how many are on
-                    // screen at once.
-                    deletedPreviewIds.has(p.id) ? (
-                      <div key={p.id} className="timeline-thumb-deleted" title="削除済み">
-                        <span aria-hidden="true">🗑</span>
-                        <span>削除済み</span>
-                      </div>
-                    ) : (
-                      <div key={p.id} style={{position:'relative', flex:'0 0 auto', lineHeight:0}}>
-                        <img src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
-                          className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}
-                          style={selectMode && pickedIds.has(p.id) ? {borderColor:'#3b82f6', opacity:1} : undefined}
-                          title={p.filename ? `${p.index + 1}. ${p.filename}` : `ページ ${p.index + 1}`}
-                          onClick={()=>{
-                            if(selectMode){
-                              togglePicked(p.id)
-                            } else {
-                              selectPreviewIndex(p.index)
-                              if(readerLayout === 'comic'){
-                                const el = document.getElementById(`comic-page-${p.index}`)
-                                if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                              }
-                            }
-                          }} />
-                        <span style={{position:'absolute', bottom:2, right:2, background:'rgba(0,0,0,0.65)', color:'#fff',
-                          fontSize:9, padding:'1px 4px', borderRadius:2, pointerEvents:'none', lineHeight:1}}>
-                          {p.index + 1}
-                        </span>
-                        {selectMode && (
-                          <span aria-hidden="true" style={{position:'absolute', top:4, left:4, width:18, height:18, borderRadius:4,
-                            background: pickedIds.has(p.id) ? '#2563eb' : 'rgba(0,0,0,0.55)', border:'1px solid #fff', color:'#fff',
-                            fontSize:12, lineHeight:'16px', textAlign:'center', pointerEvents:'none'}}>{pickedIds.has(p.id) ? '✓' : ''}</span>
-                        )}
-                      </div>
-                    )
-                  )) : (
-                    <div className="timeline-empty">No previews</div>
-                  )}
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>

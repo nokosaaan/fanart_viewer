@@ -159,37 +159,47 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
 /* Modal / large preview styles */
 .preview-modal-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:1400 }
 .preview-modal{ position:relative; background:#0b1220; padding:20px; border-radius:0; width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; gap:12px; overflow:hidden }
-.modal-content{ display:flex; flex-direction:column; gap:0; align-items:stretch; color:#fff; width:96vw; max-height:96vh; overflow:hidden }
-.modal-top{ display:flex; gap:16px; align-items:center; flex:1 1 auto; min-height:0; overflow:hidden; padding-bottom:8px }
-.modal-main{ flex:1 1 auto; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden }
-.preview-modal-img{ width:auto; height:auto; max-width:70vw; max-height:78vh; object-fit:contain; border-radius:8px; background:#000 }
+.modal-content{ display:flex; flex-direction:column; gap:0; align-items:stretch; color:#fff; width:96vw; height:96vh; max-height:96vh; overflow:hidden }
+.modal-content.comic-mode{ width:98vw; height:98vh; max-height:98vh; }
+.modal-top{ display:flex; gap:16px; align-items:center; flex:1 1 0; min-height:0; overflow:hidden; padding-bottom:8px }
+.modal-top.comic-mode{ align-items:stretch; flex:1 1 0; min-height:0; height:100%; overflow:hidden; padding-bottom:0 }
+.modal-main{ flex:1 1 0; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden }
 .modal-meta{ flex:0 0 auto; max-width:320px; display:flex; flex-direction:column; gap:8px }
+.modal-meta.comic-mode{ max-width:280px; overflow-y:auto; max-height:100%; padding-right:4px }
 
 /* Comic / vertical scroll reader mode */
 .modal-main.comic-mode{
-  align-items: flex-start;
-  justify-content: center;
-  overflow: hidden;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 .comic-scroll-container{
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
   height: 100%;
-  overflow-y: auto;
+  overflow-y: scroll !important;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 12px 60px;
+  padding: 16px 12px 100px;
   box-sizing: border-box;
-  scroll-behavior: smooth;
+  scroll-behavior: auto; /* smoothだとかえってマウスホイールの追従が遅れるためautoが快適 */
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.4) rgba(0, 0, 0, 0.2);
+  outline: none;
 }
-.comic-scroll-container::-webkit-scrollbar{ width: 8px }
-.comic-scroll-container::-webkit-scrollbar-track{ background: transparent }
-.comic-scroll-container::-webkit-scrollbar-thumb{ background: rgba(255, 255, 255, 0.25); border-radius: 4px }
-.comic-scroll-container::-webkit-scrollbar-thumb:hover{ background: rgba(255, 255, 255, 0.45) }
+.comic-scroll-container::-webkit-scrollbar{ width: 10px }
+.comic-scroll-container::-webkit-scrollbar-track{ background: rgba(0, 0, 0, 0.2); border-radius: 5px }
+.comic-scroll-container::-webkit-scrollbar-thumb{ background: rgba(255, 255, 255, 0.35); border-radius: 5px; border: 2px solid transparent; background-clip: content-box }
+.comic-scroll-container::-webkit-scrollbar-thumb:hover{ background: rgba(255, 255, 255, 0.6); border: 2px solid transparent; background-clip: content-box }
 
 .comic-page-wrap{
   width: 100%;
