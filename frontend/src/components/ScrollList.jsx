@@ -34,7 +34,7 @@ function CopyIcon(){
   )
 }
 
-function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect }){
+function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, selected, onToggleSelect, serialNumber }){
   const [url, setUrl] = useState(it.link || '')
   const [loading, setLoading] = useState(false)
   const [hasPreviewLocal, setHasPreviewLocal] = useState(!!it.has_preview)
@@ -247,7 +247,9 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
         {!readOnly && onToggleSelect && (
           <input className="fv-checkbox-lg" type="checkbox" checked={!!selected} onChange={()=>onToggleSelect(it.id)} title="選択" />
         )}
-        <div className="item-id-badge">#{it.id}</div>
+        <div className="item-id-badge" title={`内部ID: ${it.id}`}>
+          #{serialNumber != null ? serialNumber : it.id}
+        </div>
       </div>
       <div className="meta-grid">
         <div className="col titles-col">
@@ -524,7 +526,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
   )
 }
 
-export default function ScrollList({items, readOnly=false, onEnqueueFetch, onOpenPreview, onAddFilter}){
+export default function ScrollList({items, totalCount=null, startIndex=0, readOnly=false, onEnqueueFetch, onOpenPreview, onAddFilter}){
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
 
@@ -602,13 +604,18 @@ export default function ScrollList({items, readOnly=false, onEnqueueFetch, onOpe
         </div>
       )}
       <div className="scroll-list">
-        {items.map(it=> (
-          <ItemRow
-            it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch}
-            onOpenPreview={onOpenPreview} onAddFilter={onAddFilter}
-            selected={selectedIds.has(it.id)} onToggleSelect={toggleSelect}
-          />
-        ))}
+        {items.map((it, idx) => {
+          const overallIndex = startIndex + idx
+          const serialNumber = totalCount != null ? (totalCount - overallIndex) : it.id
+          return (
+            <ItemRow
+              it={it} key={it.id} readOnly={readOnly} onEnqueueFetch={onEnqueueFetch}
+              onOpenPreview={onOpenPreview} onAddFilter={onAddFilter}
+              selected={selectedIds.has(it.id)} onToggleSelect={toggleSelect}
+              serialNumber={serialNumber}
+            />
+          )
+        })}
       </div>
     </div>
   )

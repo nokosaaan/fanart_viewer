@@ -124,13 +124,16 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
 // skip-to-next rather than close-a-modal — see fieldsRef/onSituationChange/
 // onDirtyChange/showOwnActions below, all added for that embedding).
 export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null,
-  fieldsRef = null, onSituationChange = null, onTitlesChange = null, onDirtyChange = null, onSuggestionApplied = null, showOwnActions = true }){
+  fieldsRef = null, onSituationChange = null, onTitlesChange = null, onDirtyChange = null, onSuggestionApplied = null,
+  showOwnActions = true, regionSlot = null }){
   const [titleList, setTitleList] = useState(item.titles||[])
   const [charList,  setCharList]  = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
   const [tags,      setTags]      = useState((item.tags||[]).join(', '))
   const [artist,    setArtist]    = useState(item.artist||'')
   const [loading,   setLoading]   = useState(false)
+
+  const isSolo = (situation || '').trim().toUpperCase() === 'SOLO'
 
   // Re-sync form state when item props change so reopened editor or external updates always see fresh values
   useEffect(() => {
@@ -662,7 +665,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         </div>
       )}
 
-      {charCandidates.length > 0 && (
+      {/* タイトル提案・入力の直後に領域指定を配置（複数人のときは画像上で領域を確認しやすくする） */}
+      {regionSlot}
+
+      {/* SOLOの場合のみキャラ提案を表示（SOLO以外は領域指定側でキャラを割り当てるため非表示） */}
+      {isSolo && charCandidates.length > 0 && (
         <div style={{marginBottom:10, padding:'0 14px'}}>
           <div style={{fontSize:11, color:'#94a3b8', marginBottom:6}}>
             AI提案候補(スコア高い順、クリックで追加/解除。どれも違う場合は下のCharactersで直接手動選択してください):
@@ -811,9 +818,13 @@ export function ItemQueuePanel({
   const fieldsRef = useRef(null)
   const boxesRef = useRef(null)
 
-  const hasExistingRegions = Array.isArray(item.character_regions) && item.character_regions.length > 0
-  const autoShow = situationDraft !== 'SOLO' || hasExistingRegions
-  const showRegionSection = manualShowRegion !== null ? manualShowRegion : autoShow
+  function handleSituationChange(newSit){
+    const s = (newSit || '').toUpperCase()
+    setSituationDraft(s)
+    setManualShowRegion(null)
+  }
+
+  const showRegionSection = manualShowRegion !== null ? manualShowRegion : (situationDraft !== 'SOLO')
 
   useEffect(()=>{
     if(!showRegionSection){
@@ -854,23 +865,10 @@ export function ItemQueuePanel({
     }
   }
 
-  return (
+  const regionSection = (
     <div>
-      <ItemEditForm
-        item={item}
-        onClose={onClose}
-        closeLabel={closeLabel}
-        initialSuggestion={initialSuggestion}
-        showOwnActions={false}
-        fieldsRef={fieldsRef}
-        onSituationChange={setSituationDraft}
-        onTitlesChange={setTitlesDraft}
-        onDirtyChange={setFieldsDirty}
-        onSuggestionApplied={setSuggestion}
-      />
-
       {showRegionSection ? (
-        <div style={{marginTop:16, background:'#0f172a', borderRadius:8, padding:'12px 14px'}}>
+        <div style={{marginTop:16, marginBottom:16, background:'#0f172a', borderRadius:8, padding:'12px 14px'}}>
           <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
             <label style={{color:'#94a3b8', fontSize:11, fontWeight:600, letterSpacing:'0.08em', textTransform:'uppercase', display:'block'}}>
               領域ラベル付け <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— 複数キャラが写っている場合、どの矩形が誰かを割り当ててください</span>
@@ -893,7 +891,7 @@ export function ItemQueuePanel({
           />
         </div>
       ) : (
-        <div style={{marginTop:12}}>
+        <div style={{marginTop:8, marginBottom:16}}>
           <button
             type="button"
             onClick={()=>setManualShowRegion(true)}
@@ -907,6 +905,24 @@ export function ItemQueuePanel({
           </button>
         </div>
       )}
+    </div>
+  )
+
+  return (
+    <div>
+      <ItemEditForm
+        item={item}
+        onClose={onClose}
+        closeLabel={closeLabel}
+        initialSuggestion={initialSuggestion}
+        showOwnActions={false}
+        fieldsRef={fieldsRef}
+        onSituationChange={handleSituationChange}
+        onTitlesChange={setTitlesDraft}
+        onDirtyChange={setFieldsDirty}
+        onSuggestionApplied={setSuggestion}
+        regionSlot={regionSection}
+      />
 
       {error && <div style={{marginTop:10, fontSize:12, color:'#f87171'}}>{error}</div>}
 

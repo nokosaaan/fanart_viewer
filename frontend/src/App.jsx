@@ -936,7 +936,15 @@ function AppMain({ role, onLogout }){
         </button>
       </div>
       {viewMode === 'list' ? (
-        <ScrollList items={paginatedItems} readOnly={readOnly} onEnqueueFetch={enqueueFetchResult} onOpenPreview={openPreviewForItem} onAddFilter={addFilter} />
+        <ScrollList
+          items={paginatedItems}
+          totalCount={filtered.length}
+          startIndex={pageIndex * PAGE_SIZE}
+          readOnly={readOnly}
+          onEnqueueFetch={enqueueFetchResult}
+          onOpenPreview={openPreviewForItem}
+          onAddFilter={addFilter}
+        />
       ) : (
         // Gallery mode reuses PreviewPane itself (embedded as the page's own
         // main content, see its own `embedded` prop comment) rather than a

@@ -31,6 +31,7 @@ export default function TrainClassifierManager({ onClose }) {
   const [exclude, setExclude] = useState('')
   const [includeMulti, setIncludeMulti] = useState(false)
   const [backend, setBackend] = useState('canary')
+  const [pruneStrategy, setPruneStrategy] = useState('balanced')
   // On by default — see classifier_training.py's own _build_argv comment:
   // re-running the tagger on every already-processed image every single
   // retrain is expensive enough that skipping it is the sensible default,
@@ -83,6 +84,7 @@ export default function TrainClassifierManager({ onClose }) {
         min_images: minImages.trim() ? parseInt(minImages, 10) : undefined,
         exclude: exclude.trim(),
         include_multi_character: includeMulti,
+        prune_strategy: pruneStrategy,
         update_cache: useCache,
       }
       const r = await fetch('/api/train_classifier/start/', {
@@ -177,6 +179,16 @@ export default function TrainClassifierManager({ onClose }) {
                         style={{ background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 6, padding: '6px 8px', fontSize: 13 }}>
                         <option value="onnx">標準(軽量・高速・推奨)</option>
                         <option value="canary">2026年学習の最新モデル(重い)</option>
+                      </select>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: '#94a3b8' }}>
+                      データ上限時の厳選方針
+                      <select value={pruneStrategy} onChange={e => setPruneStrategy(e.target.value)}
+                        style={{ background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 6, padding: '6px 8px', fontSize: 13 }}>
+                        <option value="balanced">バランス厳選 (ノイズ除去＋構図の多様性・推奨)</option>
+                        <option value="centroid">代表性重視 (典型的特徴を最優先)</option>
+                        <option value="diverse">多様性重視 (ポーズ・アングルの差分を優先)</option>
+                        <option value="hash">従来方式 (ハッシュ順)</option>
                       </select>
                     </label>
                   </div>

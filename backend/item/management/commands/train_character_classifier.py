@@ -421,6 +421,13 @@ class Command(BaseCommand):
                                   "learned embedding projection + margin loss — the literature survey's "
                                   "priority-1 approach; requires torch, see requirements-timm.txt). Only "
                                   "'logreg' honors --region-weight/--gray-weight.")
+        parser.add_argument('--prune-strategy',
+                             choices=['balanced', 'centroid', 'diverse', 'hash'], default='balanced',
+                             help="How to select training images for characters that exceed --max-images-per-character: "
+                                  "'balanced' (removes outliers, then samples diverse poses/angles via farthest-point sampling; recommended), "
+                                  "'centroid' (keeps images closest to the character's typical/average look), "
+                                  "'diverse' (maximizes visual variation across expressions and compositions), or "
+                                  "'hash' (legacy deterministic hash order).")
 
     # ------------------------------------------------------------------
     # Candidate survey: what COULD be trained on, before any extraction.
@@ -528,7 +535,80 @@ class Command(BaseCommand):
         return cands
 
     @staticmethod
-    def _select(cands, exclude, min_images, cap, cached_keys, per_item_cap=0):
+    def _prune_rows_by_feature(char_rows, cap, strategy='balanced'):
+        """Prunes a character's row list down to `cap` using their feature vectors.
+
+        Strategies:
+          - 'centroid': keeps items closest to the class centroid (most prototypical look).
+          - 'diverse': removes bottom 15% outliers, then uses greedy Farthest Point
+                       Sampling (FPS) to maximize pose/angle diversity.
+          - 'balanced': keeps top 75% prototypical candidates, then applies FPS to select
+                        `cap` items that balance high recognizability and visual diversity.
+        """
+        if len(char_rows) <= cap:
+            return char_rows
+
+        feats = np.array([r['feat'] for r in char_rows], dtype=np.float32)
+        norms = np.linalg.norm(feats, axis=1, keepdims=True)
+        norms = np.clip(norms, 1e-8, None)
+        unit_feats = feats / norms
+
+        # Centroid in normalized feature space
+        centroid = unit_feats.mean(axis=0)
+        c_norm = np.linalg.norm(centroid)
+        if c_norm > 1e-8:
+            centroid = centroid / c_norm
+        else:
+            centroid = unit_feats[0]
+
+        # Cosine similarity to centroid
+        sims = unit_feats @ centroid
+
+        # Kind priority bonus: slight boost for SOLO over REGION crops
+        # (solo images are full-composition portraits with cleaner boundaries)
+        solo_bonus = np.array([0.05 if r['kind'] == _SOLO else 0.0 for r in char_rows], dtype=np.float32)
+        adjusted_sims = sims + solo_bonus
+
+        if strategy == 'centroid':
+            best_indices = np.argsort(-adjusted_sims)[:cap]
+            return [char_rows[i] for i in sorted(best_indices)]
+
+        # Outlier filtering: drop bottom 15% lowest similarity if we have ample candidates
+        n = len(char_rows)
+        if n > cap * 1.2:
+            cutoff = np.percentile(sims, 15)
+            candidate_indices = np.where(sims >= cutoff)[0]
+            if len(candidate_indices) < cap:
+                candidate_indices = np.argsort(-sims)[:cap]
+        else:
+            candidate_indices = np.arange(n)
+
+        if strategy == 'balanced':
+            # For balanced, retain top 75% most prototypical candidates before diversity sampling
+            if len(candidate_indices) > cap:
+                top_k = max(cap, int(round(len(candidate_indices) * 0.75)))
+                candidate_indices = candidate_indices[np.argsort(-adjusted_sims[candidate_indices])[:top_k]]
+
+        # Greedy Farthest Point Sampling (FPS) on candidate_indices
+        cand_unit = unit_feats[candidate_indices]
+        start_local = int(np.argmax(adjusted_sims[candidate_indices]))
+        selected_local = [start_local]
+        min_dists = 1.0 - (cand_unit @ cand_unit[start_local])
+
+        while len(selected_local) < cap:
+            min_dists[selected_local] = -1.0
+            next_local = int(np.argmax(min_dists))
+            if min_dists[next_local] < 0:
+                break
+            selected_local.append(next_local)
+            new_dists = 1.0 - (cand_unit @ cand_unit[next_local])
+            min_dists = np.minimum(min_dists, new_dists)
+
+        chosen_indices = candidate_indices[selected_local]
+        return [char_rows[i] for i in sorted(chosen_indices)]
+
+    @staticmethod
+    def _select(cands, exclude, min_images, cap, cached_keys, per_item_cap=0, prune_strategy='balanced'):
         """-> (selected, per_char) where per_char is
         {char: (n_solo, n_region, n_used)} for every eligible character.
 
@@ -560,7 +640,20 @@ class Command(BaseCommand):
                 continue
             n_solo = sum(1 for c in cs if c['kind'] == _SOLO)
             if cap and len(cs) > cap:
-                cs = sorted(cs, key=priority)[:cap]
+                if prune_strategy == 'hash':
+                    cs = sorted(cs, key=priority)[:cap]
+                else:
+                    # When feature pruning is active, keep all cached rows (free) plus up to 2*cap
+                    # uncached so post-extraction feature pruning has a rich candidate pool
+                    # without spending excessive time on extracting new images.
+                    cached_cs = [c for c in cs if c['key'] in cached_keys]
+                    uncached_cs = [c for c in cs if c['key'] not in cached_keys]
+                    target_pool = max(cap, int(cap * 1.5))
+                    if len(cached_cs) >= target_pool:
+                        cs = cached_cs
+                    else:
+                        remaining = target_pool - len(cached_cs)
+                        cs = cached_cs + sorted(uncached_cs, key=priority)[:remaining]
             per_char[char] = (n_solo, sum(1 for c in by_char[char] if c['kind'] == _REGION), len(cs))
             selected.extend(cs)
         return selected, per_char
@@ -796,7 +889,10 @@ class Command(BaseCommand):
             self.stdout.write(f'Loaded {len(cands)} cached feature row(s) (no DB scan).\n')
         else:
             cands = self._survey(include_regions)
-        selected, per_char = self._select(cands, exclude, min_images, cap, set(cached), options['max_images_per_item'])
+        selected, per_char = self._select(
+            cands, exclude, min_images, cap, set(cached), options['max_images_per_item'],
+            prune_strategy=options['prune_strategy'],
+        )
         if len(per_char) < 2:
             raise CommandError(
                 f'Only {len(per_char)} character(s) have >= {min_images} images (solo'
@@ -841,6 +937,27 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f'Cached features to {feature_cache_path}\n'))
         if len(rows) < 2:
             raise CommandError('特徴抽出に失敗しました(詳細は上記のログを確認してください)。')
+
+        prune_strategy = options['prune_strategy']
+        if prune_strategy != 'hash' and cap:
+            rows_by_char = defaultdict(list)
+            for r in rows:
+                rows_by_char[r['char']].append(r)
+            pruned_rows = []
+            n_pruned_chars = 0
+            for ch, ch_rows in rows_by_char.items():
+                if len(ch_rows) > cap:
+                    ch_pruned = self._prune_rows_by_feature(ch_rows, cap, strategy=prune_strategy)
+                    pruned_rows.extend(ch_pruned)
+                    n_pruned_chars += 1
+                else:
+                    pruned_rows.extend(ch_rows)
+            if n_pruned_chars > 0:
+                self.stdout.write(
+                    f'Data pruning ({prune_strategy}): pruned {n_pruned_chars} character(s) exceeding cap={cap} '
+                    f'({len(rows)} -> {len(pruned_rows)} rows).\n'
+                )
+            rows = pruned_rows
 
         # ---- assemble matrix ----------------------------------------------
         feats, labels, groups, kinds, aug, base_w = [], [], [], [], [], []

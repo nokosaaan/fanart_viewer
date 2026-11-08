@@ -131,6 +131,10 @@ def _build_argv(options: dict) -> list:
     # what actually lets this be reused run after run: --feature-source
     # isn't exposed in this GUI at all, so it's always the 'tags' variant
     # of that default name.
+    prune_strategy = options.get('prune_strategy')
+    if prune_strategy in ('balanced', 'centroid', 'diverse', 'hash'):
+        argv += ['--prune-strategy', prune_strategy]
+
     if options.get('update_cache'):
         cache_name = (
             f'character_features_{backend_choice}.joblib' if feature_source == 'tags'
