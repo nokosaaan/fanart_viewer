@@ -47,12 +47,22 @@ The web service runs migrations on startup.
 
 上記いずれかをインストールした後は、PATHの変更を反映させるため**新しい**PowerShellウィンドウを開き直してください。
 
-### 2. 環境構築（初回のみ）
+### 2. 環境構築＆ビルド（親ディレクトリからの一気通貫スクリプト）
+
+リポジトリ直下（`fanart_viewer\`）にある [`build.ps1`](build.ps1) を実行すると、**`.venv` の作成/有効化 → `git pull` → 依存パッケージ更新 → `frontend` の `npm install` / `npm run build` → `exe\build.ps1`** までをディレクトリ移動なしで一気通貫で実行できます：
 
 ```powershell
 git clone <このリポジトリ>
 cd fanart_viewer
 git checkout exe-packaging
+
+# 初回セットアップからビルドまで一括実行（2回目以降の更新もこれ1つでOK）
+.\build.ps1
+```
+
+### 3. 個別コマンドで実行する場合（参考）
+
+```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 
@@ -66,24 +76,43 @@ pip install --no-deps dghs-imgutils pyrfc6266
 cd frontend
 npm install
 npm run build
-cd ..
-```
-
-### 3. ビルド
-
-```powershell
-cd exe
+cd ..\exe
 .\build.ps1
 ```
 
 `exe\dist\fanart_viewer\`フォルダが生成されます（`fanart_viewer.exe`はこの中）。配布する際はこのフォルダごと渡してください — `.exe`ファイル単体をコピーしても他の付属ファイルが無いと起動できません。
 
-### 4. 新しいコードをpullした後の再ビルド
+### 4. アップデート方法（新しいバージョンの反映）
 
-exeはコンパイル済みのスナップショットなので、`git pull`だけでは既に起動中/ビルド済みのものは何も変わりません。
-新しいコードを反映するには：`git pull`の後、`frontend\`で`npm run build`（フロントエンドに変更があった場合のみ）、
-そして`exe\`で`.\build.ps1`を再実行してください。DBに保存される設定・データ（認証情報、poller設定など）は
-再ビルド不要です — 次回起動時、あるいは再起動すら不要で即座に反映されます。
+#### A. 配布版（ビルド済み `fanart_viewer` フォルダ / ZIP）を利用している場合
+
+登録済みの画像・DB（`db.sqlite3`）・各種ログイン認証情報・学習済み分類器・ダウンロード済みブラウザ等の永続データはすべて **`%USERPROFILE%\.fanart_viewer`（`C:\Users\<ユーザー名>\.fanart_viewer`）** に分離して保存されており、`fanart_viewer\` フォルダ（`fanart_viewer.exe` と `_internal\`）の中には一切入っていません。
+
+そのため、配布版のアップデートは以下の手順で**フォルダを丸ごと置き換えるだけ**で完了します：
+
+1. 起動中の `fanart_viewer.exe` があれば終了します。
+2. 古い `fanart_viewer\` フォルダを削除します（または別名に退避します）。
+   ※ 古いフォルダの上に新しいファイルを「上書きコピー」すると、新バージョンで不要になった古いファイルが `_internal\` 内に残って不具合の原因になるため、**古い `fanart_viewer\` フォルダごと削除してから新しいフォルダを配置**してください。
+3. 新しいバージョンの `fanart_viewer\` フォルダを展開し、その中の `fanart_viewer.exe` を起動します。
+4. `%USERPROFILE%\.fanart_viewer` 内のデータはそのまま自動的に引き継がれ、必要なDBマイグレーションも起動時に自動適用されます。
+
+#### B. ソースコードから自分でビルドしている場合（`git pull` 後）
+
+親ディレクトリ（`fanart_viewer\`）で以下を1行実行するだけで、`.venv` 有効化 → `git pull` → `npm install`（変更時のみ）→ `npm run build` → `exe\build.ps1`（高速差分同期またはフルビルド）まで自動で完了します：
+
+```powershell
+.\build.ps1
+```
+
+主なオプション（すべて親ディレクトリ `fanart_viewer\` から指定可能）：
+- `.\build.ps1` : 通常更新（`.venv` 有効化 → `git pull` → フロントエンドビルド → `exe` 高速差分反映）
+- `.\build.ps1 -NoPull` : `git pull` をスキップして現在のローカル変更だけをビルド
+- `.\build.ps1 -SkipFrontend` : フロントエンドのビルドをスキップしてバックエンド/exeのみ反映
+- `.\build.ps1 -InstallDeps` : `pip install` と `npm install` を強制再実行
+- `.\build.ps1 -Full` : PyInstaller によるフルビルドを強制実行
+- `.\build.ps1 -Clean` : `exe\build` と `exe\dist` を全消去してクリーンビルド
+
+DBに保存される設定・データ（認証情報、poller設定など）は再ビルド後もそのまま引き継がれます。
 
 ### 5. 実行方法
 

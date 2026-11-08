@@ -9,24 +9,103 @@
 # and backend/requirements.txt + pyinstaller + waitress installed into
 # it (see the one-time setup below). Invoke as:
 #   cd <repo>\fanart_viewer\exe
-#   .\build.ps1            # Fast incremental build using PyInstaller cache (default)
-#   .\build.ps1 -Clean     # Clean build: wipe build/ and dist/
+#   .\build.ps1            # Fast sync (1-3s) if base build exists, else incremental PyInstaller build
+#   .\build.ps1 -Full      # Force PyInstaller run (uses spec collect cache + incremental COLLECT)
+#   .\build.ps1 -Clean     # Clean build: wipe build/ and dist/ and rebuild from scratch
 #   .\build.ps1 -Upx       # Enable UPX compression (slower build, smaller size)
 
 param(
     [switch]$Clean,
+    [switch]$Full,
     [switch]$Upx
 )
 
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+$DistAppDir = Join-Path $PSScriptRoot "dist\fanart_viewer"
+$ExePath = Join-Path $DistAppDir "fanart_viewer.exe"
+$InternalDir = Join-Path $DistAppDir "_internal"
+$FastSyncStamp = Join-Path $InternalDir ".fast_sync_ready"
+$BackendRoot = Resolve-Path (Join-Path $PSScriptRoot "..\backend")
+$FrontendDist = Join-Path $PSScriptRoot "..\frontend\dist"
+
+function Sync-DirectoryIncremental {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+    if (-not (Test-Path $Source)) {
+        return
+    }
+    # robocopy /MIR mirrors source to destination incrementally (comparing size & timestamp),
+    # excluding __pycache__ and .pyc files. Exit codes 0..7 indicate success.
+    $null = & robocopy $Source $Destination /MIR /XD "__pycache__" /XF "*.pyc" "*.pyo" /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /MT:8
+    if ($LASTEXITCODE -ge 8) {
+        throw "robocopy failed syncing '$Source' -> '$Destination' (exit code $LASTEXITCODE)"
+    }
+    $global:LASTEXITCODE = 0
+}
+
+function Sync-AppCodeAndFrontend {
+    Write-Host "Syncing backend packages (backend, item, security) and frontend/dist into _internal/..."
+    foreach ($pkg in @("backend", "item", "security")) {
+        $srcPkg = Join-Path $BackendRoot $pkg
+        $dstPkg = Join-Path $InternalDir $pkg
+        Sync-DirectoryIncremental -Source $srcPkg -Destination $dstPkg
+    }
+    if (Test-Path $FrontendDist) {
+        $dstFrontend = Join-Path $InternalDir "frontend_dist"
+        Sync-DirectoryIncremental -Source (Resolve-Path $FrontendDist) -Destination $dstFrontend
+    }
+}
+
 if ($Clean) {
     Write-Host "Clean build: removing build and dist directories..."
     Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
 }
-else {
-    Write-Host "Incremental build: keeping cache for faster build (-Clean to rebuild from scratch)..."
+
+# Check whether we can use Fast Sync mode (skipping PyInstaller completely)
+$CanFastSync = (-not $Clean) -and (-not $Full) -and (-not $Upx) -and (Test-Path $ExePath) -and (Test-Path $FastSyncStamp)
+$RebuildReason = ""
+
+if ($CanFastSync) {
+    $stampTime = (Get-Item $FastSyncStamp).LastWriteTimeUtc
+    $triggerFiles = @(
+        (Join-Path $PSScriptRoot "fanart_viewer.spec"),
+        (Join-Path $PSScriptRoot "launcher.py"),
+        (Join-Path $PSScriptRoot "splash.png"),
+        (Join-Path $PSScriptRoot "requirements.txt"),
+        (Join-Path $BackendRoot "requirements.txt"),
+        (Join-Path $BackendRoot "requirements-timm.txt"),
+        (Join-Path $PSScriptRoot "..\.venv\Lib\site-packages")
+    )
+    foreach ($tf in $triggerFiles) {
+        if (Test-Path $tf) {
+            $itemTime = (Get-Item $tf).LastWriteTimeUtc
+            if ($itemTime -gt $stampTime) {
+                $CanFastSync = $false
+                $RebuildReason = "$(Split-Path $tf -Leaf) was updated"
+                break
+            }
+        }
+    }
+}
+
+if ($CanFastSync) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host "Fast sync build: base executable is up to date. Updating backend & frontend files only (-Full to force PyInstaller, -Clean to wipe)..."
+    Sync-AppCodeAndFrontend
+    $sw.Stop()
+    Write-Host ("Fast sync completed in {0:N2}s: $ExePath" -f $sw.Elapsed.TotalSeconds)
+    exit 0
+}
+
+if ($RebuildReason) {
+    Write-Host "Running PyInstaller build ($RebuildReason)..."
+}
+elseif (-not $Clean) {
+    Write-Host "Incremental PyInstaller build: keeping cache for faster build (-Clean to rebuild from scratch)..."
 }
 
 if ($Upx) {
@@ -41,6 +120,12 @@ else {
 # that file's header comment for why (collect_submodules('item.migrations')
 # needs backend/ on sys.path before it runs, which only the spec controls).
 pyinstaller --noconfirm fanart_viewer.spec
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE"
+}
 
-Write-Host "Built: $PSScriptRoot\dist\fanart_viewer\fanart_viewer.exe (onedir -- ship the whole fanart_viewer\ folder, not just the .exe)"
+Sync-AppCodeAndFrontend
+Set-Content -Path $FastSyncStamp -Value ([DateTime]::UtcNow.ToString("o")) -Encoding UTF8
+
+Write-Host "Built: $ExePath (onedir -- ship the whole fanart_viewer\ folder, not just the .exe)"
 

@@ -233,6 +233,25 @@ os.environ.setdefault('FRONTEND_DIST', _bundle_path('frontend_dist'))
 # alongside `backend/` there (see fanart_viewer.spec's Analysis() datas).
 sys.path.insert(0, _bundle_path('.'))
 
+# Ensure on-disk .py files under _internal/{backend,item,security} always
+# take precedence over any bytecode that might exist in PYZ, allowing
+# build.ps1 / build.sh Fast-Sync mode to update backend code in seconds
+# without re-running PyInstaller.
+try:
+    import pyimod02_importers
+
+    if getattr(pyimod02_importers, 'pyz_archive', None) is not None:
+        for _app_pkg in ('backend', 'item', 'security'):
+            if os.path.isdir(_bundle_path(_app_pkg)):
+                for _mod_key in [
+                    k for k in pyimod02_importers.pyz_archive.toc
+                    if k == _app_pkg or k.startswith(_app_pkg + '.')
+                ]:
+                    del pyimod02_importers.pyz_archive.toc[_mod_key]
+        pyimod02_importers._pyz_tree = None
+except ImportError:
+    pass
+
 HOST = '127.0.0.1'
 PORT = 8000
 
