@@ -101,17 +101,14 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
     runDelete({ keep_ids: [first.id] }, null)
   }
 
-  // 選択した画像を削除
+  // 選択した画像を削除 ※確認アラートなしで即座に実行
   function deleteSelected() {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
-    runDelete(
-      { delete_ids: ids },
-      `選択した ${ids.length} 枚の画像を削除しますか？ 元に戻せません。`
-    )
+    runDelete({ delete_ids: ids }, null)
   }
 
-  // 選択した画像だけ残す（それ以外を削除）
+  // 選択した画像だけ残す（それ以外を削除）※確認アラートなしで即座に実行
   function keepSelected() {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
@@ -120,10 +117,7 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
       alert('削除される画像がありません（すべて選択されています）')
       return
     }
-    runDelete(
-      { keep_ids: ids },
-      `選択した ${ids.length} 枚だけを残し、それ以外の ${removeCount} 枚を削除しますか？ 元に戻せません。`
-    )
+    runDelete({ keep_ids: ids }, null)
   }
 
   // 全画像削除
@@ -427,18 +421,18 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
                 style={{ fontSize: 11, padding: '3px 10px', background: '#a33', color: '#fff' }}
                 onClick={deleteSelected}
                 disabled={deleting || selectedIds.size === 0}
-                title="チェックを入れた画像のみを削除します"
+                title="チェックを入れた画像のみを削除します（確認不要で即実行）"
               >
-                選んだ画像を削除
+                {deleting ? '…' : '選んだ画像を削除'}
               </button>
               <button
                 className="btn"
                 style={{ fontSize: 11, padding: '3px 10px', background: '#166534', color: '#fff' }}
                 onClick={keepSelected}
                 disabled={deleting || selectedIds.size === 0}
-                title="チェックを入れた画像のみを残し、それ以外を削除します"
+                title="チェックを入れた画像のみを残し、それ以外を削除します（確認不要で即実行）"
               >
-                選んだ画像だけ残す
+                {deleting ? '…' : '選んだ画像だけ残す'}
               </button>
             </div>
           )}
