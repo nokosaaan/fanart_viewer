@@ -101,6 +101,24 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     } catch {}
   }
 
+  // Reader layout mode: 'comic' (縦スクロール漫画ビュー) | 'single' (1枚ずつ表示)
+  const [readerLayout, setReaderLayout] = useState(() => {
+    try {
+      return localStorage.getItem('fv_reader_layout') || 'comic'
+    } catch {
+      return 'comic'
+    }
+  })
+
+  function changeReaderLayout(mode) {
+    setReaderLayout(mode)
+    try {
+      localStorage.setItem('fv_reader_layout', mode)
+    } catch {}
+  }
+
+  const comicContainerRef = useRef(null)
+
   const [translationNotice, setTranslationNotice] = useState('')
   // Ids deleted from THIS item's own filmstrip but not yet reflected by a
   // fresh fetch — see deleteCurrentPreview. Deleting one image used to
@@ -193,18 +211,22 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       // When edit modal is open, let user type/navigate within edit window without hotkeys moving background
       if(editOpen) return
       if(e.key==='Escape') closeLightbox()
-      // Up/Down move to the prev/next ITEM, matching the mouse wheel below
-      // (deltaY drives next()/prev()) — Left/Right instead page through
-      // THIS item's own images. Keeping both input methods on the same
-      // axis for "next item" avoids the two disagreeing with each other.
-      if(e.key==='ArrowUp') prev()
-      if(e.key==='ArrowDown') next()
-      if(e.key==='ArrowLeft'){ e.preventDefault(); prevPreviewImage() }
-      if(e.key==='ArrowRight'){ e.preventDefault(); nextPreviewImage() }
+
+      if(readerLayout === 'comic'){
+        // In comic vertical reader, Left/Right navigate between items, while native vertical scroll handles pages
+        if(e.key==='ArrowLeft'){ e.preventDefault(); prev(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0 }
+        if(e.key==='ArrowRight'){ e.preventDefault(); next(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0 }
+      } else {
+        // Single page mode: Up/Down move to prev/next item, Left/Right page through current item's images
+        if(e.key==='ArrowUp') prev()
+        if(e.key==='ArrowDown') next()
+        if(e.key==='ArrowLeft'){ e.preventDefault(); prevPreviewImage() }
+        if(e.key==='ArrowRight'){ e.preventDefault(); nextPreviewImage() }
+      }
     }
     window.addEventListener('keydown', onKey)
     return ()=> window.removeEventListener('keydown', onKey)
-  }, [selectedIndex, previewItems, previews, editOpen])
+  }, [selectedIndex, previewItems, previews, editOpen, readerLayout])
 
   // wheel navigation: accumulate deltas to avoid accidental small scrolls
   const wheelAccRef = useRef(0)
@@ -219,6 +241,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       if(selectedIndex===null) return
       // When edit modal is open, scroll only inside the edit window — do not switch items in the background
       if(editOpen) return
+      // In comic vertical reader mode, let the user scroll smoothly through the comic pages
+      if(readerLayout === 'comic') return
       // If event originated from an overlay/form/dialog outside lightbox main area, do not trigger item nav
       if(e.target && e.target.closest && (e.target.closest('[role="dialog"]') || e.target.closest('form'))) return
 
@@ -238,7 +262,28 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     // attach to window to capture wheel inside modal
     window.addEventListener('wheel', handleWheel, {passive: true})
     return ()=> window.removeEventListener('wheel', handleWheel)
-  }, [selectedIndex, previewItems, editOpen])
+  }, [selectedIndex, previewItems, editOpen, readerLayout])
+
+  function handleComicScroll(e){
+    if(readerLayout !== 'comic') return
+    const container = e.currentTarget
+    if(!container) return
+    const containerTop = container.getBoundingClientRect().top
+    const threshold = containerTop + 140
+    const alive = (previews || []).filter(p => !deletedPreviewIds.has(p.id))
+    for(let i=0; i<alive.length; i++){
+      const el = document.getElementById(`comic-page-${alive[i].index}`)
+      if(el){
+        const rect = el.getBoundingClientRect()
+        if(rect.top <= threshold && rect.bottom >= threshold){
+          if(currentPreviewIdxRef.current !== alive[i].index){
+            selectPreviewIndex(alive[i].index)
+          }
+          break
+        }
+      }
+    }
+  }
 
   function openLarge(i){
     const it = previewItems[i]
@@ -269,6 +314,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     setSelectMode(false)
     setPickedIds(new Set())
     currentPreviewIdxRef.current = 0
+    if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0
     if(!item) return
     try{
       const r = await fetch(`/api/items/${item.id}/previews/`)
@@ -699,43 +745,98 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       {selectedIndex!==null && previewItems[selectedIndex] && (
         <div className="preview-modal-backdrop" onClick={closeLightbox}>
           <div className="preview-modal">
-              {/* Left/right full-height edge zones for consistent click areas */}
-            <div className="modal-edge modal-edge-left" onClick={e=>{e.stopPropagation(); prev()}} aria-label="Previous" />
-            <div className="modal-edge modal-edge-right" onClick={e=>{e.stopPropagation(); next()}} aria-label="Next" />
+            {/* Left/right edge click zones only active in single-page mode so they don't block vertical scrolling */}
+            {readerLayout === 'single' && (
+              <>
+                <div className="modal-edge modal-edge-left" onClick={e=>{e.stopPropagation(); prev()}} aria-label="Previous" />
+                <div className="modal-edge modal-edge-right" onClick={e=>{e.stopPropagation(); next()}} aria-label="Next" />
+              </>
+            )}
 
-              {/* Close button (top-right) */}
-              <button className="modal-close" onClick={closeLightbox} aria-label="Close">✕</button>
+            {/* Close button (top-right) */}
+            <button className="modal-close" onClick={closeLightbox} aria-label="Close">✕</button>
 
             <div className="modal-content" onClick={e=>e.stopPropagation()}>
               {(() => {
-                // The URL powering <img> below is itself already a raw-bytes
-                // endpoint (ItemViewSet.preview: HttpResponse(img.data,
-                // content_type=...), no wrapping page) — exactly the same
-                // shape as an x.com pbs.twimg.com link. So "open the image
-                // alone in a new tab, right-click, save" needs nothing new
-                // server-side; just a link to this same URL, kept in sync
-                // with whichever page of a multi-image item is on screen
-                // (currentPreviewIdx) so it's never just "the first page"
-                // regardless of what's actually being looked at.
                 const hasAnyPreview = (previews && previews.length>0)
-                const aliveCount = (previews || []).filter(p => !deletedPreviewIds.has(p.id)).length
+                const alivePreviews = (previews || []).filter(p => !deletedPreviewIds.has(p.id))
+                const aliveCount = alivePreviews.length
                 const previewImgSrc = hasAnyPreview
                   ? `/api/items/${previewItems[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
                   : `/api/items/${previewItems[selectedIndex].id}/preview/`
-                // hasAnyPreview && aliveCount===0 means every one of this
-                // item's images was just tombstoned in this same session —
-                // currentPreviewIdx still points at a now-deleted entry
-                // (nothing left to move onto, see markPreviewDeletedLocally),
-                // so requesting it would just 404. Show a plain notice
-                // instead until the next reload closes this modal for real
-                // (the item itself will drop out of previewItems once
-                // item-preview-updated's has_preview flip lands).
                 const allDeleted = hasAnyPreview && aliveCount===0
                 return (
-              <div className="modal-top">
-                <div className="modal-main">
+              <div className={`modal-top ${readerLayout === 'comic' ? 'comic-mode' : ''}`}>
+                <div className={`modal-main ${readerLayout === 'comic' ? 'comic-mode' : ''}`}>
                   {allDeleted ? (
                     <div className="preview-modal-all-deleted">この投稿の画像はすべて削除されました</div>
+                  ) : readerLayout === 'comic' && aliveCount > 0 ? (
+                    <div
+                      ref={comicContainerRef}
+                      className="comic-scroll-container"
+                      onScroll={handleComicScroll}
+                    >
+                      {previews.map(p => {
+                        if (deletedPreviewIds.has(p.id)) return null
+                        return (
+                          <div
+                            key={p.id}
+                            id={`comic-page-${p.index}`}
+                            className="comic-page-wrap"
+                          >
+                            <div className="comic-page-header">
+                              <span>ページ {p.index + 1} / {aliveCount}</span>
+                              <span style={{ opacity: 0.7 }}>{p.filename || ''}</span>
+                            </div>
+                            <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
+                              <img
+                                className="comic-page-img"
+                                src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`}
+                                alt={`Page ${p.index + 1}`}
+                                loading="lazy"
+                              />
+                              <ImageTranslationOverlay
+                                translations={translationsMap[`${previewItems[selectedIndex].id}_${p.index}`]}
+                                mode={translationMode}
+                              />
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <div className="comic-finish-footer">
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#f8fafc', marginBottom: 6 }}>
+                          📖 この話を読み終わりました (全 {aliveCount} ページ)
+                        </div>
+                        <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+                          {(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].title || ''}
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <button
+                            className="btn"
+                            onClick={() => { prev(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0 }}
+                            disabled={selectedIndex === 0}
+                            style={{ padding: '8px 16px', fontSize: 13 }}
+                          >
+                            ◀ 前の作品へ
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={() => { if(comicContainerRef.current) comicContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                            style={{ padding: '8px 14px', fontSize: 13 }}
+                          >
+                            ⬆ 最初に戻る
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={() => { next(); if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0 }}
+                            disabled={selectedIndex >= previewItems.length - 1}
+                            style={{ padding: '8px 20px', fontSize: 13, background: '#2563eb', color: '#fff', fontWeight: 600 }}
+                          >
+                            次の作品へ ▶
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   ) : (
                     <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', maxWidth: '70vw', maxHeight: '78vh' }}>
                       <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
@@ -744,6 +845,54 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                   )}
                 </div>
                 <div className="modal-meta">
+                  {/* View layout mode switch */}
+                  <div style={{ display: 'flex', gap: 4, background: 'rgba(15, 23, 42, 0.6)', padding: 3, borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', marginBottom: 8 }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => changeReaderLayout('comic')}
+                      style={{
+                        flex: 1,
+                        fontSize: 12,
+                        padding: '6px 8px',
+                        background: readerLayout === 'comic' ? '#2563eb' : 'transparent',
+                        color: readerLayout === 'comic' ? '#fff' : '#94a3b8',
+                        border: 'none',
+                        borderRadius: 4,
+                        fontWeight: readerLayout === 'comic' ? 600 : 400,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5
+                      }}
+                      title="漫画ビュー: 縦スクロールで1ページ内に全画像をおさめ、スクロールで一気に読み進めます"
+                    >
+                      <span>📖</span> 漫画 (縦スクロール)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => changeReaderLayout('single')}
+                      style={{
+                        flex: 1,
+                        fontSize: 12,
+                        padding: '6px 8px',
+                        background: readerLayout === 'single' ? '#2563eb' : 'transparent',
+                        color: readerLayout === 'single' ? '#fff' : '#94a3b8',
+                        border: 'none',
+                        borderRadius: 4,
+                        fontWeight: readerLayout === 'single' ? 600 : 400,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5
+                      }}
+                      title="単一ページビュー: 1画像ずつ大きく切り替えて表示します"
+                    >
+                      <span>🖼</span> 単一ページ
+                    </button>
+                  </div>
+
                   <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
                     <div className="preview-title">{(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0]) || previewItems[selectedIndex].titles || previewItems[selectedIndex].title || ''}</div>
                     {previewItems[selectedIndex].situation && (
@@ -908,7 +1057,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               })()}
               <div className="modal-timeline-wrap">
                 {previews && previews.length>1 && (
-                  <div className="modal-timeline-hint">←/→キーでこのアイテムの前後のページへ</div>
+                  <div className="modal-timeline-hint">
+                    {readerLayout === 'comic'
+                      ? '縦スクロールで通し読み / サムネイルクリックで各ページへ移動 / ←・→キーで前後の作品へ'
+                      : '←/→キーでこのアイテムの前後のページへ / ↑/↓キーで前後の作品へ'}
+                  </div>
                 )}
                 {!readOnly && previews && previews.filter(p => !deletedPreviewIds.has(p.id)).length > 1 && (
                   <div style={{display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', marginBottom:6, fontSize:12}}>
@@ -970,7 +1123,17 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                           className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}
                           style={selectMode && pickedIds.has(p.id) ? {borderColor:'#3b82f6', opacity:1} : undefined}
                           title={p.filename ? `${p.index + 1}. ${p.filename}` : `ページ ${p.index + 1}`}
-                          onClick={()=> selectMode ? togglePicked(p.id) : selectPreviewIndex(p.index)} />
+                          onClick={()=>{
+                            if(selectMode){
+                              togglePicked(p.id)
+                            } else {
+                              selectPreviewIndex(p.index)
+                              if(readerLayout === 'comic'){
+                                const el = document.getElementById(`comic-page-${p.index}`)
+                                if(el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                              }
+                            }
+                          }} />
                         <span style={{position:'absolute', bottom:2, right:2, background:'rgba(0,0,0,0.65)', color:'#fff',
                           fontSize:9, padding:'1px 4px', borderRadius:2, pointerEvents:'none', lineHeight:1}}>
                           {p.index + 1}

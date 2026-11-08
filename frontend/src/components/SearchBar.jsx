@@ -1,7 +1,7 @@
 import React, {useState} from 'react'
 import { DEFAULT_SITUATIONS } from '../lib/situations'
 
-export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, readOnly, situations = DEFAULT_SITUATIONS}){
+export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, multiImageOnly, setMultiImageOnly, readOnly, situations = DEFAULT_SITUATIONS}){
   const [open, setOpen] = useState(false)
 
   // Empty query would otherwise match every suggestion (''.includes('') is
@@ -68,6 +68,13 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
                 title="プレビュー画像が無いアイテムだけ表示 — 未取得のアイテムをまとめて見つけたいときに"
               >
                 {previewMissingOnly ? 'Preview: MISSING' : 'Preview: ANY'}
+              </button>
+              <button
+                className={`cp-chip ${multiImageOnly ? 'enabled' : ''}`}
+                onClick={() => setMultiImageOnly && setMultiImageOnly(v => !v)}
+                title="2枚以上のプレビュー画像を持つアイテムだけ表示 — 余計な画像を持つアイテムの確認・整理に"
+              >
+                {multiImageOnly ? '複数画像: ON' : '複数画像: ANY'}
               </button>
               <button
                 className={`cp-chip ${includeCP ? 'enabled' : ''}`}

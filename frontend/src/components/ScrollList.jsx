@@ -368,16 +368,39 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
 
         <div className="col preview-col">
           <div className="col-header">Preview</div>
-          <div className="preview-wrap">
+          <div className="preview-wrap" style={{ position: 'relative' }}>
             {hasPreviewLocal ? (
-              <img
-                className="preview"
-                src={`/api/items/${it.id}/preview/`}
-                alt="preview"
-                style={{ cursor: onOpenPreview ? 'zoom-in' : undefined }}
-                title="Preview Timelineでこのアイテムを開く"
-                onClick={() => onOpenPreview && onOpenPreview(it.id)}
-              />
+              <>
+                <img
+                  className="preview"
+                  src={`/api/items/${it.id}/preview/?index=0`}
+                  alt="preview"
+                  style={{ cursor: onOpenPreview ? 'zoom-in' : undefined }}
+                  title="Preview Timelineでこのアイテムを開く"
+                  onClick={() => onOpenPreview && onOpenPreview(it.id)}
+                />
+                {it.preview_count > 1 && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: 4,
+                      right: 4,
+                      background: 'rgba(15, 23, 42, 0.85)',
+                      color: '#38bdf8',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      padding: '1px 5px',
+                      borderRadius: 4,
+                      border: '1px solid rgba(56, 189, 248, 0.4)',
+                      pointerEvents: 'none',
+                      lineHeight: 1.2
+                    }}
+                    title={`全 ${it.preview_count} 枚の画像が保存されています`}
+                  >
+                    {it.preview_count}枚
+                  </span>
+                )}
+              </>
             ) : (
               // show link only in preview area; actions are provided next to titles
               <div style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={it.link}>

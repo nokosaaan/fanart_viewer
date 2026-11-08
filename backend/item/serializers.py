@@ -6,12 +6,29 @@ class ItemSerializer(serializers.ModelSerializer):
     # Expose a lightweight boolean so list endpoints can show whether
     # a preview exists without embedding the full binary data in every item.
     has_preview = serializers.SerializerMethodField()
+    preview_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
         # exclude binary field from normal serialized output (use detail `preview/` endpoint to fetch bytes)
         exclude = ('preview_data',)
-        read_only_fields = ('preview_content_type', 'has_preview')
+        read_only_fields = ('preview_content_type', 'has_preview', 'preview_count')
+
+    def get_preview_count(self, obj):
+        if hasattr(obj, 'annotated_preview_count'):
+            cnt = obj.annotated_preview_count
+            if cnt > 0:
+                return cnt
+        try:
+            if hasattr(obj, 'preview_images'):
+                c = obj.preview_images.count()
+                if c > 0:
+                    return c
+        except Exception:
+            pass
+        if getattr(obj, 'preview_data', None):
+            return 1
+        return 0
 
     def get_has_preview(self, obj):
         # Use annotated boolean if precomputed by queryset (avoids N+1 queries)

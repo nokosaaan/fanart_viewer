@@ -9,7 +9,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
-from django.db.models import Q, Exists, OuterRef
+from django.db.models import Q, Exists, OuterRef, Count
 from django.utils import timezone
 from collections import Counter, defaultdict
 import hashlib
@@ -2417,7 +2417,8 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
     queryset = Item.objects.defer('preview_data').annotate(
-        annotated_has_preview=Exists(PreviewImage.objects.filter(item=OuterRef('pk')))
+        annotated_has_preview=Exists(PreviewImage.objects.filter(item=OuterRef('pk'))),
+        annotated_preview_count=Count('preview_images', distinct=True)
     ).order_by('-id')
     serializer_class = ItemSerializer
 
@@ -2455,8 +2456,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             return HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
 
         if imgs:
-            best = max(imgs, key=lambda x: len(x.data or b''))
-            return HttpResponse(best.data, content_type=best.content_type or 'application/octet-stream')
+            first = imgs[0]
+            return HttpResponse(first.data, content_type=first.content_type or 'application/octet-stream')
 
         if item.preview_data:
             return HttpResponse(item.preview_data, content_type=item.preview_content_type or 'application/octet-stream')

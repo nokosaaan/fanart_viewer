@@ -12,6 +12,7 @@ import BackupManager from './components/BackupManager'
 import TrainClassifierManager from './components/TrainClassifierManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import ItemQueueManager from './components/ItemQueueManager'
+import MultiImageManager from './components/MultiImageManager'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
 import TwitterFetchManager from './components/TwitterFetchManager'
@@ -115,6 +116,7 @@ function AppMain({ role, onLogout }){
   // back, keep going" no longer needs a whole other window.
   const [itemQueueOpen, setItemQueueOpen] = useState(false)
   const [itemQueueMounted, setItemQueueMounted] = useState(false)
+  const [multiImageManagerOpen, setMultiImageManagerOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
@@ -220,6 +222,9 @@ function AppMain({ role, onLogout }){
   // "取得キュー" button (FetchQueueManager). In-memory only — cleared on reload.
   const [fetchQueue, setFetchQueue] = useState([])
   const [fetchQueueOpen, setFetchQueueOpen] = useState(false)
+  const multiImageItemsCount = useMemo(() => {
+    return (items || []).filter(it => it && it.has_preview && it.preview_count > 1).length
+  }, [items])
   const [manualAddOpen, setManualAddOpen] = useState(false)
   // The item ManualAddItem just created — opened straight into the normal
   // edit form (titles/characters/tags/situation are empty at creation
@@ -378,6 +383,7 @@ function AppMain({ role, onLogout }){
   const [situationFilter, setSituationFilter] = useState('ALL')
   const [titleMissingOnly, setTitleMissingOnly] = useState(false)
   const [previewMissingOnly, setPreviewMissingOnly] = useState(false)
+  const [multiImageOnly, setMultiImageOnly] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
   const PAGE_SIZE = 50
   const [nextPageUrl, setNextPageUrl] = useState(null)
@@ -580,7 +586,7 @@ function AppMain({ role, onLogout }){
   // honoring the current filter.
   useEffect(()=>{
     const searching = query.trim() !== '' || filters.length > 0 ||
-      situationFilter !== 'ALL' || titleMissingOnly || previewMissingOnly
+      situationFilter !== 'ALL' || titleMissingOnly || previewMissingOnly || multiImageOnly
     if((!searching && !restoredFromCacheRef.current) || !nextPageUrl || fullIndexStartedRef.current) return
     fullIndexStartedRef.current = true
     let cancelled = false
@@ -608,7 +614,7 @@ function AppMain({ role, onLogout }){
       }
     })()
     return ()=>{ cancelled = true }
-  }, [query, filters, situationFilter, titleMissingOnly, previewMissingOnly, nextPageUrl])
+  }, [query, filters, situationFilter, titleMissingOnly, previewMissingOnly, multiImageOnly, nextPageUrl])
 
   const suggestions = useMemo(()=>{
     const set = new Set()
@@ -666,13 +672,14 @@ function AppMain({ role, onLogout }){
       // serializers.py) -- no extra request needed, this is just a filter
       // over data already loaded with the item.
       if(previewMissingOnly && (it.has_preview === true || it.has_preview === 'true')) return false
+      if(multiImageOnly && (!it.has_preview || (it.preview_count || 1) <= 1)) return false
       if(filters.length===0 && q==='') return true
       const hay = [ ...(it.titles||[]), ...(it.characters||[]), ...(it.tags||[]), it.artist, it.link ].join(' ').toLowerCase()
       const matchesQuery = q==='' || hay.includes(q)
       const matchesFilters = filters.every(f => hay.includes(f.toLowerCase()))
       return matchesQuery && matchesFilters
     })
-  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, previewMissingOnly, readOnly])
+  }, [items, query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, previewMissingOnly, multiImageOnly, readOnly])
 
 
   // pagination over filtered results
@@ -680,7 +687,7 @@ function AppMain({ role, onLogout }){
   useEffect(()=>{
     // reset to first page if filters change
     setPageIndex(0)
-  }, [query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, previewMissingOnly])
+  }, [query, filters, includeCP, includeR18, situationFilter, titleMissingOnly, previewMissingOnly, multiImageOnly])
 
   const paginatedItems = useMemo(()=>{
     const start = pageIndex * PAGE_SIZE
@@ -875,6 +882,17 @@ function AppMain({ role, onLogout }){
                 tourId: 'menu-fetch-queue',
               },
               { label: <MenuIconLabel iconNode={<ItemQueueIcon />} text="編集キュー" />, onClick: () => { setItemQueueMounted(true); setItemQueueOpen(true) }, tourId: 'menu-item-queue' },
+              {
+                label: (
+                  <MenuIconLabel
+                    iconNode="🖼️"
+                    text={multiImageItemsCount > 0 ? `複数枚画像の整理 (${multiImageItemsCount})` : '複数枚画像の整理'}
+                  />
+                ),
+                onClick: () => setMultiImageManagerOpen(true),
+                badge: multiImageItemsCount > 0 ? multiImageItemsCount : null,
+                tourId: 'menu-multi-image',
+              },
               { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true), tourId: 'menu-manual-add' },
               { divider: true },
               {
@@ -945,6 +963,8 @@ function AppMain({ role, onLogout }){
         setTitleMissingOnly={setTitleMissingOnly}
         previewMissingOnly={previewMissingOnly}
         setPreviewMissingOnly={setPreviewMissingOnly}
+        multiImageOnly={multiImageOnly}
+        setMultiImageOnly={setMultiImageOnly}
         readOnly={readOnly}
       />
       <div className="view-mode-toggle">
@@ -1043,6 +1063,17 @@ function AppMain({ role, onLogout }){
           defaultViewMode={defaultViewModeSetting}
           onDefaultViewModeChange={chooseDefaultViewMode}
           onClose={() => setThemeOpen(false)}
+        />
+      )}
+      {multiImageManagerOpen && (
+        <MultiImageManager
+          onClose={() => setMultiImageManagerOpen(false)}
+          allItems={items}
+          onOpenPreview={(id) => {
+            setMultiImageManagerOpen(false)
+            openPreviewForItem(id)
+          }}
+          readOnly={readOnly}
         />
       )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}

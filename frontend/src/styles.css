@@ -165,6 +165,79 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
 .preview-modal-img{ width:auto; height:auto; max-width:70vw; max-height:78vh; object-fit:contain; border-radius:8px; background:#000 }
 .modal-meta{ flex:0 0 auto; max-width:320px; display:flex; flex-direction:column; gap:8px }
 
+/* Comic / vertical scroll reader mode */
+.modal-main.comic-mode{
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+  height: 100%;
+}
+.comic-scroll-container{
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 12px 60px;
+  box-sizing: border-box;
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.comic-scroll-container::-webkit-scrollbar{ width: 8px }
+.comic-scroll-container::-webkit-scrollbar-track{ background: transparent }
+.comic-scroll-container::-webkit-scrollbar-thumb{ background: rgba(255, 255, 255, 0.25); border-radius: 4px }
+.comic-scroll-container::-webkit-scrollbar-thumb:hover{ background: rgba(255, 255, 255, 0.45) }
+
+.comic-page-wrap{
+  width: 100%;
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 14px;
+  position: relative;
+}
+.comic-page-header{
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.7);
+  border-radius: 6px 6px 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: none;
+  box-sizing: border-box;
+}
+.comic-page-img{
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  display: block;
+  border-radius: 0 0 6px 6px;
+  background: #000;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: none;
+}
+.comic-finish-footer{
+  margin-top: 24px;
+  padding: 32px 16px;
+  text-align: center;
+  background: rgba(15, 23, 42, 0.6);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: 100%;
+  max-width: 860px;
+  box-sizing: border-box;
+}
+
+
 /* Timeline: full-width horizontal scroll strip at the bottom of the modal */
 .modal-timeline-wrap{ flex:0 0 auto; border-top:1px solid rgba(255,255,255,0.08); padding-top:6px }
 .modal-timeline-hint{ text-align:center; font-size:11px; color:rgba(255,255,255,0.4); padding-bottom:4px }
