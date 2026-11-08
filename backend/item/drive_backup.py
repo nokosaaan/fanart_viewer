@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from datetime import datetime, timezone
 
 from google.oauth2.credentials import Credentials
@@ -143,6 +144,22 @@ def _is_sqlite() -> bool:
     return 'sqlite3' in dj_settings.DATABASES['default']['ENGINE']
 
 
+_write_lock_mutex = threading.Lock()
+_sqlite_write_locked = False
+
+
+def is_write_locked() -> bool:
+    """Return True while a direct SQLite backup holds an exclusive write lock."""
+    with _write_lock_mutex:
+        return _sqlite_write_locked
+
+
+def _set_write_locked(locked: bool) -> None:
+    global _sqlite_write_locked
+    with _write_lock_mutex:
+        _sqlite_write_locked = locked
+
+
 def _noop_progress(phase, percent):
     pass
 
@@ -197,16 +214,22 @@ def create_backup(progress_cb=None) -> dict:
 
 
 def _create_backup_sqlite(progress_cb) -> dict:
-    """Snapshot the SQLite DB file via sqlite3's own online backup API
-    (Connection.backup() -- safe to run while the app is live, unlike
-    copying the file directly, since it produces a consistent snapshot
-    even mid-write) and upload it gzipped.
+    """Upload the live SQLite DB file directly to Google Drive while holding
+    an exclusive write lock, avoiding both intermediate snapshot copies and
+    gzip compression (the DB consists primarily of already-compressed image
+    blobs, so copying and gzipping only waste time and temporary disk space).
 
-    Much simpler than the Postgres path: the whole DB already IS a single
-    file, so there's no separate dump format/tool to shell out to -- just
-    a straight file-level copy. This is exe-only for now (only the exe's
-    own launcher.py sets DB_ENGINE=sqlite3); a SQLite backup can only be
-    restored into another SQLite deployment (see restore_backup).
+    Concurrency & consistency:
+      1. Application-level write lock (`_set_write_locked(True)`) causes the
+         HTTP middleware and background pollers to reject/skip new write
+         operations immediately with a clear message instead of blocking on
+         SQLite's busy timeout.
+      2. `PRAGMA wal_checkpoint(TRUNCATE)` flushes any committed WAL frames
+         into the main `db.sqlite3` file on disk so it is 100% self-contained.
+      3. `BEGIN IMMEDIATE` on a dedicated connection acquires SQLite's write
+         lock for the duration of the upload: no writer can modify the DB
+         file mid-upload, while concurrent read queries (`SELECT`) continue
+         to work normally.
     """
     import sqlite3
     from django.conf import settings as dj_settings
@@ -216,51 +239,36 @@ def _create_backup_sqlite(progress_cb) -> dict:
 
     src_path = dj_settings.DATABASES['default']['NAME']
     timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    filename = f'fanart_backup_sqlite_{timestamp}.sqlite3.gz'
+    filename = f'fanart_backup_sqlite_{timestamp}.sqlite3'
 
-    fd, snapshot_path = tempfile.mkstemp(suffix='.sqlite3')
-    os.close(fd)
-    os.unlink(snapshot_path)  # Connection.backup() below creates this file itself
-    fd2, gz_path = tempfile.mkstemp(suffix='.sqlite3.gz')
-    os.close(fd2)
+    progress_cb('locking', None)
+    _set_write_locked(True)
+    lock_conn = None
+    in_tx = False
     try:
-        src_conn = sqlite3.connect(src_path)
-        dst_conn = sqlite3.connect(snapshot_path)
+        lock_conn = sqlite3.connect(src_path, timeout=60, isolation_level=None)
         try:
-            # sqlite3.Connection.backup's own `progress(status, remaining,
-            # total)` callback, called after each batch of pages copied —
-            # `pages=100` (rather than the default -1 = "whole DB in one
-            # batch") is what makes it actually fire more than once for a
-            # backup fast enough to otherwise finish before it's ever
-            # called at all.
-            def on_pages_copied(status, remaining, total):
-                if total:
-                    progress_cb('sqlite_backup', (total - remaining) / total * 100)
+            lock_conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        except sqlite3.OperationalError:
+            lock_conn.execute('PRAGMA wal_checkpoint(FULL)')
+        lock_conn.execute('BEGIN IMMEDIATE')
+        in_tx = True
 
-            src_conn.backup(dst_conn, pages=100, progress=on_pages_copied)
-        finally:
-            dst_conn.close()
-            src_conn.close()
-        progress_cb('sqlite_backup', 100)
-
-        snapshot_size = os.path.getsize(snapshot_path)
-        copied = 0
-        with open(snapshot_path, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
-            while True:
-                chunk = f_in.read(4 * 1024 * 1024)
-                if not chunk:
-                    break
-                f_out.write(chunk)
-                copied += len(chunk)
-                if snapshot_size:
-                    progress_cb('compressing', copied / snapshot_size * 100)
-        progress_cb('compressing', 100)
-
-        return _upload_with_progress(service, gz_path, filename, folder_id, 'application/gzip', progress_cb)
+        return _upload_with_progress(
+            service, src_path, filename, folder_id, 'application/x-sqlite3', progress_cb
+        )
     finally:
-        for p in (snapshot_path, gz_path):
-            if os.path.exists(p):
-                os.unlink(p)
+        if lock_conn is not None:
+            if in_tx:
+                try:
+                    lock_conn.execute('ROLLBACK')
+                except Exception:
+                    pass
+            try:
+                lock_conn.close()
+            except Exception:
+                pass
+        _set_write_locked(False)
 
 
 def _create_backup_postgres(progress_cb) -> dict:
@@ -470,7 +478,7 @@ def _restore_backup_sqlite(file_id: str, mode: str = 'strict', progress_cb=None)
             with gzip.open(download_path, 'rb') as f_in, open(plain_path, 'wb') as f_out:
                 shutil.copyfileobj(f_in, f_out)
         else:
-            shutil.copyfile(download_path, plain_path)
+            os.replace(download_path, plain_path)
 
         # Read-only peek for row counts, entirely separate from the live
         # connection -- doesn't touch the app's DB at all yet.

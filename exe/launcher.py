@@ -302,13 +302,15 @@ def _poller_loop(platform, command):
     from there, no explicit "save where we stopped" step needed.
     """
     from django.core.management import call_command
+    from item.drive_backup import is_write_locked
     from item.models import PollerSettings
 
     while not _shutdown_event.is_set():
-        try:
-            call_command(command, once=True)
-        except Exception:
-            logging.getLogger(__name__).exception('%s tick failed', command)
+        if not is_write_locked():
+            try:
+                call_command(command, once=True)
+            except Exception:
+                logging.getLogger(__name__).exception('%s tick failed', command)
         try:
             interval = PollerSettings.objects.get(platform=platform).interval_seconds
         except PollerSettings.DoesNotExist:

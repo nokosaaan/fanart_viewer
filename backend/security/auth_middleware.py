@@ -15,6 +15,19 @@ class SimpleAuthMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+        if (request.method in self._WRITE_METHODS
+                and request.path.startswith('/api/')
+                and not request.path.startswith('/api/auth/')):
+            try:
+                from item.drive_backup import is_write_locked
+                if is_write_locked():
+                    return JsonResponse(
+                        {'detail': 'バックアップ実行中のため、完了するまでデータの変更・保存はできません'},
+                        status=409,
+                    )
+            except Exception:
+                pass
+
         viewer_pass = os.environ.get('VIEWER_PASSWORD', '')
         admin_pass  = os.environ.get('ADMIN_PASSWORD', '')
 

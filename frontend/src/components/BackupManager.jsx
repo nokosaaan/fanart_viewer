@@ -62,6 +62,7 @@ const TABLE_LABELS = {
 
 const PHASE_LABELS = {
   starting: '準備中…',
+  locking: '書き込みロック取得中…',
   sqlite_backup: 'DBスナップショット中…',
   dumping: 'ダンプ中…',
   compressing: '圧縮中…',

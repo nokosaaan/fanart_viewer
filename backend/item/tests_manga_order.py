@@ -230,4 +230,77 @@ class ManualCreateAndGallerydlFetchTestCase(TestCase):
         self.assertEqual(it.description, 'Gallery Title')
 
 
+class SqliteDirectBackupWriteLockTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        token = make_token('admin')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_write_requests_blocked_while_backup_locked(self):
+        from item import drive_backup
+        try:
+            drive_backup._set_write_locked(True)
+            # Read request succeeds
+            get_resp = self.client.get('/api/items/')
+            self.assertEqual(get_resp.status_code, 200)
+            # Write request is blocked with 409
+            post_resp = self.client.post(
+                '/api/items/create_manual/',
+                {'artist': 'blocked_artist'},
+                format='multipart',
+            )
+            self.assertEqual(post_resp.status_code, 409)
+        finally:
+            drive_backup._set_write_locked(False)
+
+    def test_create_backup_sqlite_uploads_db_directly_with_lock(self):
+        import os
+        import sqlite3
+        import tempfile
+        from unittest.mock import patch
+        from item import drive_backup
+
+        fd, tmp_db = tempfile.mkstemp(suffix='.sqlite3')
+        os.close(fd)
+        try:
+            conn = sqlite3.connect(tmp_db)
+            conn.execute('CREATE TABLE t (x INT)')
+            conn.execute('INSERT INTO t VALUES (1)')
+            conn.commit()
+            conn.close()
+
+            observed_locked = []
+            uploaded_paths = []
+
+            def fake_upload(service, file_path, filename, folder_id, mimetype, progress_cb):
+                observed_locked.append(drive_backup.is_write_locked())
+                uploaded_paths.append((file_path, filename, mimetype))
+                # Verify SQLite write lock is held on tmp_db during upload
+                other = sqlite3.connect(tmp_db, timeout=0.1)
+                try:
+                    with self.assertRaises(sqlite3.OperationalError):
+                        other.execute('INSERT INTO t VALUES (2)')
+                finally:
+                    other.close()
+                return {'id': '123', 'name': filename}
+
+            with self.settings(DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': tmp_db}}), \
+                 patch('item.drive_backup.get_drive_service', return_value=object()), \
+                 patch('item.drive_backup._get_or_create_backup_folder', return_value='folder1'), \
+                 patch('item.drive_backup._upload_with_progress', side_effect=fake_upload):
+                res = drive_backup._create_backup_sqlite(lambda phase, pct: None)
+
+            self.assertEqual(observed_locked, [True])
+            self.assertFalse(drive_backup.is_write_locked())
+            self.assertEqual(len(uploaded_paths), 1)
+            self.assertEqual(uploaded_paths[0][0], tmp_db)
+            self.assertTrue(uploaded_paths[0][1].endswith('.sqlite3'))
+            self.assertEqual(uploaded_paths[0][2], 'application/x-sqlite3')
+            self.assertEqual(res['id'], '123')
+        finally:
+            if os.path.exists(tmp_db):
+                os.unlink(tmp_db)
+
+
+
 
