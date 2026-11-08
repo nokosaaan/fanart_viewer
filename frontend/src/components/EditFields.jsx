@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import CharacterPicker from './CharacterPicker'
+import RegionAnnotator from './RegionAnnotator'
 import { getPlatformIcon } from '../lib/platformIcon'
-import { saveItemFields } from '../lib/itemFieldsApi'
+import { saveItemFields, saveCharacterRegions } from '../lib/itemFieldsApi'
 import { handleGroupingResponse } from '../lib/groupChoice'
 
 const SECTION = {
@@ -786,6 +787,140 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   )
 }
 
+export function ItemQueuePanel({
+  item,
+  onClose,
+  onSaved,
+  onDirtyChange,
+  closeLabel = 'スキップ（後で対応）',
+  initialSuggestion = null,
+}){
+  const [situationDraft, setSituationDraft] = useState((item.situation || '').toUpperCase())
+  const [titlesDraft, setTitlesDraft] = useState(item.titles || [])
+  const [suggestion, setSuggestion] = useState(initialSuggestion)
+  const [fieldsDirty, setFieldsDirty] = useState(false)
+  const [regionDirty, setRegionDirty] = useState(false)
+  const [manualShowRegion, setManualShowRegion] = useState(null)
+
+  useEffect(() => {
+    if (initialSuggestion) setSuggestion(initialSuggestion)
+  }, [initialSuggestion])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const fieldsRef = useRef(null)
+  const boxesRef = useRef(null)
+
+  const hasExistingRegions = Array.isArray(item.character_regions) && item.character_regions.length > 0
+  const autoShow = situationDraft !== 'SOLO' || hasExistingRegions
+  const showRegionSection = manualShowRegion !== null ? manualShowRegion : autoShow
+
+  useEffect(()=>{
+    if(!showRegionSection){
+      setRegionDirty(false)
+      boxesRef.current = null
+    }
+  }, [showRegionSection])
+
+  useEffect(()=>{
+    if(onDirtyChange) onDirtyChange(fieldsDirty || regionDirty)
+  }, [fieldsDirty, regionDirty, onDirtyChange])
+
+  async function handleSave(){
+    if(!fieldsRef.current) return
+    setSaving(true)
+    setError('')
+    try{
+      const payload = fieldsRef.current.getPayload()
+      const j = await saveItemFields(item.id, payload)
+      let latestItem = j.item
+
+      await handleGroupingResponse(item.id, j)
+
+      if(regionDirty && boxesRef.current){
+        const regions = boxesRef.current.getPayload()
+        const j2 = await saveCharacterRegions(item.id, regions)
+        latestItem = j2.item
+        await handleGroupingResponse(item.id, j2)
+      }
+
+      setFieldsDirty(false)
+      setRegionDirty(false)
+      if(onSaved) onSaved(latestItem)
+    }catch(e){
+      setError('保存に失敗しました: ' + (e && e.message ? e.message : String(e)))
+    }finally{
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <ItemEditForm
+        item={item}
+        onClose={onClose}
+        closeLabel={closeLabel}
+        initialSuggestion={initialSuggestion}
+        showOwnActions={false}
+        fieldsRef={fieldsRef}
+        onSituationChange={setSituationDraft}
+        onTitlesChange={setTitlesDraft}
+        onDirtyChange={setFieldsDirty}
+        onSuggestionApplied={setSuggestion}
+      />
+
+      {showRegionSection ? (
+        <div style={{marginTop:16, background:'#0f172a', borderRadius:8, padding:'12px 14px'}}>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+            <label style={{color:'#94a3b8', fontSize:11, fontWeight:600, letterSpacing:'0.08em', textTransform:'uppercase', display:'block'}}>
+              領域ラベル付け <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— 複数キャラが写っている場合、どの矩形が誰かを割り当ててください</span>
+            </label>
+            <button
+              type="button"
+              onClick={()=>setManualShowRegion(false)}
+              style={{background:'none', border:'none', color:'#64748b', fontSize:12, cursor:'pointer', textDecoration:'underline', padding:0}}
+            >
+              領域指定を隠す
+            </button>
+          </div>
+          <RegionAnnotator
+            item={item}
+            titles={titlesDraft}
+            proposedRegions={suggestion?.proposed_regions || null}
+            showOwnActions={false}
+            boxesRef={boxesRef}
+            onDirtyChange={setRegionDirty}
+          />
+        </div>
+      ) : (
+        <div style={{marginTop:12}}>
+          <button
+            type="button"
+            onClick={()=>setManualShowRegion(true)}
+            style={{
+              background:'#0f172a', border:'1px dashed #334155', color:'#94a3b8',
+              borderRadius:6, padding:'8px 14px', fontSize:12, cursor:'pointer',
+              display:'inline-flex', alignItems:'center', gap:6
+            }}
+          >
+            <span>＋</span> 領域指定（バウンディングボックス）を追加・編集
+          </button>
+        </div>
+      )}
+
+      {error && <div style={{marginTop:10, fontSize:12, color:'#f87171'}}>{error}</div>}
+
+      <div style={{display:'flex', gap:8, marginTop:16}}>
+        <button className="btn" style={{background:'#3b82f6', color:'#fff', padding:'10px 24px', fontSize:14, fontWeight:600}}
+          onClick={handleSave} disabled={saving}>
+          {saving ? '保存中…' : '保存'}
+        </button>
+        <button className="btn" style={{padding:'10px 16px'}} onClick={onClose}>{closeLabel}</button>
+      </div>
+    </div>
+  )
+}
+
 export default function EditFields({ item, onClose, onSaved }){
   return (
     // zIndex above .preview-modal-backdrop's 1400 (styles.css) — opening
@@ -798,14 +933,22 @@ export default function EditFields({ item, onClose, onSaved }){
       onWheel={e=>e.stopPropagation()}
     >
       <div
-        style={{width:540, maxWidth:'92%', margin:'3% auto', background:'#1e293b',
+        style={{width:840, maxWidth:'94%', margin:'2.5% auto', background:'#1e293b',
           borderRadius:12, padding:'20px 24px', maxHeight:'92vh', overflowY:'auto',
           overscrollBehavior:'contain',
           boxShadow:'0 12px 48px rgba(0,0,0,0.7)'}}
         onClick={e=>e.stopPropagation()}
         onWheel={e=>e.stopPropagation()}
       >
-        <ItemEditForm item={item} onClose={onClose} onSaved={(newItem)=>{ if(onSaved) onSaved(newItem); onClose() }} />
+        <ItemQueuePanel
+          item={item}
+          onClose={onClose}
+          closeLabel="キャンセル"
+          onSaved={(newItem)=>{
+            if(onSaved) onSaved(newItem)
+            onClose()
+          }}
+        />
       </div>
     </div>
   )
