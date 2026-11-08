@@ -340,30 +340,34 @@ def test_proxy_connection(proxy_url: str) -> dict[str, Any]:
         "http": proxy_url,
         "https": proxy_url,
     }
-    try:
-        t0 = time.monotonic()
-        resp = requests.get(
-            "https://api.ipify.org?format=json",
-            proxies=proxies,
-            timeout=15,
-        )
-        elapsed = round(time.monotonic() - t0, 2)
-        if resp.ok:
-            data = resp.json()
-            return {
-                "success": True,
-                "ip": data.get("ip", "不明"),
-                "elapsed_seconds": elapsed,
-                "proxy_used": proxy_url,
-            }
-        return {
-            "success": False,
-            "error": f"ステータスコード {resp.status_code}: {resp.text[:100]}",
-            "proxy_used": proxy_url,
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "proxy_used": proxy_url,
-        }
+    t0 = time.monotonic()
+    endpoints = [
+        "https://api.ipify.org?format=json",
+        "https://httpbin.org/ip",
+    ]
+    last_err = "接続できませんでした"
+    for ep in endpoints:
+        try:
+            resp = requests.get(ep, proxies=proxies, timeout=15)
+            elapsed = round(time.monotonic() - t0, 2)
+            if resp.ok:
+                data = resp.json()
+                ip = data.get("ip") or data.get("origin") or "不明"
+                # origin may contain comma-separated IPs (e.g. "1.2.3.4, 5.6.7.8")
+                if "," in ip:
+                    ip = ip.split(",")[0].strip()
+                return {
+                    "success": True,
+                    "ip": ip,
+                    "elapsed_seconds": elapsed,
+                    "proxy_used": proxy_url,
+                }
+            last_err = f"HTTP {resp.status_code}: {resp.text[:100]}"
+        except Exception as e:
+            last_err = str(e)
+
+    return {
+        "success": False,
+        "error": last_err,
+        "proxy_used": proxy_url,
+    }

@@ -86,9 +86,11 @@ export default function ProxySettingsModal({ onClose }) {
     setNotice('')
     setTestResult(null)
     try {
-      let payload = {}
-      if (mode === 'custom') {
-        payload = { proxy_url: customProxyUrl.trim() }
+      const payload = {
+        mode,
+        tor_port: parseInt(torPort, 10) || 9052,
+        tor_path: torPath.trim(),
+        custom_proxy_url: customProxyUrl.trim(),
       }
       const r = await fetch('/api/proxy_settings/test/', {
         method: 'POST',
