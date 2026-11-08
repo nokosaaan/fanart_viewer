@@ -1305,10 +1305,10 @@ def _aggregate_confidences(per_image):
 
 def _aggregate_situation(hints):
     """One situation from per-image hints: content warning first (any R18
-    image makes the post R18), then 'more than one person' (any), then SOLO
-    only if every image that said anything said SOLO."""
+    image makes the post R18), then CP, then 'more than one person' (MULTIPLE),
+    then SOLO only if every image that said anything said SOLO."""
     hints = [h for h in hints if h]
-    for wanted in ('R18', 'MULTIPLE'):
+    for wanted in ('R18', 'CP', 'MULTIPLE'):
         if wanted in hints:
             return wanted
     return hints[0] if hints and all(h == hints[0] for h in hints) else None
@@ -1601,6 +1601,16 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
             characters = [{'name': c, 'score': None, 'matched': True, 'source': 'hashtag'} for c in hashtag_hits['characters']]
             source = 'db'
 
+    if want_situation and not situation_hint:
+        item_tag_names = set(item.tags or [])
+        if item.description:
+            item_tag_names.update(_extract_hashtags(item.description))
+        direct_hint = tagger.situation_from_tags(item_tag_names)
+        if direct_hint:
+            situation_hint = direct_hint
+            if source == 'none':
+                source = 'db'
+
     # Priority 2: this item's artist's OTHER already-tagged items — a
     # pure DB lookup, near-instant, no image analysis (most artists
     # repeatedly draw a small set of series/characters). Skipped
@@ -1858,6 +1868,14 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         if want_characters:
             for c in hashtag_hits['characters_partial']:
                 char_c.append({'value': c, 'source': 'hashtag_partial', 'confidence': 1.0})
+
+    if want_situation:
+        item_tag_names = set(item.tags or [])
+        if item.description:
+            item_tag_names.update(_extract_hashtags(item.description))
+        direct_hint = tagger.situation_from_tags(item_tag_names)
+        if direct_hint:
+            situation_c.append({'value': direct_hint, 'source': 'item_tags', 'confidence': 1.0})
 
     # Translate the post's own caption to English and search Danbooru for
     # a matching title/character (see danbooru_lookup.match_description_
@@ -2121,6 +2139,7 @@ def _ensemble_weights(monochrome):
 # genuinely ambiguous 2-person composition tagger.py deliberately leaves
 # unmapped), not to outvote it when it HAS an answer.
 DEFAULT_SITUATION_WEIGHTS = {
+    'item_tags': 10.0,
     'tagger': 10.0,
     'artist_history': 1.0,
     'tag_similarity': 1.0,

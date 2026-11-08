@@ -99,6 +99,72 @@ _MULTIPLE_PERSON_TAGS = {
     '2others', '3others', 'multiple_others',
 }
 
+_TWO_PERSON_TAGS = {
+    '2girls', '2boys', '1boy_1girl', '1girl_1boy', '2others',
+}
+
+_YURI_TAGS = {
+    'yuri', '百合', 'gl', 'girls_love',
+}
+
+_KISS_TAGS = {
+    'kiss', 'kissing', 'french_kiss', 'deep_kiss',
+    'kiss_on_the_cheek', 'kiss_on_the_lips', 'kiss_on_the_forehead',
+    'forehead_kiss', 'neck_kiss', 'hand_kiss',
+}
+
+_EXCLUDED_KISS_SUBSTRINGS = (
+    'kiss_mark', 'lipstick_kiss_mark', 'indirect_kiss', 'air_kiss', 'blow_kiss',
+)
+
+
+def _has_kiss_signal(tag_names):
+    """Check if any tag indicates kissing (Danbooru tags or Japanese)."""
+    for t in tag_names:
+        low = t.lower()
+        if low in _KISS_TAGS:
+            return True
+        if 'kiss' in low and not any(ex in low for ex in _EXCLUDED_KISS_SUBSTRINGS):
+            return True
+        if 'キス' in t or '接吻' in t:
+            return True
+    return False
+
+
+def situation_from_tags(tag_names, rating=None):
+    """Derive situation (R18, CP, MULTIPLE, SOLO) from tag names and optional rating.
+
+    When Yuri tags or kissing signals (e.g. 2girls + kiss) are present,
+    CP takes precedence over MULTIPLE.
+    """
+    if rating and rating in RATING_TO_SITUATION_HINT:
+        return RATING_TO_SITUATION_HINT[rating]
+
+    names = {n.lower() for n in tag_names if n}
+    if not names:
+        return None
+
+    # Content warning / R18 tag check if rating is not given
+    if names & {'r-18', 'r18', 'r-18g', 'r18g', 'nsfw', 'explicit'}:
+        return 'R18'
+
+    has_yuri = bool(names & _YURI_TAGS) or any('百合' in t for t in names)
+    has_kiss = _has_kiss_signal(names)
+    is_two_people = bool(names & _TWO_PERSON_TAGS)
+    is_multi_people = bool(names & _MULTIPLE_PERSON_TAGS) or is_two_people
+
+    # Yuri tags or kissing with multiple/2-person composition (or kiss without solo) -> CP
+    if has_yuri or (is_multi_people and has_kiss) or (has_kiss and 'solo' not in names):
+        return 'CP'
+
+    if is_multi_people:
+        return 'MULTIPLE'
+
+    if 'solo' in names and '1girl' in names:
+        return 'SOLO'
+
+    return None
+
 
 def _situation_hint(rating, general_tag_names):
     """Derive a single situation_hint from the rating + the tagger's own
@@ -109,15 +175,7 @@ def _situation_hint(rating, general_tag_names):
     value in this app's model, and content warning takes precedence over
     composition.
     """
-    if rating in RATING_TO_SITUATION_HINT:
-        return RATING_TO_SITUATION_HINT[rating]
-
-    names = set(general_tag_names)
-    if names & _MULTIPLE_PERSON_TAGS:
-        return 'MULTIPLE'
-    if 'solo' in names and '1girl' in names:
-        return 'SOLO'
-    return None
+    return situation_from_tags(general_tag_names, rating=rating)
 
 
 RATING_TO_SITUATION_HINT = {
