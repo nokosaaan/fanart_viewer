@@ -341,33 +341,76 @@ def test_proxy_connection(proxy_url: str) -> dict[str, Any]:
         "https": proxy_url,
     }
     t0 = time.monotonic()
-    endpoints = [
-        "https://api.ipify.org?format=json",
-        "https://httpbin.org/ip",
-    ]
-    last_err = "接続できませんでした"
-    for ep in endpoints:
-        try:
-            resp = requests.get(ep, proxies=proxies, timeout=15)
-            elapsed = round(time.monotonic() - t0, 2)
-            if resp.ok:
-                data = resp.json()
-                ip = data.get("ip") or data.get("origin") or "不明"
-                # origin may contain comma-separated IPs (e.g. "1.2.3.4, 5.6.7.8")
-                if "," in ip:
-                    ip = ip.split(",")[0].strip()
-                return {
-                    "success": True,
-                    "ip": ip,
-                    "elapsed_seconds": elapsed,
-                    "proxy_used": proxy_url,
-                }
-            last_err = f"HTTP {resp.status_code}: {resp.text[:100]}"
-        except Exception as e:
-            last_err = str(e)
+
+    # 1. Tor project's official API (specifically designed for Tor checking, no rate limits)
+    try:
+        resp = requests.get(
+            "https://check.torproject.org/api/ip",
+            proxies=proxies,
+            timeout=15,
+            headers={"User-Agent": "fanart_viewer/1.0"},
+        )
+        elapsed = round(time.monotonic() - t0, 2)
+        if resp.ok:
+            data = resp.json()
+            ip = data.get("IP") or data.get("ip") or "不明"
+            return {
+                "success": True,
+                "ip": ip,
+                "is_tor": bool(data.get("IsTor", False)),
+                "elapsed_seconds": elapsed,
+                "proxy_used": proxy_url,
+            }
+    except Exception as e:
+        logger.info("check.torproject.org check failed: %s, trying fallback", e)
+
+    # 2. Cloudflare-backed icanhazip (pure plaintext IP, highly reliable)
+    try:
+        resp = requests.get(
+            "https://icanhazip.com",
+            proxies=proxies,
+            timeout=15,
+            headers={"User-Agent": "curl/7.68.0"},
+        )
+        elapsed = round(time.monotonic() - t0, 2)
+        if resp.ok and resp.text.strip():
+            return {
+                "success": True,
+                "ip": resp.text.strip(),
+                "is_tor": False,
+                "elapsed_seconds": elapsed,
+                "proxy_used": proxy_url,
+            }
+    except Exception as e:
+        logger.info("icanhazip check failed: %s, trying fallback", e)
+
+    # 3. httpbin fallback
+    try:
+        resp = requests.get(
+            "https://httpbin.org/ip",
+            proxies=proxies,
+            timeout=15,
+        )
+        elapsed = round(time.monotonic() - t0, 2)
+        if resp.ok:
+            data = resp.json()
+            ip = data.get("origin", "不明").split(",")[0].strip()
+            return {
+                "success": True,
+                "ip": ip,
+                "is_tor": False,
+                "elapsed_seconds": elapsed,
+                "proxy_used": proxy_url,
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"プロキシ経由での通信テストに失敗しました: {e}",
+            "proxy_used": proxy_url,
+        }
 
     return {
         "success": False,
-        "error": last_err,
+        "error": "すべての接続確認エンドポイントへの通信に失敗しました",
         "proxy_used": proxy_url,
     }

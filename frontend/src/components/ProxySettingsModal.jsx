@@ -333,8 +333,13 @@ export default function ProxySettingsModal({ onClose }) {
                 >
                   {testResult.success ? (
                     <div>
-                      <div style={{ color: '#047857', fontWeight: 600, marginBottom: '2px' }}>
-                        ✓ プロキシ接続成功！
+                      <div style={{ color: '#047857', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>✓ プロキシ接続成功！</span>
+                        {testResult.is_tor && (
+                          <span style={{ fontSize: '0.72rem', background: '#dcfce7', color: '#15803d', padding: '1px 6px', borderRadius: 4, border: '1px solid #86efac' }}>
+                            🧅 Tor 経由確認済
+                          </span>
+                        )}
                       </div>
                       <div style={{ color: 'var(--text, #374151)' }}>
                         認識された外部 IP: <strong style={{ color: '#2563eb' }}>{testResult.ip}</strong>
