@@ -27,6 +27,7 @@ claudeflared
 /exe/build/
 /exe/dist/
 /exe/__pycache__/
+/exe/tor_win/
 /backend/item/migrations/__pycache__/
 /backend/item/management/commands/__pycache__/
 *.sqlite3

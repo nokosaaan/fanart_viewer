@@ -29,6 +29,37 @@ $InternalDir = Join-Path $DistAppDir "_internal"
 $FastSyncStamp = Join-Path $InternalDir ".fast_sync_ready"
 $BackendRoot = Resolve-Path (Join-Path $PSScriptRoot "..\backend")
 $FrontendDist = Join-Path $PSScriptRoot "..\frontend\dist"
+$TorWinDir = Join-Path $PSScriptRoot "tor_win"
+$TorExe = Join-Path $TorWinDir "tor\tor.exe"
+
+function Ensure-TorWindowsBundle {
+    if (Test-Path $TorExe) {
+        return
+    }
+    Write-Host "==> Tor Expert Bundle (Windows x86_64) を準備中..." -ForegroundColor Cyan
+    $torUrl = "https://archive.torproject.org/tor-package-archive/torbrowser/14.0.1/tor-expert-bundle-windows-x86_64-14.0.1.tar.gz"
+    $tempArchive = Join-Path $env:TEMP "tor-expert-bundle.tar.gz"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $torUrl -OutFile $tempArchive -UseBasicParsing
+        New-Item -ItemType Directory -Force -Path $TorWinDir | Out-Null
+        # Windows 10/11 built-in tar utility extracts tar.gz natively
+        tar -xzf $tempArchive -C $TorWinDir
+        if (-not (Test-Path $TorExe)) {
+            Write-Warning "tar 解凍後に tor.exe が見つかりませんでした: $TorExe"
+        } else {
+            Write-Host "==> Tor Expert Bundle の配置が完了しました ($TorExe)" -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Warning "Tor Expert Bundle のダウンロードに失敗しました: $_"
+    }
+    finally {
+        if (Test-Path $tempArchive) {
+            Remove-Item -Force $tempArchive -ErrorAction SilentlyContinue
+        }
+    }
+}
 
 function Sync-DirectoryIncremental {
     param(
@@ -62,7 +93,19 @@ function Sync-AppCodeAndFrontend {
         $dstFrontend = Join-Path $InternalDir "frontend_dist"
         Sync-DirectoryIncremental -Source (Resolve-Path $FrontendDist) -Destination $dstFrontend
     }
+    if (Test-Path $TorWinDir) {
+        $srcTorBin = Join-Path $TorWinDir "tor"
+        if (Test-Path $srcTorBin) {
+            Sync-DirectoryIncremental -Source $srcTorBin -Destination (Join-Path $InternalDir "tor")
+        }
+        $srcTorData = Join-Path $TorWinDir "data"
+        if (Test-Path $srcTorData) {
+            Sync-DirectoryIncremental -Source $srcTorData -Destination (Join-Path $InternalDir "tor\data")
+        }
+    }
 }
+
+Ensure-TorWindowsBundle
 
 if ($Clean) {
     Write-Host "Clean build: removing build and dist directories..."
@@ -81,7 +124,8 @@ if ($CanFastSync) {
         (Join-Path $PSScriptRoot "splash.png"),
         (Join-Path $PSScriptRoot "requirements.txt"),
         (Join-Path $BackendRoot "requirements.txt"),
-        (Join-Path $BackendRoot "requirements-timm.txt")
+        (Join-Path $BackendRoot "requirements-timm.txt"),
+        $TorExe
     )
     foreach ($tf in $triggerFiles) {
         if (Test-Path $tf) {

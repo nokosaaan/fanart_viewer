@@ -1,10 +1,11 @@
 // Cloudflare (and most reverse proxies) cap request body size around 100MB.
 // Several full-res images as base64 in one JSON payload can blow past that,
 // so split into chunks and upload sequentially, keeping order consistent
-// across chunks via start_index (only the first chunk clears old previews).
+// across chunks via start_index (only the first chunk clears old previews unless append=true).
 const MAX_BATCH_CHARS = 60 * 1024 * 1024
 
-export async function saveImagesChunked(itemId, images){
+export async function saveImagesChunked(itemId, images, options = {}){
+  const append = !!options.append
   const batches = []
   let current = []
   let currentSize = 0
@@ -21,13 +22,31 @@ export async function saveImagesChunked(itemId, images){
   if(current.length > 0) batches.push(current)
   if(batches.length === 0) return { ok:false, body:{ detail:'No images provided' } }
 
+  let baseOffset = 0
+  if (append) {
+    try {
+      const r = await fetch(`/api/items/${itemId}/previews/`)
+      if (r.ok) {
+        const existing = await r.json()
+        if (Array.isArray(existing)) {
+          baseOffset = existing.length
+        }
+      }
+    } catch (_) {}
+  }
+
   let startIndex = 0
   let totalSaved = 0
   for(let i=0; i<batches.length; i++){
     const batch = batches[i]
     const resp = await fetch(`/api/items/${itemId}/save_previews/`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ images: batch, clear_existing: i===0, start_index: startIndex }),
+      body: JSON.stringify({
+        images: batch,
+        clear_existing: !append && i===0,
+        start_index: baseOffset + startIndex,
+        append: append,
+      }),
     })
     const j = await resp.json().catch(()=>({}))
     if(!resp.ok) return { ok:false, body:j }

@@ -21,6 +21,7 @@ from .train_classifier_views import train_classifier_status_view, train_classifi
 from .browser_login_views import (
     browser_login_status_view, browser_login_open_view, browser_login_capture_view, browser_login_cancel_view,
 )
+from .proxy_views import proxy_settings_view, proxy_test_view
 from django.urls import path, include
 
 router = DefaultRouter()
@@ -63,4 +64,6 @@ urlpatterns = [
     path('browser_login/open/', browser_login_open_view),
     path('browser_login/capture/', browser_login_capture_view),
     path('browser_login/cancel/', browser_login_cancel_view),
+    path('proxy_settings/', proxy_settings_view),
+    path('proxy_settings/test/', proxy_test_view),
 ]

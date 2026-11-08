@@ -81,3 +81,5 @@ pykakasi
 # no API key, no native extension, same "no paid API" posture as the rest
 # of this app's external lookups.
 deep-translator
+# SOCKS5 proxy support for gallery-dl and requests (Tor / proxy integration)
+PySocks>=1.7.1

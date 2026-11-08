@@ -3449,13 +3449,30 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         images = data.get('images') or []
         if not isinstance(images, list) or not images:
             return Response({'detail': 'No images provided'}, status=status.HTTP_400_BAD_REQUEST)
-        clear_existing = data.get('clear_existing', True)
+
+        append_mode = bool(data.get('append', False))
+        clear_existing = False if append_mode else data.get('clear_existing', True)
+
         try:
             start_index = int(data.get('start_index') or 0)
         except (TypeError, ValueError):
             start_index = 0
+
         if clear_existing:
             PreviewImage.objects.filter(item=item).delete()
+            base_offset = 0
+        else:
+            # When appending to existing preview images:
+            # If the client did not offset start_index (start_index is smaller than existing count),
+            # automatically offset so new images are appended after the last existing image.
+            from django.db.models import Max
+            max_existing_order = PreviewImage.objects.filter(item=item).aggregate(Max('order'))['order__max']
+            existing_count = PreviewImage.objects.filter(item=item).count()
+            if start_index < existing_count and max_existing_order is not None:
+                base_offset = max_existing_order + 1
+            else:
+                base_offset = 0
+
         saved = []
         for idx, img in enumerate(images):
             data_uri = img.get('data_uri') if isinstance(img, dict) else None
@@ -3467,7 +3484,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     body = base64.b64decode(b64)
                     m = re.match(r'data:([^;]+);base64', header)
                     ctype = m.group(1) if m else 'application/octet-stream'
-                    order = start_index + idx
+                    order = base_offset + start_index + idx
                     PreviewImage.objects.create(item=item, order=order, data=body, content_type=ctype)
                     saved.append({'index': order, 'url': url, 'size': len(body), 'content_type': ctype})
                 except Exception:

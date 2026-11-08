@@ -28,6 +28,7 @@ RUN apt-get update \
 		postgresql-client-15 \
 		netcat-openbsd \
 		tzdata \
+		tor \
 	&& ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime \
 	&& dpkg-reconfigure -f noninteractive tzdata || true \
 	&& rm -rf /var/lib/apt/lists/*

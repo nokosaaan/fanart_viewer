@@ -27,6 +27,7 @@ from .gallerydl_fetch import (
     _write_cookies,
     _write_generic_config,
 )
+from .proxy_manager import acquire_proxy_session
 
 logger = logging.getLogger(__name__)
 
@@ -100,65 +101,72 @@ class GalleryDlJob:
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONUTF8"] = "1"
-            self.proc = subprocess.Popen(
-                [
-                    *_GALLERYDL_CMD, "-v",
-                    "--config", self.config_path,
-                    "-D", self.tmpdir,
-                    "--no-mtime", "--no-colors", "--write-info-json",
-                    self.url,
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", env=env,
-                **({"creationflags": subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, "CREATE_NO_WINDOW") else {}),
-            )
 
-            def pump_out():
-                for raw in iter(self.proc.stdout.readline, ""):
-                    activity[0] = time.monotonic()
-                    line = raw.strip()
-                    if line.startswith("# "):
-                        line = line[2:].strip()
-                    if line:
-                        self._add_file(line)
+            with acquire_proxy_session() as proxy_url:
+                proxy_args = ["--proxy", proxy_url] if proxy_url else []
+                if proxy_url:
+                    logger.info("gallery-dl[%s]: running with proxy %s", self.id[:8], proxy_url)
 
-            def pump_err():
-                for raw in iter(self.proc.stderr.readline, ""):
-                    activity[0] = time.monotonic()
-                    text = raw.rstrip()
-                    if text:
-                        logger.info("gallery-dl[%s]: %s", self.id[:8], text[:400])
-                        self.stderr_tail = (self.stderr_tail + [text])[-20:]
+                self.proc = subprocess.Popen(
+                    [
+                        *_GALLERYDL_CMD, "-v",
+                        "--config", self.config_path,
+                        *proxy_args,
+                        "-D", self.tmpdir,
+                        "--no-mtime", "--no-colors", "--write-info-json",
+                        self.url,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8", errors="replace", env=env,
+                    **({"creationflags": subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, "CREATE_NO_WINDOW") else {}),
+                )
 
-            threads = [threading.Thread(target=pump_out, daemon=True),
-                       threading.Thread(target=pump_err, daemon=True)]
-            for t in threads:
-                t.start()
+                def pump_out():
+                    for raw in iter(self.proc.stdout.readline, ""):
+                        activity[0] = time.monotonic()
+                        line = raw.strip()
+                        if line.startswith("# "):
+                            line = line[2:].strip()
+                        if line:
+                            self._add_file(line)
 
-            seen_count = 0
-            timed_out = False
-            while self.proc.poll() is None:
-                time.sleep(1.0)
-                with self.lock:
-                    n = len(self.files)
-                if n != seen_count:
-                    seen_count = n
-                    activity[0] = time.monotonic()
-                if self._cancel:
-                    self.proc.kill()
-                    break
-                if time.monotonic() - activity[0] > IDLE_TIMEOUT_SECONDS:
-                    timed_out = True
-                    self.proc.kill()
-                    break
-            try:
-                self.proc.wait(timeout=10)
-            except Exception:
-                pass
-            for t in threads:
-                t.join(timeout=5)
+                def pump_err():
+                    for raw in iter(self.proc.stderr.readline, ""):
+                        activity[0] = time.monotonic()
+                        text = raw.rstrip()
+                        if text:
+                            logger.info("gallery-dl[%s]: %s", self.id[:8], text[:400])
+                            self.stderr_tail = (self.stderr_tail + [text])[-20:]
+
+                threads = [threading.Thread(target=pump_out, daemon=True),
+                           threading.Thread(target=pump_err, daemon=True)]
+                for t in threads:
+                    t.start()
+
+                seen_count = 0
+                timed_out = False
+                while self.proc.poll() is None:
+                    time.sleep(1.0)
+                    with self.lock:
+                        n = len(self.files)
+                    if n != seen_count:
+                        seen_count = n
+                        activity[0] = time.monotonic()
+                    if self._cancel:
+                        self.proc.kill()
+                        break
+                    if time.monotonic() - activity[0] > IDLE_TIMEOUT_SECONDS:
+                        timed_out = True
+                        self.proc.kill()
+                        break
+                try:
+                    self.proc.wait(timeout=10)
+                except Exception:
+                    pass
+                for t in threads:
+                    t.join(timeout=5)
 
             # Pick up anything gallery-dl wrote but did not print.
             try:

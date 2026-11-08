@@ -37,6 +37,8 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
   const [openId, setOpenId] = useState(queue.length > 0 ? queue[0].id : null)
   const [selectedUrls, setSelectedUrls] = useState(new Set())
   const [saving, setSaving] = useState(false)
+  const [existingCount, setExistingCount] = useState(0)
+  const [loadingExisting, setLoadingExisting] = useState(false)
   // Selection over the mailbox sidebar's own entries (not the candidate
   // images inside one entry, that's selectedUrls above) — for bulk-removing
   // several queue entries at once instead of one 🗑 click each. Purely
@@ -53,6 +55,28 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
   const [bulkFetchMethod, setBulkFetchMethod] = useState('html')
 
   const openEntry = queue.find(q => q.id === openId) || null
+
+  // Fetch existing preview count whenever openEntry changes
+  React.useEffect(() => {
+    if (!openEntry) {
+      setExistingCount(0)
+      return
+    }
+    // First check currentPageItems
+    const matched = (currentPageItems || []).find(it => it && (it.id === openEntry.itemId || String(it.id) === String(openEntry.itemId)))
+    if (matched && matched.preview_count != null) {
+      setExistingCount(matched.preview_count)
+    }
+    // Also fetch live to be exact
+    setLoadingExisting(true)
+    fetch(`/api/items/${openEntry.itemId}/previews/`)
+      .then(r => r.ok ? r.json() : [])
+      .then(list => {
+        if (Array.isArray(list)) setExistingCount(list.length)
+      })
+      .catch(() => {})
+      .finally(() => setLoadingExisting(false))
+  }, [openEntry?.itemId, openId, currentPageItems])
 
   // This page's not-yet-fetched items.
   const pendingItems = (currentPageItems || []).filter(it => it && !it.has_preview && it.link)
@@ -86,11 +110,15 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
     setSelectedEntryIds(new Set())
   }
 
-  async function save(entry, images){
+  async function save(entry, images, { append = true } = {}){
     if(images.length === 0){ alert('画像を1枚以上選択してください'); return }
+    if(!append && existingCount > 0){
+      const ok = window.confirm(`アイテム #${entry.itemId} には現在 ${existingCount} 枚の画像があります。\nこれらをすべて削除して、今回の ${images.length} 枚で上書きしますか？`)
+      if(!ok) return
+    }
     setSaving(true)
     try{
-      const { ok, body } = await saveImagesChunked(entry.itemId, images)
+      const { ok, body } = await saveImagesChunked(entry.itemId, images, { append })
       setSaving(false)
       if(!ok){
         console.warn('save_previews failed', body)
@@ -101,6 +129,46 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
       onRemove(entry.id)
       setSelectedUrls(new Set())
       const remaining = queue.filter(q => q.id !== entry.id)
+      setOpenId(remaining.length > 0 ? remaining[0].id : null)
+    }catch(e){
+      setSaving(false)
+      console.error(e)
+      alert('保存に失敗しました: ' + (e && e.message ? e.message : String(e)))
+    }
+  }
+
+  async function saveCombined(entries){
+    if(!entries || entries.length === 0) return
+    const targetItemId = entries[0].itemId
+    // Combine images preserving order, deduplicating by URL
+    const seenUrls = new Set()
+    const combinedImages = []
+    for(const ent of entries){
+      for(const img of (ent.images || [])){
+        if(img.url && !seenUrls.has(img.url)){
+          seenUrls.add(img.url)
+          combinedImages.push({ url: img.url, data_uri: img.data_uri })
+        } else if(!img.url){
+          combinedImages.push({ url: img.url, data_uri: img.data_uri })
+        }
+      }
+    }
+    if(combinedImages.length === 0){ alert('結合対象の画像がありません'); return }
+    setSaving(true)
+    try{
+      // Always append to existing images
+      const { ok, body } = await saveImagesChunked(targetItemId, combinedImages, { append: true })
+      setSaving(false)
+      if(!ok){
+        console.warn('save_previews failed', body)
+        alert('保存に失敗しました: ' + (body && body.detail ? body.detail : JSON.stringify(body)))
+        return
+      }
+      notify('item-preview-updated', { id: targetItemId })
+      // Remove all processed entries
+      entries.forEach(ent => onRemove(ent.id))
+      setSelectedUrls(new Set())
+      const remaining = queue.filter(q => !entries.some(e => e.id === q.id))
       setOpenId(remaining.length > 0 ? remaining[0].id : null)
     }catch(e){
       setSaving(false)
@@ -204,46 +272,112 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
             <div style={{flex:1, padding:16, overflowY:'auto'}}>
               {!openEntry ? (
                 <div className="cgm-empty-hint">左のリストから項目を選んでください</div>
-              ) : (
-                <div>
-                  <div style={{marginBottom:12, fontSize:13, color:'#374151'}}>
-                    アイテム #{openEntry.itemId} — {openEntry.images.length}件の候補({timeAgo(openEntry.fetchedAt)}取得)
-                  </div>
-                  <div style={{display:'flex', gap:12, flexWrap:'wrap', maxHeight:420, overflow:'auto'}}>
-                    {openEntry.images.map((img, i) => (
-                      <label key={i} style={{width:160, border: selectedUrls.has(img.url) ? '2px solid #3b82f6' : '2px solid #e5e7eb', borderRadius:6, padding:8, cursor:'pointer'}}>
-                        <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#f3f4f6', borderRadius:4}}>
-                          {img.data_uri ? (
-                            <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%', borderRadius:3}} />
-                          ) : (
-                            <div style={{fontSize:12, color:'#9ca3af'}}>No preview</div>
-                          )}
+              ) : (() => {
+                const sameItemEntries = queue.filter(q => q.itemId === openEntry.itemId)
+                const totalCandInSameItem = sameItemEntries.reduce((sum, e) => sum + (e.images || []).length, 0)
+                return (
+                  <div>
+                    <div style={{marginBottom:10, fontSize:13, color:'#374151', display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                      <div>
+                        <strong>アイテム #{openEntry.itemId}</strong> — {openEntry.images.length}件の候補 ({timeAgo(openEntry.fetchedAt)}取得)
+                      </div>
+                      {existingCount > 0 && (
+                        <div style={{fontSize:12, background:'#dbeafe', color:'#1e40af', padding:'2px 8px', borderRadius:12, fontWeight:600}}>
+                          登録済み画像: {existingCount}枚
                         </div>
-                        <div style={{marginTop:6, display:'flex', alignItems:'center', gap:6}}>
-                          <input type="checkbox" checked={selectedUrls.has(img.url)} onChange={e=>{
-                            const s = new Set(selectedUrls)
-                            if(e.target.checked) s.add(img.url)
-                            else s.delete(img.url)
-                            setSelectedUrls(s)
-                          }} />
-                          <span style={{fontSize:11, color:'#6b7280'}}>{img.size ? Math.round(img.size/1024)+'KB' : ''}</span>
-                          <a href={img.url} target="_blank" rel="noreferrer" style={{fontSize:11, color:'#2563eb', marginLeft:'auto'}} onClick={e=>e.stopPropagation()}>↗</a>
+                      )}
+                    </div>
+
+                    {/* Same-item multiple queues banner */}
+                    {sameItemEntries.length > 1 && (
+                      <div style={{marginBottom:12, padding:'10px 14px', background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:6, display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8}}>
+                        <div style={{fontSize:12, color:'#166534'}}>
+                          💡 このアイテムに関する候補がキュー内に計 <strong>{sameItemEntries.length} 件</strong> あります (合計 {totalCandInSameItem} 枚)。
                         </div>
-                      </label>
-                    ))}
+                        <button
+                          className="btn"
+                          disabled={saving}
+                          style={{background:'#16a34a', color:'#fff', fontSize:12, padding:'4px 10px'}}
+                          onClick={()=>saveCombined(sameItemEntries)}
+                          title="同一アイテムの全キューをまとめて末尾に追記・結合して取り込みます"
+                        >
+                          📦 全{sameItemEntries.length}件のキュー ({totalCandInSameItem}枚) をまとめて追記結合
+                        </button>
+                      </div>
+                    )}
+
+                    {existingCount > 0 && sameItemEntries.length <= 1 && (
+                      <div style={{marginBottom:12, padding:'8px 12px', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:6, fontSize:12, color:'#1e40af'}}>
+                        ℹ️ このアイテムには既に <strong>{existingCount} 枚</strong> の画像が登録されています。「末尾に追記」を選ぶと、最後尾のインデックス（#{existingCount}以降）に結合されます。
+                      </div>
+                    )}
+
+                    <div style={{display:'flex', gap:12, flexWrap:'wrap', maxHeight:420, overflow:'auto'}}>
+                      {openEntry.images.map((img, i) => (
+                        <label key={i} style={{width:160, border: selectedUrls.has(img.url) ? '2px solid #3b82f6' : '2px solid #e5e7eb', borderRadius:6, padding:8, cursor:'pointer'}}>
+                          <div style={{height:120, display:'flex', alignItems:'center', justifyContent:'center', background:'#f3f4f6', borderRadius:4}}>
+                            {img.data_uri ? (
+                              <img src={img.data_uri} alt={`cand-${i}`} style={{maxWidth:'100%', maxHeight:'100%', borderRadius:3}} />
+                            ) : (
+                              <div style={{fontSize:12, color:'#9ca3af'}}>No preview</div>
+                            )}
+                          </div>
+                          <div style={{marginTop:6, display:'flex', alignItems:'center', gap:6}}>
+                            <input type="checkbox" checked={selectedUrls.has(img.url)} onChange={e=>{
+                              const s = new Set(selectedUrls)
+                              if(e.target.checked) s.add(img.url)
+                              else s.delete(img.url)
+                              setSelectedUrls(s)
+                            }} />
+                            <span style={{fontSize:11, color:'#6b7280'}}>{img.size ? Math.round(img.size/1024)+'KB' : ''}</span>
+                            <a href={img.url} target="_blank" rel="noreferrer" style={{fontSize:11, color:'#2563eb', marginLeft:'auto'}} onClick={e=>e.stopPropagation()}>↗</a>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div style={{marginTop:16, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+                      {existingCount > 0 ? (
+                        <>
+                          <button className="btn" style={{background:'#3b82f6', color:'#fff'}} disabled={saving}
+                            onClick={()=>save(openEntry, openEntry.images.map(c=>({url:c.url, data_uri:c.data_uri})), { append: true })}
+                            title="既存の画像の最後尾にすべて追記します"
+                          >
+                            ➕ 全選択して末尾に追記 ({openEntry.images.length}枚)
+                          </button>
+                          <button className="btn" disabled={saving || selectedUrls.size===0}
+                            onClick={()=>save(openEntry, openEntry.images.filter(c=>selectedUrls.has(c.url)).map(c=>({url:c.url, data_uri:c.data_uri})), { append: true })}
+                            title="選択した画像のみを最後尾に追記します"
+                          >
+                            ➕ 選択した {selectedUrls.size} 件を末尾に追記
+                          </button>
+                          <button className="btn btn-secondary" style={{color:'#b91c1c', borderColor:'#fca5a5'}} disabled={saving}
+                            onClick={()=>save(openEntry, openEntry.images.map(c=>({url:c.url, data_uri:c.data_uri})), { append: false })}
+                            title="既存の画像をすべて削除し、今回の画像で置き換えます"
+                          >
+                            🔄 既存画像を上書き
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="btn" style={{background:'#3b82f6', color:'#fff'}} disabled={saving}
+                            onClick={()=>save(openEntry, openEntry.images.map(c=>({url:c.url, data_uri:c.data_uri})), { append: false })}
+                          >
+                            全選択して追加 ({openEntry.images.length}枚)
+                          </button>
+                          <button className="btn" disabled={saving || selectedUrls.size===0}
+                            onClick={()=>save(openEntry, openEntry.images.filter(c=>selectedUrls.has(c.url)).map(c=>({url:c.url, data_uri:c.data_uri})), { append: false })}
+                          >
+                            選択した {selectedUrls.size} 件を追加
+                          </button>
+                        </>
+                      )}
+                      <button className="btn" style={{marginLeft:'auto'}} onClick={()=>setSelectedUrls(new Set(openEntry.images.map(c=>c.url)))}>全選択</button>
+                      <button className="btn" onClick={()=>setSelectedUrls(new Set())}>選択解除</button>
+                    </div>
                   </div>
-                  <div style={{marginTop:16, display:'flex', gap:8, alignItems:'center'}}>
-                    <button className="btn" style={{background:'#3b82f6', color:'#fff'}} disabled={saving}
-                      onClick={()=>save(openEntry, openEntry.images.map(c=>({url:c.url, data_uri:c.data_uri})))}
-                    >全選択して追加</button>
-                    <button className="btn" disabled={saving || selectedUrls.size===0}
-                      onClick={()=>save(openEntry, openEntry.images.filter(c=>selectedUrls.has(c.url)).map(c=>({url:c.url, data_uri:c.data_uri})))}
-                    >選択した {selectedUrls.size} 件を追加</button>
-                    <button className="btn" style={{marginLeft:'auto'}} onClick={()=>setSelectedUrls(new Set(openEntry.images.map(c=>c.url)))}>全選択</button>
-                    <button className="btn" onClick={()=>setSelectedUrls(new Set())}>選択解除</button>
-                  </div>
-                </div>
-              )}
+                )
+              })()}
             </div>
           </div>
         )}

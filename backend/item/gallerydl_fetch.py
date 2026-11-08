@@ -21,6 +21,7 @@ import sys
 import tempfile
 
 import requests
+from .proxy_manager import acquire_proxy_session
 
 # The exe-packaged build has no separate `gallery-dl` executable on PATH
 # (pip's normal console-script wrapper never gets bundled by PyInstaller --
@@ -106,67 +107,71 @@ def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], st
         sub_env["PYTHONIOENCODING"] = "utf-8"
         sub_env["PYTHONUTF8"] = "1"
 
-        proc = subprocess.run(
-            [
-                *_GALLERYDL_CMD,
-                "--config", config_path,
-                "-j",
-                url,
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=sub_env,
-            timeout=60,
-            # In the frozen exe, this launches the exe itself again (see
-            # _GALLERYDL_CMD) -- without this, Windows briefly flashes a
-            # console window for that child process on every single
-            # fetch, which reads as broken/janky for a windowed app that
-            # otherwise never shows one. CREATE_NO_WINDOW only exists on
-            # Windows; harmless no-op via getattr elsewhere.
-            **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
-        )
+        with acquire_proxy_session() as proxy_url:
+            proxy_args = ["--proxy", proxy_url] if proxy_url else []
+            proc = subprocess.run(
+                [
+                    *_GALLERYDL_CMD,
+                    "--config", config_path,
+                    *proxy_args,
+                    "-j",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=sub_env,
+                timeout=60,
+                # In the frozen exe, this launches the exe itself again (see
+                # _GALLERYDL_CMD) -- without this, Windows briefly flashes a
+                # console window for that child process on every single
+                # fetch, which reads as broken/janky for a windowed app that
+                # otherwise never shows one. CREATE_NO_WINDOW only exists on
+                # Windows; harmless no-op via getattr elsewhere.
+                **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
+            )
 
-        if proc.returncode not in (0, 1):
-            # returncode 1 = partial success (some URLs found but errors occurred)
-            logger.warning("gallery-dl exited %s for %s: %s", proc.returncode, url, proc.stderr[:300])
+            if proc.returncode not in (0, 1):
+                # returncode 1 = partial success (some URLs found but errors occurred)
+                logger.warning("gallery-dl exited %s for %s: %s", proc.returncode, url, proc.stderr[:300])
 
-        image_urls: list[str] = []
-        description = ""
-        try:
-            entries = json.loads(proc.stdout or "[]")
-        except ValueError:
-            entries = []
-        for entry in entries:
-            if not isinstance(entry, list) or len(entry) < 2:
-                continue
-            entry_type, data = entry[0], entry[1]
-            if entry_type == 3 and isinstance(data, str) and data.startswith("http"):
-                image_urls.append(data)
-            elif entry_type == 2 and isinstance(data, dict) and not description:
-                description = data.get("content") or ""
-
-        if not image_urls:
-            logger.warning("gallery-dl: no image URLs found for %s\nstderr: %s", url, proc.stderr[:300])
-            return [], description
-
-        logger.info("gallery-dl: found %d URL(s) for %s", len(image_urls), url)
-
-        results = []
-        for img_url in image_urls:
+            image_urls: list[str] = []
+            description = ""
             try:
-                r = requests.get(img_url, headers=_DL_HEADERS, timeout=30)
-                if not r.ok:
-                    logger.warning("gallery-dl: download %s → HTTP %s", img_url, r.status_code)
+                entries = json.loads(proc.stdout or "[]")
+            except ValueError:
+                entries = []
+            for entry in entries:
+                if not isinstance(entry, list) or len(entry) < 2:
                     continue
-                mime = r.headers.get("content-type", "image/jpeg").split(";", 1)[0].lower()
-                if mime.startswith("image") or mime.startswith("video"):
-                    results.append((r.content, mime))
-            except requests.RequestException as e:
-                logger.warning("gallery-dl: download error %s: %s", img_url, e)
+                entry_type, data = entry[0], entry[1]
+                if entry_type == 3 and isinstance(data, str) and data.startswith("http"):
+                    image_urls.append(data)
+                elif entry_type == 2 and isinstance(data, dict) and not description:
+                    description = data.get("content") or ""
 
-        return results, description
+            if not image_urls:
+                logger.warning("gallery-dl: no image URLs found for %s\nstderr: %s", url, proc.stderr[:300])
+                return [], description
+
+            logger.info("gallery-dl: found %d URL(s) for %s", len(image_urls), url)
+
+            results = []
+            req_proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+            for img_url in image_urls:
+                try:
+                    r = requests.get(img_url, headers=_DL_HEADERS, timeout=30, proxies=req_proxies)
+                    if not r.ok:
+                        logger.warning("gallery-dl: download %s → HTTP %s", img_url, r.status_code)
+                        continue
+                    mime = r.headers.get("content-type", "image/jpeg").split(";", 1)[0].lower()
+                    if mime.startswith("image") or mime.startswith("video"):
+                        results.append((r.content, mime))
+                except requests.RequestException as e:
+                    logger.warning("gallery-dl: download error %s: %s", img_url, e)
+
+            return results, description
 
     finally:
         for p in (cookies_path, config_path):
@@ -258,81 +263,78 @@ def fetch_media_gallerydl(url: str, timeout: int = 120) -> tuple[list[tuple[byte
         sub_env = os.environ.copy()
         sub_env["PYTHONIOENCODING"] = "utf-8"
         sub_env["PYTHONUTF8"] = "1"
-        # Run as a streaming Popen (not subprocess.run) so that:
-        #  - stderr lines (verbose -v) are written to the server log live, so
-        #    a stalled run still shows WHERE it stalled (subprocess.run's
-        #    capture_output discards everything when killed on timeout);
-        #  - the timeout is an *idle* timeout (no new file and no output for
-        #    `timeout` seconds) rather than a fixed total, so a large gallery
-        #    that keeps making progress is never cut short.
-        import threading
-        import time
 
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
-        last_activity = [time.monotonic()]
+        with acquire_proxy_session() as proxy_url:
+            proxy_args = ["--proxy", proxy_url] if proxy_url else []
+            if proxy_url:
+                logger.info("gallery-dl: running with proxy %s", proxy_url)
 
-        def _pump(stream, sink, is_err):
-            try:
-                for raw in iter(stream.readline, ""):
-                    sink.append(raw)
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+            last_activity = [time.monotonic()]
+
+            def _pump(stream, sink, is_err):
+                try:
+                    for raw in iter(stream.readline, ""):
+                        sink.append(raw)
+                        last_activity[0] = time.monotonic()
+                        if is_err and raw.strip():
+                            logger.info("gallery-dl: %s", raw.rstrip()[:400])
+                except Exception:
+                    pass
+
+            proc = subprocess.Popen(
+                [
+                    *_GALLERYDL_CMD,
+                    "-v",
+                    "--config", config_path,
+                    *proxy_args,
+                    "-D", tmpdir,
+                    "--no-mtime",
+                    "--no-colors",
+                    "--write-info-json",
+                    url,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=sub_env,
+                **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
+            )
+            pumps = [
+                threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks, False), daemon=True),
+                threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks, True), daemon=True),
+            ]
+            for t in pumps:
+                t.start()
+
+            seen_files = 0
+            timed_out = False
+            while proc.poll() is None:
+                time.sleep(1.0)
+                try:
+                    n = len(os.listdir(tmpdir))
+                except OSError:
+                    n = seen_files
+                if n != seen_files:
+                    seen_files = n
                     last_activity[0] = time.monotonic()
-                    if is_err and raw.strip():
-                        logger.info("gallery-dl: %s", raw.rstrip()[:400])
+                if time.monotonic() - last_activity[0] > timeout:
+                    timed_out = True
+                    proc.kill()
+                    break
+            try:
+                proc.wait(timeout=10)
             except Exception:
                 pass
+            for t in pumps:
+                t.join(timeout=5)
 
-        proc = subprocess.Popen(
-            [
-                *_GALLERYDL_CMD,
-                "-v",
-                "--config", config_path,
-                "-D", tmpdir,
-                "--no-mtime",
-                "--no-colors",
-                "--write-info-json",
-                url,
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=sub_env,
-            **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
-        )
-        pumps = [
-            threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks, False), daemon=True),
-            threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks, True), daemon=True),
-        ]
-        for t in pumps:
-            t.start()
-
-        seen_files = 0
-        timed_out = False
-        while proc.poll() is None:
-            time.sleep(1.0)
-            try:
-                n = len(os.listdir(tmpdir))
-            except OSError:
-                n = seen_files
-            if n != seen_files:
-                seen_files = n
-                last_activity[0] = time.monotonic()
-            if time.monotonic() - last_activity[0] > timeout:
-                timed_out = True
-                proc.kill()
-                break
-        try:
-            proc.wait(timeout=10)
-        except Exception:
-            pass
-        for t in pumps:
-            t.join(timeout=5)
-
-        stdout_text = "".join(stdout_chunks)
-        stderr_text = "".join(stderr_chunks)
+            stdout_text = "".join(stdout_chunks)
+            stderr_text = "".join(stderr_chunks)
         if timed_out:
             logger.warning(
                 "gallery-dl made no progress for %ss on %s (files so far: %d); collecting what was downloaded",

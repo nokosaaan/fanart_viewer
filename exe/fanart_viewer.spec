@@ -421,6 +421,18 @@ _item_fixtures_dir = os.path.join(BACKEND_ROOT, 'item', 'fixtures')
 if os.path.isdir(_item_fixtures_dir):
     extra_collect_trees.append(Tree(_item_fixtures_dir, prefix=os.path.join('item', 'fixtures')))
 
+# Tor Expert Bundle for Windows standalone package:
+# Collected under tor/ only when building on Windows and exe/tor_win/ exists.
+# Linux builds never include this directory.
+_tor_win_dir = os.path.join(SPECPATH, 'tor_win')
+if sys.platform == 'win32' and os.path.isdir(_tor_win_dir):
+    _tor_bin_dir = os.path.join(_tor_win_dir, 'tor')
+    if os.path.isdir(_tor_bin_dir):
+        extra_collect_trees.append(Tree(_tor_bin_dir, prefix='tor'))
+    _tor_data_dir = os.path.join(_tor_win_dir, 'data')
+    if os.path.isdir(_tor_data_dir):
+        extra_collect_trees.append(Tree(_tor_data_dir, prefix=os.path.join('tor', 'data')))
+
 # onedir, not onefile: a single-exe build re-extracts its entire contents
 # to a fresh temp dir on EVERY launch (real, noticeable delay before
 # anything -- even the splash screen's own Tk runtime -- can show up), and
