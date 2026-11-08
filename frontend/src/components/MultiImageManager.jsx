@@ -19,7 +19,7 @@ function saveDismissedIds(set) {
   } catch {}
 }
 
-function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, isDismissed, readOnly }) {
+function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss, onRestore, isDismissed, readOnly }) {
   const [previews, setPreviews] = useState(null)
   const [loading, setLoading] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
@@ -181,7 +181,9 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          <span style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: 'monospace' }}>#{item.id}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: 'monospace' }} title={`内部ID: ${item.id}`}>
+            #{serialNumber != null ? serialNumber : item.id}
+          </span>
           <span style={{ fontWeight: 600, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>
             {title}
           </span>
@@ -467,6 +469,16 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
     })
   }
 
+  // 各アイテムのメイン画面と同じ通し番号（count番号: 全体件数 - 全体インデックス）を計算
+  const serialNumberMap = useMemo(() => {
+    const map = new Map()
+    const total = (allItems || []).length
+    ;(allItems || []).forEach((it, idx) => {
+      if (it && it.id != null) map.set(it.id, total - idx)
+    })
+    return map
+  }, [allItems])
+
   // 複数枚画像を持つアイテムを抽出
   const multiItems = useMemo(() => {
     return (allItems || []).filter(it => {
@@ -490,9 +502,16 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
       const titles = Array.isArray(it.titles) ? it.titles.join(' ') : (it.title || '')
       const artist = it.artist || ''
       const tags = Array.isArray(it.tags) ? it.tags.join(' ') : ''
-      return titles.toLowerCase().includes(q) || artist.toLowerCase().includes(q) || tags.toLowerCase().includes(q) || String(it.id).includes(q)
+      const serial = serialNumberMap.get(it.id)
+      return (
+        titles.toLowerCase().includes(q) ||
+        artist.toLowerCase().includes(q) ||
+        tags.toLowerCase().includes(q) ||
+        String(it.id).includes(q) ||
+        (serial != null && String(serial).includes(q))
+      )
     })
-  }, [multiItems, filterQuery, showDismissed, dismissedIds])
+  }, [multiItems, filterQuery, showDismissed, dismissedIds, serialNumberMap])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const pageItems = useMemo(() => {
@@ -578,6 +597,7 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
               <MultiItemRow
                 key={item.id}
                 item={item}
+                serialNumber={serialNumberMap.get(item.id)}
                 onOpenPreview={onOpenPreview}
                 onDismiss={handleDismiss}
                 onRestore={handleRestore}
