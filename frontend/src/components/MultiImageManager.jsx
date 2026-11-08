@@ -68,7 +68,7 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
   }
 
   async function runDelete(body, confirmText) {
-    if (!window.confirm(confirmText)) return
+    if (confirmText && !window.confirm(confirmText)) return
     setDeleting(true)
     try {
       const resp = await fetch(`/api/items/${item.id}/delete_previews/`, {
@@ -94,14 +94,11 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
     }
   }
 
-  // 1枚目だけ残す（他の画像をすべて削除）
+  // 1枚目だけ残す（他の画像をすべて削除）※この画面に限り確認アラートなしで即座に実行
   function keepFirstOnly() {
     if (!previews || previews.length <= 1) return
     const first = previews[0]
-    runDelete(
-      { keep_ids: [first.id] },
-      `1枚目 (${first.filename || 'ページ1'}) だけを残し、残り${previews.length - 1}枚をすべて削除しますか？`
-    )
+    runDelete({ keep_ids: [first.id] }, null)
   }
 
   // 選択した画像を削除
@@ -262,9 +259,9 @@ function MultiItemRow({ item, onOpenPreview, onUpdated, onDismiss, onRestore, is
                 onClick={keepFirstOnly}
                 disabled={deleting}
                 style={{ fontSize: 12, padding: '4px 8px', background: '#2563eb', color: '#fff', fontWeight: 600 }}
-                title="1枚目のみ残し、2枚目以降の余計な画像をすべて削除します"
+                title="1枚目のみ残し、2枚目以降の余計な画像をすべて削除します（確認不要で即実行）"
               >
-                ★ 1枚目だけ残す
+                {deleting ? '…' : '★ 1枚目だけ残す'}
               </button>
               <button
                 className="btn"
