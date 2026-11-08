@@ -61,9 +61,10 @@ try:
 except Exception:
     HAVE_TWITTER_GQL = False
 try:
-    from .gallerydl_fetch import fetch_twitter_media_gallerydl
+    from .gallerydl_fetch import fetch_twitter_media_gallerydl, fetch_media_gallerydl
     HAVE_GALLERYDL = True
 except Exception:
+    fetch_media_gallerydl = None
     HAVE_GALLERYDL = False
 try:
     from .poipiku_fetch import fetch_poipiku_media
@@ -2510,131 +2511,131 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         # If the target URL itself points to an image, try that first
         body, ctype = _internal_fetch(target_url, min_size=MIN_IMAGE_FETCH_BYTES)
         candidates = []
+        hints = []
+        candidate_sources = {}
         if body and ctype:
             used_method = 'direct'
             candidates.append((target_url, body, ctype))
         else:
-            # Fetch HTML and try to extract common image hints (og:image, twitter:image, img src)
-            try:
-                import requests
-                r = requests.get(target_url, timeout=15, headers={'User-Agent': 'fanart-viewer-bot/1.0'})
-                html = r.text or ''
-            except Exception:
-                html = ''
-
-            # Use BeautifulSoup (if available) to walk the DOM and collect
-            # candidate image URLs. We aim to find images under the
-            # 'div.react-root -> main.main -> a -> img' pattern, but also
-            # fall back to common selectors (article img, figure img, og: tags).
-            hints = []
-            try:
-                if 'BeautifulSoup' in globals() and BeautifulSoup is not None:
-                    soup = BeautifulSoup(html, 'html.parser')
-                    # Open Graph / twitter meta images first
-                    og = soup.find('meta', property='og:image')
-                    if og and og.get('content'):
-                        hints.append(og.get('content'))
-                    tw = soup.find('meta', attrs={'name': 'twitter:image'})
-                    if tw and tw.get('content'):
-                        hints.append(tw.get('content'))
-
-                    # Target the common react-root -> main -> a -> img chain
-                    # Note: Twitter uses an element with id="react-root" so
-                    # prefer locating by id (not class) to match actual pages.
-                    root = soup.find(id='react-root')
-                    mains = []
-                    if root:
-                        # search within the react-root subtree for anchor->img patterns
-                        mains = [root]
-                    if not mains:
-                        mains = soup.find_all('main')
-                    for mtag in mains:
-                        for a in mtag.find_all('a'):
-                            for im in a.find_all('img'):
-                                src = im.get('src')
-                                if src:
-                                    hints.append(src)
-
-                    # Generic fallbacks
-                    for im in soup.find_all('img'):
-                        s = im.get('src')
-                        if s:
-                            hints.append(s)
-                    for fig in soup.find_all('figure'):
-                        im = fig.find('img')
-                        if im and im.get('src'):
-                            hints.append(im.get('src'))
-            except Exception:
-                # parsing failed; fall back to regex below
-                pass
-
-            # If BeautifulSoup parsing didn't yield anything, fallback to regex
-            if not hints:
-                m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
-                if m:
-                    hints.append(m.group(1))
-                m = re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
-                if m:
-                    hints.append(m.group(1))
-                m = re.search(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', html, re.I)
-                if m:
-                    hints.append(m.group(1))
-                m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
-                if m:
-                    hints.append(m.group(1))
-
-            # Resolve relative URLs and attempt fetches for ALL hints (do not stop on first)
-            seen = set()
-            # collect candidate source mapping for debug/UI
-            candidate_sources = {}
-            for h in hints:
-                if not h:
-                    continue
+            if force_method != 'gallerydl':
+                # Fetch HTML and try to extract common image hints (og:image, twitter:image, img src)
                 try:
-                    cand_url = urljoin(target_url, h)
-                    # Upgrade Twitter thumbnail URLs to large for better quality
-                    if 'pbs.twimg.com' in cand_url:
-                        cand_url = re.sub(r'(?<=[?&])name=(?:small|medium|thumb|360x360|240x240)', 'name=large', cand_url)
-                    # Skip profile images — we want tweet media images only
-                    if '/profile_images/' in cand_url:
-                        continue
-                    if cand_url in seen:
-                        continue
-                    seen.add(cand_url)
-                    b, ct = _internal_fetch(cand_url, min_size=MIN_IMAGE_FETCH_BYTES)
-                    if b and ct:
-                        candidates.append((cand_url, b, ct))
-                        used_method = 'html'
-                        # record where this candidate came from
-                        candidate_sources[cand_url] = 'html'
+                    import requests
+                    r = requests.get(target_url, timeout=15, headers={'User-Agent': 'fanart-viewer-bot/1.0'})
+                    html = r.text or ''
                 except Exception:
-                    continue
+                    html = ''
 
-            # For Twitter/X targets, also call the unified twitter helper to
-            # aggregate additional HTML-derived candidates (scrape/nitter).
-            # This helps collect multi-photo tweets where the page-level
-            # meta tags only expose a single image.
-            try:
-                if (('twitter.com' in target_url) or ('x.com' in target_url)):
-                    tw_urls = fetch_twitter_media_urls_with_sources(target_url)
-                    for (tw_url, src) in tw_urls:
-                        # prefer non-api sources here (we're improving HTML path)
-                        if src == 'api':
+                # Use BeautifulSoup (if available) to walk the DOM and collect
+                # candidate image URLs. We aim to find images under the
+                # 'div.react-root -> main.main -> a -> img' pattern, but also
+                # fall back to common selectors (article img, figure img, og: tags).
+                try:
+                    if 'BeautifulSoup' in globals() and BeautifulSoup is not None:
+                        soup = BeautifulSoup(html, 'html.parser')
+                        # Open Graph / twitter meta images first
+                        og = soup.find('meta', property='og:image')
+                        if og and og.get('content'):
+                            hints.append(og.get('content'))
+                        tw = soup.find('meta', attrs={'name': 'twitter:image'})
+                        if tw and tw.get('content'):
+                            hints.append(tw.get('content'))
+
+                        # Target the common react-root -> main -> a -> img chain
+                        # Note: Twitter uses an element with id="react-root" so
+                        # prefer locating by id (not class) to match actual pages.
+                        root = soup.find(id='react-root')
+                        mains = []
+                        if root:
+                            # search within the react-root subtree for anchor->img patterns
+                            mains = [root]
+                        if not mains:
+                            mains = soup.find_all('main')
+                        for mtag in mains:
+                            for a in mtag.find_all('a'):
+                                for im in a.find_all('img'):
+                                    src = im.get('src')
+                                    if src:
+                                        hints.append(src)
+
+                        # Generic fallbacks
+                        for im in soup.find_all('img'):
+                            s = im.get('src')
+                            if s:
+                                hints.append(s)
+                        for fig in soup.find_all('figure'):
+                            im = fig.find('img')
+                            if im and im.get('src'):
+                                hints.append(im.get('src'))
+                except Exception:
+                    # parsing failed; fall back to regex below
+                    pass
+
+                # If BeautifulSoup parsing didn't yield anything, fallback to regex
+                if not hints:
+                    m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+                    if m:
+                        hints.append(m.group(1))
+                    m = re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+                    if m:
+                        hints.append(m.group(1))
+                    m = re.search(r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']', html, re.I)
+                    if m:
+                        hints.append(m.group(1))
+                    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html, re.I)
+                    if m:
+                        hints.append(m.group(1))
+
+                # Resolve relative URLs and attempt fetches for ALL hints (do not stop on first)
+                seen = set()
+                for h in hints:
+                    if not h:
+                        continue
+                    try:
+                        cand_url = urljoin(target_url, h)
+                        # Upgrade Twitter thumbnail URLs to large for better quality
+                        if 'pbs.twimg.com' in cand_url:
+                            cand_url = re.sub(r'(?<=[?&])name=(?:small|medium|thumb|360x360|240x240)', 'name=large', cand_url)
+                        # Skip profile images — we want tweet media images only
+                        if '/profile_images/' in cand_url:
                             continue
-                        if tw_url in seen:
+                        if cand_url in seen:
                             continue
-                        try:
-                            b, ct = _internal_fetch(tw_url, min_size=MIN_IMAGE_FETCH_BYTES)
-                            if b and ct:
-                                candidates.append((tw_url, b, ct))
-                                used_method = used_method or 'html'
-                                candidate_sources[tw_url] = src or 'scrape'
-                                seen.add(tw_url)
-                        except Exception:
-                            continue
-            except Exception:
-                # don't fail the whole request if the helper errors
-                pass
+                        seen.add(cand_url)
+                        b, ct = _internal_fetch(cand_url, min_size=MIN_IMAGE_FETCH_BYTES)
+                        if b and ct:
+                            candidates.append((cand_url, b, ct))
+                            used_method = 'html'
+                            # record where this candidate came from
+                            candidate_sources[cand_url] = 'html'
+                    except Exception:
+                        continue
+
+                # For Twitter/X targets, also call the unified twitter helper to
+                # aggregate additional HTML-derived candidates (scrape/nitter).
+                # This helps collect multi-photo tweets where the page-level
+                # meta tags only expose a single image.
+                try:
+                    if (('twitter.com' in target_url) or ('x.com' in target_url)):
+                        tw_urls = fetch_twitter_media_urls_with_sources(target_url)
+                        for (tw_url, src) in tw_urls:
+                            # prefer non-api sources here (we're improving HTML path)
+                            if src == 'api':
+                                continue
+                            if tw_url in seen:
+                                continue
+                            try:
+                                b, ct = _internal_fetch(tw_url, min_size=MIN_IMAGE_FETCH_BYTES)
+                                if b and ct:
+                                    candidates.append((tw_url, b, ct))
+                                    used_method = used_method or 'html'
+                                    candidate_sources[tw_url] = src or 'scrape'
+                                    seen.add(tw_url)
+                            except Exception:
+                                continue
+                except Exception:
+                    # don't fail the whole request if the helper errors
+                    pass
 
             # gallery-dl fetch for Twitter/X sensitive images (primary auth method).
             # gallery-dl maintains active Twitter support and handles sensitive
@@ -2643,10 +2644,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
                         gdl_results, gdl_description = fetch_twitter_media_gallerydl(target_url)
-                        for (img_bytes, mime) in gdl_results:
-                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
-                                candidates.append((target_url, img_bytes, mime))
-                                used_method = 'gallerydl'
+                        valid_gdl = [(b, m) for (b, m) in gdl_results if b and len(b) >= MIN_IMAGE_FETCH_BYTES]
+                        for idx, (img_bytes, mime) in enumerate(valid_gdl):
+                            c_url = target_url if len(valid_gdl) == 1 else f"{target_url}#img-{idx + 1}"
+                            candidates.append((c_url, img_bytes, mime))
+                            used_method = 'gallerydl'
                         if gdl_description and not fetched_description:
                             fetched_description = gdl_description
                     except Exception:
@@ -2657,10 +2659,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
                         gql_results, gql_description = fetch_twitter_media(target_url)
-                        for (img_bytes, mime) in gql_results:
-                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
-                                candidates.append((target_url, img_bytes, mime))
-                                used_method = 'twitter_gql'
+                        valid_gql = [(b, m) for (b, m) in gql_results if b and len(b) >= MIN_IMAGE_FETCH_BYTES]
+                        for idx, (img_bytes, mime) in enumerate(valid_gql):
+                            c_url = target_url if len(valid_gql) == 1 else f"{target_url}#img-{idx + 1}"
+                            candidates.append((c_url, img_bytes, mime))
+                            used_method = 'twitter_gql'
                         if gql_description and not fetched_description:
                             fetched_description = gql_description
                     except TwitterAuthError as e:
@@ -2673,10 +2676,11 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 if ('twitter.com' in target_url) or ('x.com' in target_url):
                     try:
                         ytdlp_results, ytdlp_description = fetch_twitter_media_ytdlp(target_url)
-                        for (img_bytes, mime) in ytdlp_results:
-                            if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
-                                candidates.append((target_url, img_bytes, mime))
-                                used_method = 'ytdlp'
+                        valid_ytdlp = [(b, m) for (b, m) in ytdlp_results if b and len(b) >= MIN_IMAGE_FETCH_BYTES]
+                        for idx, (img_bytes, mime) in enumerate(valid_ytdlp):
+                            c_url = target_url if len(valid_ytdlp) == 1 else f"{target_url}#img-{idx + 1}"
+                            candidates.append((c_url, img_bytes, mime))
+                            used_method = 'ytdlp'
                         if ytdlp_description and not fetched_description:
                             fetched_description = ytdlp_description
                     except Exception:
@@ -2733,18 +2737,43 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                                  len(poipiku_results), [len(b) for b, _ in poipiku_results])
                     if poipiku_results:
                         candidates = []  # replace generic results with poipiku-specific ones
+                        valid_poipiku = []
                         for (img_bytes, mime) in poipiku_results:
                             if img_bytes and len(img_bytes) >= MIN_IMAGE_FETCH_BYTES:
-                                candidates.append((target_url, img_bytes, mime))
+                                valid_poipiku.append((img_bytes, mime))
                             else:
                                 logging.info('poipiku: dropping a %d-byte image (< MIN_IMAGE_FETCH_BYTES=%d)',
                                              len(img_bytes or b''), MIN_IMAGE_FETCH_BYTES)
+                        for idx, (img_bytes, mime) in enumerate(valid_poipiku):
+                            c_url = target_url if len(valid_poipiku) == 1 else f"{target_url}#img-{idx + 1}"
+                            candidates.append((c_url, img_bytes, mime))
                         if candidates:
                             used_method = 'poipiku'
                     logging.info('poipiku: after poipiku-specific handling, %d candidate(s) remain (used_method=%s)',
                                  len(candidates), used_method)
                 except Exception:
                     logging.exception('Poipiku fetch failed for %s', target_url)
+
+            # Generic gallery-dl fetch for web pages / multi-page galleries.
+            # Runs when explicitly requested via force_method == 'gallerydl',
+            # or as a fallback when earlier scraping paths found no candidates.
+            if HAVE_GALLERYDL and fetch_media_gallerydl is not None:
+                if force_method == 'gallerydl' or (not candidates and force_method not in ('api', 'playwright')):
+                    try:
+                        gdl_gen_results, gdl_gen_desc = fetch_media_gallerydl(target_url)
+                        valid_gen = [(b, m) for (b, m) in gdl_gen_results if b and len(b) >= MIN_IMAGE_FETCH_BYTES]
+                        if valid_gen:
+                            candidates = []
+                            candidate_sources = {}
+                            for idx, (img_bytes, mime) in enumerate(valid_gen):
+                                c_url = target_url if len(valid_gen) == 1 else f"{target_url}#img-{idx + 1}"
+                                candidates.append((c_url, img_bytes, mime))
+                                candidate_sources[c_url] = 'gallerydl'
+                            used_method = 'gallerydl'
+                        if gdl_gen_desc and not fetched_description:
+                            fetched_description = gdl_gen_desc
+                    except Exception:
+                        logging.exception('Generic gallery-dl fetch failed for %s', target_url)
 
             # If the client explicitly requested API mode for twitter/x, prefer
             # the API-based candidates (override HTML hints when API returns results).
@@ -4139,16 +4168,21 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         here on purpose, exactly like any other freshly-fetched item
         waiting in the edit queue.
 
-        Multipart form fields:
-          images: one or more image files (required — at least one)
-          link:   optional — the original (now-dead) post URL, kept only
-                  as a reference/citation, never fetched from
+        Multipart form fields (at least one of images, link, or artist must be provided):
+          images: optional — one or more image files
+          link:   optional — the post/gallery URL (either as a dead-link reference
+                  or to fetch images from after creation)
           artist: optional
           source: optional, defaults to 'manual'
         """
         files = request.FILES.getlist('images')
-        if not files:
-            return Response({'detail': '画像ファイルを1枚以上指定してください'}, status=status.HTTP_400_BAD_REQUEST)
+        data = request.data
+        link = (data.get('link') or '').strip()
+        artist = (data.get('artist') or '').strip()
+        source = (data.get('source') or 'manual').strip() or 'manual'
+
+        if not files and not link and not artist:
+            return Response({'detail': '画像ファイル、元URL、作者のいずれか1つ以上を指定してください'}, status=status.HTTP_400_BAD_REQUEST)
 
         for f in files:
             if not (f.content_type or '').startswith('image/'):
@@ -4158,11 +4192,6 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     {'detail': f'{f.name} が大きすぎます(1ファイルの上限{MAX_MANUAL_UPLOAD_BYTES // (1024 * 1024)}MB)'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
-        data = request.data
-        link = (data.get('link') or '').strip()
-        artist = (data.get('artist') or '').strip()
-        source = (data.get('source') or 'manual').strip() or 'manual'
 
         item = Item.objects.create(
             # No real external id exists for a manually-registered item — a
@@ -4187,7 +4216,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             except Exception:
                 logging.exception('Failed to save manually-uploaded image %s for item %s', f.name, item.pk)
 
-        if not item.preview_images.exists():
+        if files and not item.preview_images.exists():
             item.delete()
             return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

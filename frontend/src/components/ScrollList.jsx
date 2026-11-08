@@ -51,9 +51,12 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
   // pixiv/pximg link starts on that method instead of the generic default,
   // to avoid the "fetch once, get a thumbnail, fetch again with Playwright
   // to get the real image" two-step this had otherwise.
-  const [fetchMethod, setFetchMethod] = useState(
-    (it.link && (it.link.includes('pixiv.net') || it.link.includes('pximg.net'))) ? 'playwright' : 'html'
-  )
+  const [fetchMethod, setFetchMethod] = useState(() => {
+    const l = it.link || ''
+    if (l.includes('pixiv.net') || l.includes('pximg.net')) return 'playwright'
+    if (!l || l.includes('twitter.com') || l.includes('x.com') || l.includes('poipiku.com')) return 'html'
+    return 'gallerydl'
+  })
   const [showEditor, setShowEditor] = useState(false)
   const [titlesState, setTitlesState] = useState(it.titles || [])
   const [charsState, setCharsState] = useState(it.characters || [])
@@ -181,7 +184,8 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
     e && e.preventDefault()
     setLoading(true)
     // first fetch candidates (preview-only)
-    const candRes = await fetchPreviewCandidates(it.id, url, { force_method: fetchMethod === 'api' ? 'api' : (fetchMethod === 'playwright' ? 'playwright' : undefined) })
+    const forceMethodParam = (fetchMethod === 'api' || fetchMethod === 'playwright' || fetchMethod === 'gallerydl') ? fetchMethod : undefined
+    const candRes = await fetchPreviewCandidates(it.id, url, { force_method: forceMethodParam })
     setLoading(false)
     if(!candRes.ok){
       const detail = candRes.body && candRes.body.detail
@@ -398,6 +402,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
               <option value="html">HTML scrape</option>
               <option value="api">Use API</option>
               <option value="playwright">Use Browser (Playwright)</option>
+              <option value="gallerydl">gallery-dl</option>
             </select>
             <button className="btn" type="button" onClick={onFetch} disabled={loading} style={{padding:'7px 12px', lineHeight:1, fontSize:24}} title="候補を取得してプレビューに追加">
               {loading ? '…' : '+'}

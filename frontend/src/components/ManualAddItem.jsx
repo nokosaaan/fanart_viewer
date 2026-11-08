@@ -45,7 +45,10 @@ export default function ManualAddItem({ onClose, onCreated }) {
   }
 
   async function create() {
-    if (files.length === 0) { setError('画像ファイルを1枚以上選択してください'); return }
+    if (files.length === 0 && !link.trim() && !artist.trim()) {
+      setError('画像ファイル、元URL、作者のいずれか1つ以上を入力してください')
+      return
+    }
     setCreating(true)
     setError('')
     try {
@@ -83,15 +86,15 @@ export default function ManualAddItem({ onClose, onCreated }) {
 
         <div className="cgm-panel-body" style={{ padding: '16px 20px', maxHeight: '80vh', overflowY: 'auto' }}>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 16 }}>
-            元投稿のURLが死んでいる(削除・凍結・404など)が、画像は手元に保存してある場合に使います。
-            URLへの取得は一切行わず、選択した画像ファイルをそのままアイテムとして登録します。
-            登録後はいつも通りの編集画面が開くので、タイトル・キャラクター等はそこで設定してください。
+            手元の画像ファイルから直接登録したい場合や、URLのみを指定して後から画像を取得したい場合に使います。
+            画像ファイル・元URL・作者のいずれか1つ以上を入力して登録できます。
+            登録後は編集画面が開くので、タイトル・キャラクター等はそこで設定してください。
           </div>
 
           {error && <div style={{ color: '#f87171', marginBottom: 12, fontSize: 13 }}>{error}</div>}
 
           <div style={{ marginBottom: 14 }}>
-            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>画像ファイル(複数選択可)</label>
+            <label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>画像ファイル(任意・複数選択可)</label>
             <input
               type="file" accept="image/*" multiple
               onChange={handleFileChange}

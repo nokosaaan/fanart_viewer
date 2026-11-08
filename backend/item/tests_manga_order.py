@@ -116,7 +116,6 @@ class ProposedRegionsMultipleOccurrencesTestCase(TestCase):
             self.assertEqual(proposed[1]['characters'], ['Bob'])
             self.assertEqual(proposed[2]['characters'], ['Alice'])
 
-
     def test_reorder_api_move(self):
         # move p1 (currently index 0) forward
         resp = self.client.post(f'/api/items/{self.item.id}/reorder_previews/', {'action': 'move', 'preview_id': self.p1.id, 'direction': 1}, format='json')
@@ -168,5 +167,67 @@ class ProposedRegionsMultipleOccurrencesTestCase(TestCase):
             self.assertEqual(proposed[0]['characters'], ['Alice'])
             self.assertEqual(proposed[1]['characters'], ['Bob'])
             self.assertEqual(proposed[2]['characters'], ['Alice'])
+
+
+class ManualCreateAndGallerydlFetchTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        token = make_token('admin')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def test_create_manual_rejects_all_empty(self):
+        resp = self.client.post('/api/items/create_manual/', {}, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Item.objects.count(), 0)
+
+    def test_create_manual_allows_url_only(self):
+        resp = self.client.post(
+            '/api/items/create_manual/',
+            {'link': 'https://example.com/gallery/123/'},
+            format='multipart',
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data['status'], 'created')
+        self.assertEqual(data['item']['link'], 'https://example.com/gallery/123/')
+        self.assertFalse(data['item']['has_preview'])
+
+    def test_create_manual_allows_artist_only(self):
+        resp = self.client.post(
+            '/api/items/create_manual/',
+            {'artist': 'some_artist'},
+            format='multipart',
+        )
+        self.assertEqual(resp.status_code, 201)
+        data = resp.json()
+        self.assertEqual(data['item']['artist'], 'some_artist')
+        self.assertFalse(data['item']['has_preview'])
+
+    def test_fetch_and_save_preview_gallerydl_multi_image(self):
+        from unittest.mock import patch
+        it = Item.objects.create(
+            external_id=10001,
+            source='manual',
+            link='https://example.com/gallery/123/',
+        )
+        fake_img_1 = b'\xff\xd8\xff' + (b'A' * 60000)
+        fake_img_2 = b'\xff\xd8\xff' + (b'B' * 60000)
+        with patch('item.views.validate_url', return_value=None), \
+             patch('item.views._fetch_image_via_requests', return_value=(None, None)), \
+             patch('item.views.fetch_media_gallerydl', return_value=([(fake_img_1, 'image/jpeg'), (fake_img_2, 'image/jpeg')], 'Gallery Title')):
+            resp = self.client.post(
+                f'/api/items/{it.id}/fetch_and_save_preview/',
+                {'url': it.link, 'preview_only': True, 'force_method': 'gallerydl'},
+                format='json',
+            )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body['preview_only'])
+        self.assertEqual(body['method'], 'gallerydl')
+        self.assertEqual(len(body['images']), 2)
+        self.assertNotEqual(body['images'][0]['url'], body['images'][1]['url'])
+        it.refresh_from_db()
+        self.assertEqual(it.description, 'Gallery Title')
+
 
 

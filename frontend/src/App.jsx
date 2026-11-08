@@ -313,9 +313,9 @@ function AppMain({ role, onLogout }){
     if(bulkFetchRunning || !pendingItems || pendingItems.length === 0) return
     // Same mapping ScrollList.jsx's own per-item dropdown uses: 'html' is
     // this app's existing default cascade (direct-image URL, then HTML
-    // og:image scrape), so only 'api'/'playwright' are ever passed through
-    // as an explicit override.
-    const forceMethodParam = forceMethod === 'api' ? 'api' : (forceMethod === 'playwright' ? 'playwright' : undefined)
+    // og:image scrape), so only 'api'/'playwright'/'gallerydl' are ever passed
+    // through as an explicit override.
+    const forceMethodParam = (forceMethod === 'api' || forceMethod === 'playwright' || forceMethod === 'gallerydl') ? forceMethod : undefined
     bulkFetchCancelledRef.current = false
     bulkFetchAbortRef.current = new AbortController()
     setBulkFetchRunning(true)

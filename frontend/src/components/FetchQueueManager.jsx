@@ -122,6 +122,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
             <option value="html">HTML scrape</option>
             <option value="api">Use API</option>
             <option value="playwright">Use Browser (Playwright)</option>
+            <option value="gallerydl">gallery-dl</option>
           </select>
           <button className="btn" onClick={()=>onRunBulkFetch(pendingItems, bulkFetchMethod)} disabled={bulkRunning || pendingItems.length===0}>
             {bulkRunning

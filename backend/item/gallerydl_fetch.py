@@ -12,7 +12,10 @@ Required env vars:
 
 import json
 import logging
+import mimetypes
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,7 +29,9 @@ import requests
 # subprocess instead of a nonexistent `gallery-dl` binary. `sys.frozen` is
 # the standard PyInstaller idiom for "am I running from a frozen build".
 _GALLERYDL_CMD = (
-    [sys.executable, '--run-gallery-dl'] if getattr(sys, 'frozen', False) else ['gallery-dl']
+    [sys.executable, '--run-gallery-dl']
+    if getattr(sys, 'frozen', False)
+    else (['gallery-dl'] if shutil.which('gallery-dl') else [sys.executable, '-m', 'gallery_dl'])
 )
 
 logger = logging.getLogger(__name__)
@@ -163,3 +168,181 @@ def fetch_twitter_media_gallerydl(url: str) -> tuple[list[tuple[bytes, str]], st
                     os.unlink(p)
                 except OSError:
                     pass
+
+
+def _natural_sort_key(name: str):
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name or "")]
+
+
+def _detect_mime_type(path: str, data: bytes) -> str:
+    """Detect media MIME type from magic bytes with filename extension fallback."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        return "video/mp4"
+    guessed, _ = mimetypes.guess_type(path)
+    return (guessed or "application/octet-stream").lower()
+
+
+def _write_generic_config(cookies_path: str | None = None, pixiv_phpsessid: str | None = None) -> str:
+    """Write a gallery-dl config file for general web gallery fetching."""
+    extractor_cfg: dict = {
+        "skip": "enumerate",
+        "generic": {
+            "enabled": True,
+        },
+    }
+    if cookies_path:
+        extractor_cfg["twitter"] = {
+            "cookies": cookies_path,
+            "sensitive": True,
+            "size": "orig",
+        }
+    if pixiv_phpsessid:
+        extractor_cfg["pixiv"] = {
+            "cookies": {"PHPSESSID": pixiv_phpsessid},
+        }
+    cfg = {"extractor": extractor_cfg}
+    fd, path = tempfile.mkstemp(suffix=".json", prefix="gdl_config_")
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f)
+    return path
+
+
+def fetch_media_gallerydl(url: str, timeout: int = 300) -> tuple[list[tuple[bytes, str]], str]:
+    """Fetch media from a web page or multi-page gallery URL using gallery-dl.
+
+    Unlike `fetch_twitter_media_gallerydl` (which dumps bare URLs via `-j`),
+    this lets gallery-dl perform the actual file downloads into a temporary
+    directory so multi-page pagination, intermediary viewer pages, session
+    headers/cookies, and fallback mirrors are all handled by gallery-dl's own
+    extractor pipeline.
+
+    Returns ([(image_bytes, mime_type), ...], description_text).
+    """
+    cookies_path = config_path = tmpdir = None
+    try:
+        try:
+            from .twitter_creds import get_credentials as _get_twitter_creds
+            auth_token, ct0 = _get_twitter_creds()
+            if auth_token and ct0:
+                cookies_path = _write_cookies(auth_token, ct0)
+        except Exception:
+            cookies_path = None
+
+        pixiv_phpsessid = None
+        try:
+            from .pixiv_creds import get_credentials as _get_pixiv_creds
+            pixiv_phpsessid = (_get_pixiv_creds() or {}).get("phpsessid") or None
+        except Exception:
+            pixiv_phpsessid = None
+
+        config_path = _write_generic_config(cookies_path=cookies_path, pixiv_phpsessid=pixiv_phpsessid)
+        tmpdir = tempfile.mkdtemp(prefix="gdl_dl_")
+
+        stdout_text = ""
+        stderr_text = ""
+        try:
+            proc = subprocess.run(
+                [
+                    *_GALLERYDL_CMD,
+                    "--config", config_path,
+                    "-D", tmpdir,
+                    "--no-mtime",
+                    "--no-colors",
+                    "--write-info-json",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
+            )
+            stdout_text = proc.stdout or ""
+            stderr_text = proc.stderr or ""
+            if proc.returncode not in (0, 1):
+                logger.warning("gallery-dl exited %s for %s: %s", proc.returncode, url, stderr_text[:300])
+        except subprocess.TimeoutExpired as exc:
+            stdout_text = (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""))
+            logger.warning("gallery-dl timed out after %ss for %s; collecting any files already downloaded", timeout, url)
+
+        description = ""
+        info_path = os.path.join(tmpdir, "info.json")
+        if os.path.isfile(info_path):
+            try:
+                with open(info_path, "r", encoding="utf-8") as fp:
+                    info = json.load(fp)
+                if isinstance(info, dict):
+                    for key in ("content", "description", "title"):
+                        val = info.get(key)
+                        if isinstance(val, str) and val.strip():
+                            description = val.strip()
+                            break
+            except Exception:
+                pass
+
+        def _is_media_file(p: str) -> bool:
+            if not os.path.isfile(p):
+                return False
+            base = os.path.basename(p).lower()
+            if base == "info.json" or base.endswith(".part") or base.endswith(".json"):
+                return False
+            return True
+
+        ordered_paths: list[str] = []
+        seen_paths: set[str] = set()
+        real_tmpdir = os.path.realpath(tmpdir)
+
+        for raw_line in stdout_text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("# "):
+                line = line[2:].strip()
+            if not line:
+                continue
+            cand = os.path.realpath(line)
+            if cand.startswith(real_tmpdir + os.sep) and _is_media_file(cand) and cand not in seen_paths:
+                ordered_paths.append(cand)
+                seen_paths.add(cand)
+
+        remaining_names = sorted(os.listdir(tmpdir), key=_natural_sort_key)
+        for name in remaining_names:
+            cand = os.path.realpath(os.path.join(tmpdir, name))
+            if _is_media_file(cand) and cand not in seen_paths:
+                ordered_paths.append(cand)
+                seen_paths.add(cand)
+
+        results: list[tuple[bytes, str]] = []
+        for fpath in ordered_paths:
+            try:
+                with open(fpath, "rb") as fp:
+                    data = fp.read()
+                if not data:
+                    continue
+                mime = _detect_mime_type(fpath, data)
+                if (mime.startswith("image/") or mime.startswith("video/")) and mime != "image/svg+xml":
+                    results.append((data, mime))
+            except OSError as e:
+                logger.warning("gallery-dl: failed to read downloaded file %s: %s", fpath, e)
+
+        if not results:
+            logger.warning("gallery-dl: no media downloaded for %s\nstderr: %s", url, stderr_text[:300])
+        else:
+            logger.info("gallery-dl: downloaded %d file(s) for %s", len(results), url)
+
+        return results, description
+
+    finally:
+        for p in (cookies_path, config_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
