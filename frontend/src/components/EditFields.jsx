@@ -4,6 +4,7 @@ import RegionAnnotator from './RegionAnnotator'
 import { getPlatformIcon } from '../lib/platformIcon'
 import { saveItemFields, saveCharacterRegions } from '../lib/itemFieldsApi'
 import { handleGroupingResponse } from '../lib/groupChoice'
+import { getAllSituations, saveCustomSituation, DEFAULT_SITUATIONS } from '../lib/situations'
 
 const SECTION = {
   label: { color:'#94a3b8', fontSize:11, fontWeight:600, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:6, display:'block' },
@@ -442,13 +443,23 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     }
   }
 
-  const SITUATIONS = [
-    { value:'',        label:'— 未設定 —' },
-    { value:'SOLO',    label:'SOLO' },
-    { value:'CP',      label:'CP' },
-    { value:'MULTIPLE',label:'MULTIPLE' },
-    { value:'PARODY',  label:'PARODY' },
-    { value:'R18',     label:'R18' },
+  const [customSits, setCustomSits] = useState(() => getAllSituations([item]))
+  const [showAddSituation, setShowAddSituation] = useState(false)
+  const [newSituationInput, setNewSituationInput] = useState('')
+
+  function handleAddSituation(){
+    const val = (newSituationInput || '').trim().toUpperCase()
+    if(!val) return
+    saveCustomSituation(val)
+    setCustomSits(getAllSituations([item, { situation: val }]))
+    setSituation(val)
+    setNewSituationInput('')
+    setShowAddSituation(false)
+  }
+
+  const situationsList = [
+    { value:'', label:'— 未設定 —' },
+    ...customSits.map(s => ({ value: s, label: s }))
   ]
 
   return (
@@ -757,8 +768,8 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
 
       <div style={SECTION.wrap}>
         <label style={SECTION.label}>Situation</label>
-        <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
-          {SITUATIONS.map(s=>(
+        <div style={{display:'flex', gap:8, flexWrap:'wrap', alignItems:'center'}}>
+          {situationsList.map(s=>(
             <button key={s.value} type="button" onClick={()=>setSituation(prev => prev === s.value ? '' : s.value)}
               style={{
                 padding:'8px 16px', borderRadius:6, border:'none', cursor:'pointer', fontSize:13, fontWeight:500,
@@ -768,7 +779,52 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
               }}
             >{s.label || '—'}</button>
           ))}
+          {!showAddSituation && (
+            <button
+              type="button"
+              onClick={() => setShowAddSituation(true)}
+              style={{
+                padding:'6px 12px', borderRadius:6, border:'1px dashed #475569', cursor:'pointer',
+                fontSize:12, background:'transparent', color:'#94a3b8'
+              }}
+              title="新しいカスタムSituationを追加"
+            >
+              ＋ 新規Situation追加
+            </button>
+          )}
         </div>
+        {showAddSituation && (
+          <div style={{display:'flex', gap:8, alignItems:'center', marginTop:10}}>
+            <input
+              type="text"
+              placeholder="新しいSituation名 (例: COMIC, NSFW...)"
+              value={newSituationInput}
+              onChange={e => setNewSituationInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleAddSituation() }}
+              style={{
+                background:'#0f172a', color:'#f1f5f9', border:'1px solid #334155',
+                borderRadius:6, padding:'6px 10px', fontSize:13, width:260, boxSizing:'border-box'
+              }}
+              autoFocus
+            />
+            <button
+              type="button"
+              className="btn"
+              onClick={handleAddSituation}
+              style={{background:'#2563eb', color:'#fff', padding:'6px 14px', fontSize:12, fontWeight:600}}
+            >
+              追加して選択
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => { setShowAddSituation(false); setNewSituationInput('') }}
+              style={{padding:'6px 10px', fontSize:12}}
+            >
+              キャンセル
+            </button>
+          </div>
+        )}
       </div>
 
       <div style={SECTION.wrap}>

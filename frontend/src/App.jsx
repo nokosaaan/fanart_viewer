@@ -30,6 +30,7 @@ import { buildTourStepsA, buildTourStepsB } from './lib/tourSteps'
 import ThemeSettings from './components/ThemeSettings'
 import { getThemeChoice, getUseSystem, saveThemeChoice, saveUseSystem, computeEffectiveTheme, applyTheme } from './lib/theme'
 import { getDefaultViewMode, saveDefaultViewMode } from './lib/viewModeSettings'
+import { getAllSituations } from './lib/situations'
 
 // Platform badge/icon + text for a header-menu label — see HeaderMenu.jsx's
 // MenuEntry, which renders `label` as-is (plain string or JSX both work).
@@ -61,8 +62,21 @@ function AppMain({ role, onLogout }){
   const [items, setItems] = useState(() => loadCachedItems() || [])
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState([])
-  const [includeCP, setIncludeCP] = useState(false)
-  const [includeR18, setIncludeR18] = useState(false)
+  const [includeCP, setIncludeCP] = useState(true)
+  const [includeR18, setIncludeR18] = useState(true)
+
+  const [customSituationsVersion, setCustomSituationsVersion] = useState(0)
+  useEffect(() => {
+    function handleCustomSitUpdate() {
+      setCustomSituationsVersion(v => v + 1)
+    }
+    window.addEventListener('fv_custom_situations_updated', handleCustomSitUpdate)
+    return () => window.removeEventListener('fv_custom_situations_updated', handleCustomSitUpdate)
+  }, [])
+
+  const allSituations = useMemo(() => {
+    return getAllSituations(items)
+  }, [items, customSituationsVersion])
   // 'list' (ScrollList's cards) | 'gallery' (PreviewPane embedded as the
   // main view, image-grid-first) — the header toggle only changes THIS
   // session's state; the persisted starting default lives in
@@ -629,10 +643,12 @@ function AppMain({ role, onLogout }){
     }
 
     return list.filter(it=>{
-      if(!includeCP && (it.situation||'').toUpperCase()==='CP') return false
-      if((readOnly || !includeR18) && (it.situation||'').toUpperCase()==='R18') return false
+      const sit = (it.situation||'').toUpperCase()
       if(situationFilter && situationFilter!=='ALL'){
-        if(((it.situation||'').toUpperCase()) !== situationFilter) return false
+        if(sit !== situationFilter) return false
+      } else {
+        if(!includeCP && sit === 'CP') return false
+        if((readOnly || !includeR18) && sit === 'R18') return false
       }
       if(titleMissingOnly && hasAnyTitle(it)) return false
       // has_preview comes straight off ItemSerializer (see backend/item/
@@ -913,6 +929,7 @@ function AppMain({ role, onLogout }){
         setIncludeR18={setIncludeR18}
         situationFilter={situationFilter}
         setSituationFilter={setSituationFilter}
+        situations={allSituations}
         titleMissingOnly={titleMissingOnly}
         setTitleMissingOnly={setTitleMissingOnly}
         previewMissingOnly={previewMissingOnly}

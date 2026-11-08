@@ -1,32 +1,8 @@
 import React, {useState} from 'react'
+import { DEFAULT_SITUATIONS } from '../lib/situations'
 
-export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, readOnly}){
+export default function SearchBar({query, setQuery, suggestions, onAddSuggestion, filters, onRemoveFilter, includeCP, setIncludeCP, includeR18, setIncludeR18, situationFilter, setSituationFilter, titleMissingOnly, setTitleMissingOnly, previewMissingOnly, setPreviewMissingOnly, readOnly, situations = DEFAULT_SITUATIONS}){
   const [open, setOpen] = useState(false)
-
-  function onToggleCP(e){
-    const willEnable = e.target.checked
-    if(willEnable){
-      const ok = window.confirm('閲覧注意: CP（カップリング）を含む可能性のあるコンテンツが表示されます。表示を続けてもよいですか？')
-      if(!ok){
-        // revert checkbox visually
-        e.preventDefault()
-        return
-      }
-    }
-    setIncludeCP(willEnable)
-  }
-
-  function onToggleR18(e){
-    const willEnable = e.target.checked
-    if(willEnable){
-      const ok = window.confirm('閲覧注意: R18 コンテンツが表示されます。表示を続けてもよいですか？')
-      if(!ok){
-        e.preventDefault()
-        return
-      }
-    }
-    setIncludeR18(willEnable)
-  }
 
   // Empty query would otherwise match every suggestion (''.includes('') is
   // always true), so clearing the box left the full candidate list showing
@@ -34,6 +10,21 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
   const matched = query.trim().length === 0
     ? []
     : suggestions.filter(s=> s && s.toLowerCase().includes(query.toLowerCase())).slice(0,10)
+
+  // Dynamically generated situation options from all current and custom situations
+  const situationOptions = [
+    { v: 'ALL', l: 'All' },
+    ...situations
+      .filter(s => {
+        if (!includeR18 && s === 'R18' && situationFilter !== 'R18') return false
+        if (!includeCP && s === 'CP' && situationFilter !== 'CP') return false
+        return true
+      })
+      .map(s => {
+        const l = s === 'CP' || s === 'R18' ? s : (s.charAt(0) + s.slice(1).toLowerCase())
+        return { v: s, l }
+      })
+  ]
 
   return (
     <div className="searchbar">
@@ -52,15 +43,7 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
         <div className="controls-vertical">
           <div className="options-panel">
             <div className="situation-options">
-              {[
-                { v: 'ALL', l: 'All' },
-                { v: 'SOLO', l: 'Solo' },
-                { v: 'CP', l: 'CP' },
-                { v: 'MULTIPLE', l: 'Multiple' },
-                { v: 'PARODY', l: 'Parody' },
-                // R18 option is only shown when user has enabled R18 mode
-                ...(includeR18 ? [{ v: 'R18', l: 'R18' }] : [])
-              ].map(o => (
+              {situationOptions.map(o => (
                 <button
                   key={o.v}
                   className={`situation-option ${situationFilter === o.v ? 'active' : ''}`}
@@ -88,14 +71,8 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
               </button>
               <button
                 className={`cp-chip ${includeCP ? 'enabled' : ''}`}
-                onClick={() => {
-                  const willEnable = !includeCP
-                  if (willEnable) {
-                    const ok = window.confirm('閲覧注意: CP（カップリング）を含む可能性のあるコンテンツが表示されます。表示を続けてもよいですか？')
-                    if (!ok) return
-                  }
-                  setIncludeCP(willEnable)
-                }}
+                onClick={() => setIncludeCP(v => !v)}
+                title={includeCP ? 'CPを含むアイテムを表示中（クリックで非表示）' : 'CPを含むアイテムを非表示中（クリックで表示）'}
               >
                 {includeCP ? 'CP: ON' : 'CP: OFF'}
               </button>
@@ -103,14 +80,8 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
                 <button
                   style={{marginLeft:8}}
                   className={`cp-chip ${includeR18 ? 'enabled' : ''}`}
-                  onClick={() => {
-                    const willEnable = !includeR18
-                    if (willEnable) {
-                      const ok = window.confirm('閲覧注意: R18 コンテンツが表示されます。表示を続けてもよいですか？')
-                      if (!ok) return
-                    }
-                    setIncludeR18(willEnable)
-                  }}
+                  onClick={() => setIncludeR18(v => !v)}
+                  title={includeR18 ? 'R18を含むアイテムを表示中（クリックで非表示）' : 'R18を含むアイテムを非表示中（クリックで表示）'}
                 >
                   {includeR18 ? 'R18: ON' : 'R18: OFF'}
                 </button>
