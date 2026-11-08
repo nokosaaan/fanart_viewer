@@ -76,6 +76,8 @@ $RebuildReason = ""
 if ($CanFastSync) {
     $stampTime = (Get-Item $FastSyncStamp).LastWriteTimeUtc
     $triggerFiles = @(
+        (Join-Path $PSScriptRoot "fanart_viewer.spec"),
+        (Join-Path $PSScriptRoot "launcher.py"),
         (Join-Path $PSScriptRoot "splash.png"),
         (Join-Path $PSScriptRoot "requirements.txt"),
         (Join-Path $BackendRoot "requirements.txt"),

@@ -297,6 +297,20 @@ def _set_status(window, text):
 _shutdown_event = threading.Event()
 
 
+def _load_management_command(name):
+    """Import an `item` management command module directly and return an
+    instance, instead of letting Django discover it by name. Name-based
+    discovery (django.core.management.get_commands) lists the commands
+    directory through pkgutil, which is unreliable in a frozen build where
+    first-party sources live on disk next to the bundle; importing the module
+    by its dotted path goes through the normal import system and always works
+    (the module is bundled via hiddenimports in fanart_viewer.spec)."""
+    import importlib
+
+    module = importlib.import_module(f'item.management.commands.{name}')
+    return module.Command()
+
+
 def _poller_loop(platform, command):
     """In-process replacement for docker-compose's separate `poller`
     container (poller_entrypoint.sh -> manage.py poll_twitter_updates).
@@ -335,7 +349,7 @@ def _poller_loop(platform, command):
     while not _shutdown_event.is_set():
         if not is_write_locked():
             try:
-                call_command(command, once=True)
+                call_command(_load_management_command(command), once=True)
             except Exception:
                 logging.getLogger(__name__).exception('%s tick failed', command)
         try:
@@ -483,14 +497,17 @@ def _run_training_mode():
 
     django.setup()
 
-    from django.core.management import call_command, execute_from_command_line
-
     _migrate_if_needed()
 
     extra_args = [a for a in sys.argv[1:] if a != TRAIN_FLAG]
     logging.getLogger(__name__).info('Starting train_character_classifier %s', extra_args)
     try:
-        execute_from_command_line(['fanart_viewer', 'train_character_classifier', *extra_args])
+        # Run the command class directly (see _load_management_command) so
+        # CLI parsing still works but no name-based discovery is needed.
+        _load_management_command('train_character_classifier').run_from_argv(
+            ['fanart_viewer', 'train_character_classifier', *extra_args]
+        )
+        sys.exit(0)
     except SystemExit as e:
         # execute_from_command_line calls sys.exit() itself on completion
         # (success or a handled CommandError) -- let that determine our
