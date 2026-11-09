@@ -4212,6 +4212,25 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             item.artist = artist.strip()
             updates['artist'] = item.artist
 
+        if 'checkpoints' in data:
+            raw_cps = data.get('checkpoints')
+            if isinstance(raw_cps, list):
+                valid = []
+                for entry in raw_cps:
+                    if isinstance(entry, dict):
+                        try:
+                            p_idx = max(0, int(entry.get('page_index', 0)))
+                        except (ValueError, TypeError):
+                            continue
+                        lbl = str(entry.get('label', '')).strip()
+                        valid.append({'page_index': p_idx, 'label': lbl})
+                valid.sort(key=lambda x: x['page_index'])
+                for i, cp in enumerate(valid):
+                    if not cp['label']:
+                        cp['label'] = f"第{i+1}話"
+                item.checkpoints = valid
+                updates['checkpoints'] = valid
+
         if not updates:
             return Response({'detail': 'No updatable fields provided'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -4563,6 +4582,39 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         grouping = _group_response_fields(ensure_characters_grouped(item, only=introduced_chars))
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'saved', 'item': serializer.data, **grouping})
+
+    @action(detail=True, methods=['get', 'post'], url_path='checkpoints')
+    def checkpoints_view(self, request, pk=None):
+        """Get or update manga/comic checkpoints for an Item."""
+        item = self.get_object()
+        if request.method == 'GET':
+            return Response({'checkpoints': item.checkpoints or []})
+
+        raw = request.data.get('checkpoints', [])
+        if not isinstance(raw, list):
+            return Response({'detail': 'checkpoints must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+        valid = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                page_idx = int(entry.get('page_index', 0))
+            except (ValueError, TypeError):
+                continue
+            label = str(entry.get('label', '')).strip()
+            valid.append({
+                'page_index': max(0, page_idx),
+                'label': label,
+            })
+        valid.sort(key=lambda x: x['page_index'])
+        for i, cp in enumerate(valid):
+            if not cp['label']:
+                cp['label'] = f"第{i+1}話"
+        item.checkpoints = valid
+        item.save(update_fields=['checkpoints'])
+        serializer = ItemSerializer(item, context={'request': request})
+        return Response({'status': 'saved', 'checkpoints': item.checkpoints, 'item': serializer.data})
 
     @action(detail=False, methods=['get'], url_path='twitter_auth_check')
     def twitter_auth_check(self, request):

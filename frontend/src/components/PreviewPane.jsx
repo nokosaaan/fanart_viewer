@@ -470,6 +470,108 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     }
   }
 
+  // Chapter / episode checkpoints for multi-page manga:
+  // e.g. [{ page_index: 0, label: "第1話" }, { page_index: 24, label: "第2話" }]
+  const [checkpoints, setCheckpoints] = useState([])
+  const [activeChapterIndex, setActiveChapterIndex] = useState(0)
+
+  useEffect(() => {
+    setCheckpoints(Array.isArray(currentItem?.checkpoints) ? currentItem.checkpoints : [])
+  }, [currentItem?.id, currentItem?.checkpoints])
+
+  const checkpointsMap = useMemo(() => {
+    const map = new Map()
+    for (const cp of checkpoints) {
+      if (cp && typeof cp.page_index === 'number') {
+        map.set(cp.page_index, cp)
+      }
+    }
+    return map
+  }, [checkpoints])
+
+  // Track active chapter / checkpoint as user scrolls comic container
+  useEffect(() => {
+    if (readerLayout !== 'comic' || !comicContainerRef.current || checkpoints.length === 0) {
+      return
+    }
+    const container = comicContainerRef.current
+    function onScroll() {
+      const containerTop = container.scrollTop
+      let cur = 0
+      for (let i = 0; i < checkpoints.length; i++) {
+        const el = document.getElementById(`comic-page-${checkpoints[i].page_index}`)
+        if (el && (el.offsetTop - 140) <= containerTop) {
+          cur = i
+        }
+      }
+      setActiveChapterIndex(cur)
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => container.removeEventListener('scroll', onScroll)
+  }, [readerLayout, checkpoints, previews])
+
+  async function saveCheckpoints(newCps) {
+    if (!currentItem) return
+    const sorted = [...newCps].sort((a, b) => a.page_index - b.page_index)
+    setCheckpoints(sorted)
+    try {
+      const res = await fetch(`/api/items/${currentItem.id}/checkpoints/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ checkpoints: sorted }),
+        credentials: 'same-origin',
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.item) {
+          Object.assign(currentItem, data.item)
+          window.dispatchEvent(new CustomEvent('item-updated', { detail: { item: data.item } }))
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save checkpoints:', err)
+    }
+  }
+
+  function handleAddCheckpoint(pageIndex, initialLabel) {
+    const existing = checkpoints.find(c => c.page_index === pageIndex)
+    const label = window.prompt(
+      `ページ ${pageIndex + 1} のチェックポイント名（話数・章タイトル）を入力してください:`,
+      existing ? existing.label : (initialLabel || `第${checkpoints.length + 1}話`)
+    )
+    if (label === null) return
+    const trimmed = label.trim() || `第${checkpoints.length + 1}話`
+    const filtered = checkpoints.filter(c => c.page_index !== pageIndex)
+    saveCheckpoints([...filtered, { page_index: pageIndex, label: trimmed }])
+  }
+
+  function handleEditCheckpoint(pageIndex) {
+    const existing = checkpoints.find(c => c.page_index === pageIndex)
+    if (!existing) return
+    const label = window.prompt(`チェックポイント名を変更:`, existing.label)
+    if (label === null) return
+    const trimmed = label.trim() || existing.label
+    saveCheckpoints(checkpoints.map(c => c.page_index === pageIndex ? { ...c, label: trimmed } : c))
+  }
+
+  function handleRemoveCheckpoint(pageIndex) {
+    const existing = checkpoints.find(c => c.page_index === pageIndex)
+    if (!existing) return
+    if (!window.confirm(`チェックポイント「${existing.label}」(P.${pageIndex + 1}) を削除しますか？`)) return
+    saveCheckpoints(checkpoints.filter(c => c.page_index !== pageIndex))
+  }
+
+  function jumpToPage(pageIndex) {
+    selectPreviewIndex(pageIndex)
+    if (readerLayout === 'comic') {
+      const el = document.getElementById(`comic-page-${pageIndex}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    }
+  }
+
   // Marks `deletedId` as gone WITHOUT touching any other entry's position —
   // see deletedPreviewIds' own comment for why. Also moves the "currently
   // viewed" image off the now-deleted one, onto the nearest still-alive
@@ -801,8 +903,51 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                             id={`comic-page-${p.index}`}
                             className="comic-page-wrap"
                           >
+                            {checkpointsMap.has(p.index) && (
+                              <div className="comic-chapter-banner">
+                                <div className="comic-chapter-banner-label">
+                                  <span>🚩</span>
+                                  <span style={{ fontWeight: 700 }}>{checkpointsMap.get(p.index).label}</span>
+                                  <span className="comic-chapter-banner-page">P.{p.index + 1}</span>
+                                </div>
+                                <div className="comic-chapter-banner-actions">
+                                  <button
+                                    type="button"
+                                    className="comic-cp-btn-sm"
+                                    onClick={(e) => { e.stopPropagation(); handleEditCheckpoint(p.index) }}
+                                    title="チェックポイント名を変更"
+                                  >
+                                    ✏️ 編集
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="comic-cp-btn-sm danger"
+                                    onClick={(e) => { e.stopPropagation(); handleRemoveCheckpoint(p.index) }}
+                                    title="チェックポイントを削除"
+                                  >
+                                    ✕ 削除
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                             <div className="comic-page-header">
-                              <span>ページ {p.index + 1} / {aliveCount}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span>ページ {p.index + 1} / {aliveCount}</span>
+                                {checkpointsMap.has(p.index) ? (
+                                  <span className="comic-cp-badge" title="話数チェックポイント">
+                                    🚩 {checkpointsMap.get(p.index).label}
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="comic-add-cp-link"
+                                    onClick={(e) => { e.stopPropagation(); handleAddCheckpoint(p.index) }}
+                                    title="このページを新しい話数/チェックポイントとして登録"
+                                  >
+                                    ＋ 🚩 チェックポイント追加
+                                  </button>
+                                )}
+                              </div>
                               <span style={{ opacity: 0.7 }}>{p.filename || ''}</span>
                             </div>
                             <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
@@ -931,6 +1076,83 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       <span>📑</span>
                       <span>{showComicTimeline ? 'ページ一覧 (サムネイル) を隠す ▲' : 'ページ一覧 (サムネイル) を表示 ▼'}</span>
                     </button>
+                  )}
+
+                  {previews && previews.length > 1 && (
+                    <div className="comic-chapters-panel">
+                      <div className="comic-chapters-header">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                          <span>📑</span>
+                          <span>話数・目次</span>
+                          {checkpoints.length > 0 && (
+                            <span style={{ fontSize: 10, background: '#2563eb', color: '#fff', padding: '1px 5px', borderRadius: 10, fontWeight: 700 }}>
+                              {checkpoints.length}話
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(59, 130, 246, 0.2)', border: '1px solid #3b82f6', color: '#93c5fd', borderRadius: 4 }}
+                          onClick={() => {
+                            const defaultPg = Math.min(aliveCount, (currentPreviewIdx + 1) || 1)
+                            const pStr = window.prompt(`チェックポイントを追加するページ番号を入力 (1〜${aliveCount}):`, defaultPg)
+                            if (pStr === null) return
+                            const pNum = parseInt(pStr, 10)
+                            if (isNaN(pNum) || pNum < 1 || pNum > aliveCount) {
+                              alert(`1〜${aliveCount} の範囲で指定してください。`)
+                              return
+                            }
+                            handleAddCheckpoint(pNum - 1)
+                          }}
+                          title="指定ページに話数チェックポイントを追加"
+                        >
+                          ＋ 🚩 追加
+                        </button>
+                      </div>
+                      <div className="comic-chapters-list">
+                        {checkpoints.length === 0 ? (
+                          <div className="comic-chapters-empty">
+                            チェックポイント（話数の区切り）は未設定です。<br />
+                            「＋ 🚩 追加」または各ページヘッダーから追加すると、1クリックでその話へジャンプできます。
+                          </div>
+                        ) : (
+                          checkpoints.map((cp, idx) => {
+                            const isActive = activeChapterIndex === idx
+                            return (
+                              <div
+                                key={cp.page_index}
+                                className={`comic-chapter-item ${isActive ? 'active' : ''}`}
+                                onClick={() => jumpToPage(cp.page_index)}
+                                title={`クリックして ${cp.label} (P.${cp.page_index + 1}) へジャンプ`}
+                              >
+                                <span style={{ marginRight: 6, opacity: 0.85, fontSize: 11 }}>🚩</span>
+                                <span className="comic-chapter-item-label">{cp.label}</span>
+                                <span className="comic-chapter-item-page">P.{cp.page_index + 1}</span>
+                                <div className="comic-chapter-item-tools" onClick={e => e.stopPropagation()}>
+                                  <button
+                                    type="button"
+                                    className="comic-cp-btn-sm"
+                                    onClick={() => handleEditCheckpoint(cp.page_index)}
+                                    title="名前を変更"
+                                  >
+                                    ✏️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="comic-cp-btn-sm danger"
+                                    onClick={() => handleRemoveCheckpoint(cp.page_index)}
+                                    title="削除"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })
+                        )}
+                      </div>
+                    </div>
                   )}
 
                   <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:4}}>
@@ -1160,6 +1382,26 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                                 }
                               }
                             }} />
+                          {checkpointsMap.has(p.index) && (
+                            <span
+                              style={{
+                                position: 'absolute',
+                                top: 2,
+                                right: 2,
+                                background: '#2563eb',
+                                color: '#fff',
+                                fontSize: 9,
+                                padding: '1px 3px',
+                                borderRadius: 2,
+                                pointerEvents: 'none',
+                                lineHeight: 1,
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.5)'
+                              }}
+                              title={checkpointsMap.get(p.index).label}
+                            >
+                              🚩
+                            </span>
+                          )}
                           <span style={{position:'absolute', bottom:2, right:2, background:'rgba(0,0,0,0.65)', color:'#fff',
                             fontSize:9, padding:'1px 4px', borderRadius:2, pointerEvents:'none', lineHeight:1}}>
                             {p.index + 1}

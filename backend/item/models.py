@@ -64,6 +64,9 @@ class Item(models.Model):
     # match this stored one anymore), with no extra bookkeeping needed on
     # every write path that touches characters or character_regions.
     character_regions_ack_signature = models.CharField(max_length=64, blank=True, default='')
+    # Chapter/episode checkpoints for multi-page manga items:
+    # [{"page_index": 0, "label": "第1話"}, {"page_index": 24, "label": "第2話"}, ...]
+    checkpoints = models.JSONField(default=list, blank=True)
 
     def __str__(self):
         return f"{self.external_id} - {self.artist or 'unknown'}"
