@@ -27,6 +27,7 @@ from .gallerydl_fetch import (
     _write_cookies,
     _write_generic_config,
 )
+from .image_optimizer import optimize_image_data
 from .proxy_manager import acquire_proxy_session
 
 logger = logging.getLogger(__name__)
@@ -267,6 +268,8 @@ def poll_job(job_id: str, since: int = 0, limit: int = 10):
             continue
         mime = _detect_mime_type(path, data)
         if (mime.startswith("image/") or mime.startswith("video/")) and mime != "image/svg+xml":
+            if mime.startswith("image/"):
+                data, mime = optimize_image_data(data, mime)
             images.append((data, mime))
         else:
             images.append((b"", ""))  # keep indexes aligned; caller skips empties

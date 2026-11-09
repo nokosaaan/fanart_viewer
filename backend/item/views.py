@@ -31,6 +31,7 @@ import logging
 import traceback
 import unicodedata
 import base64
+from .image_optimizer import optimize_image_data
 from .utils import fetch_twitter_media_urls, fetch_twitter_media_urls_with_sources, get_last_api_response
 import os
 from .headless_fetch import fetch_rendered_media
@@ -330,6 +331,7 @@ def _archive_social_candidate(cand, source):
         try:
             body, ctype = _fetch_image_via_requests(media_url, min_size=MIN_IMAGE_FETCH_BYTES)
             if body and ctype:
+                body, ctype = optimize_image_data(body, ctype)
                 PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
                 saved_any = True
         except Exception:
@@ -3085,6 +3087,8 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         saved = []
         for idx, (url_f, body, ctype) in enumerate(candidates):
             try:
+                if body:
+                    body, ctype = optimize_image_data(body, ctype)
                 pi = PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
                 saved.append({'id': pi.id, 'index': idx, 'url': url_f, 'size': len(body) if body else 0, 'content_type': ctype})
             except Exception:
@@ -3554,6 +3558,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     body = base64.b64decode(b64)
                     m = re.match(r'data:([^;]+);base64', header)
                     ctype = m.group(1) if m else 'application/octet-stream'
+                    body, ctype = optimize_image_data(body, ctype)
                     order = base_offset + start_index + idx
                     PreviewImage.objects.create(item=item, order=order, data=body, content_type=ctype)
                     saved.append({'index': order, 'url': url, 'size': len(body), 'content_type': ctype})
@@ -4395,7 +4400,10 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         for idx, f in enumerate(files):
             try:
-                PreviewImage.objects.create(item=item, order=idx, data=f.read(), content_type=f.content_type or 'image/jpeg', filename=f.name or '')
+                body = f.read()
+                ctype = f.content_type or 'image/jpeg'
+                body, ctype = optimize_image_data(body, ctype)
+                PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype, filename=f.name or '')
             except Exception:
                 logging.exception('Failed to save manually-uploaded image %s for item %s', f.name, item.pk)
 
@@ -4444,9 +4452,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         created = 0
         for offset, f in enumerate(files):
             try:
+                body = f.read()
+                ctype = f.content_type or 'image/jpeg'
+                body, ctype = optimize_image_data(body, ctype)
                 PreviewImage.objects.create(
                     item=item, order=start_order + offset,
-                    data=f.read(), content_type=f.content_type or 'image/jpeg',
+                    data=body, content_type=ctype,
                     filename=f.name or '',
                 )
                 created += 1
@@ -4504,6 +4515,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         created = 0
         for offset, (data, content_type) in enumerate(images):
             try:
+                data, content_type = optimize_image_data(data, content_type)
                 PreviewImage.objects.create(item=item, order=start_order + offset, data=data, content_type=content_type)
                 created += 1
             except Exception:
