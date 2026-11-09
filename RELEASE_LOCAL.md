@@ -312,6 +312,22 @@ docker compose exec web python manage.py import_json_data /app/backup/items-back
 
 より詳しい手順（データ消去・復元込み）は[tips.md](tips.md)を参照。
 
+### プレビュー画像の一括圧縮・DBスリム化 (compress_previews)
+
+既存のプレビュー画像（`PreviewImage.data`）をWebP形式（長辺最大2048px、品質82）に一括圧縮し、DBサイズを大幅に削減（約90%〜95%削減）します。Google Driveバックアップの容量超過やアップロードタイムアウト（Cloudflare 524エラー）の対策としても有効です。
+
+```bash
+# 削減見込み容量のシミュレーション（DB更新なし）
+docker compose exec web python manage.py compress_previews --dry-run
+
+# 本番実行 (Docker / Postgres)
+docker compose exec web python manage.py compress_previews
+
+# Windows スタンドアロン exe 環境の場合 (SQLite)
+.\compress.ps1 -DryRun
+.\compress.ps1 -Vacuum
+```
+
 ---
 
 ## 更新があった時に利用するコマンド

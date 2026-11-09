@@ -169,6 +169,28 @@ cd exe
 .\reset_db.ps1
 ```
 
+### 8. プレビュー画像の一括圧縮・DBスリム化 (compress_previews)
+
+漫画や高解像度画像を大量に保存すると、SQLite DBファイル（`%USERPROFILE%\.fanart_viewer\db.sqlite3`）が肥大化し、ディスク容量やアプリの動作速度に影響を与えることがあります。
+
+既存の画像を高品質なWebP（長辺最大2048px、品質82）に一括圧縮し、SQLiteの空き領域をディスクから回収（`VACUUM`）するためのスクリプトを用意しています：
+
+```powershell
+# 1. 圧縮シミュレーション（DBは変更せず、削減見込み容量のみ計算）
+.\compress.ps1 -DryRun
+
+# 2. 実際に圧縮を実行し、VACUUM でファイルサイズを縮小
+.\compress.ps1 -Vacuum
+```
+
+主なオプション（追加引数としてそのまま渡せます）:
+- `-MaxDim 2048`: 画像の長辺最大ピクセル数（デフォルト: 2048。元画像がこれ以下の場合は拡大されません）
+- `-Quality 82`: WebP品質 1〜100（デフォルト: 82）
+- `-DbPath <パス>`: 対象のSQLiteファイルを明示的に指定する場合
+- `--min-size-kb 100`: 指定したKB以上の画像のみを圧縮対象にする
+
+※ 新規に取り込む画像については、ダウンロード時・保存時にバックグラウンドで自動的にWebP圧縮（最大2048px）が行われるため、このコマンドを毎回実行する必要はありません（既存DBのスリム化や設定変更時にご利用ください）。
+
 ## Twitter/X bookmark trigger
 
 The backend exposes `POST /api/items/bookmark_fetch/` for browser-side automation. Use the browser extension in [browser-extension/](browser-extension/) to detect the click and POST the current tweet URL to the local backend. The server resolves the matching Item, fetches the image candidates, and saves them to the DB.
