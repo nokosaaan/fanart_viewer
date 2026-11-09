@@ -75,6 +75,10 @@ class Command(BaseCommand):
             return
 
         mode_str = "DRY RUN" if dry_run else "LIVE RUN"
+        db_settings = connection.settings_dict
+        engine_short = db_settings.get("ENGINE", "").rsplit(".", 1)[-1]
+        db_target = db_settings.get("NAME", "")
+        self.stdout.write(f"Database target: {engine_short} ({db_target})")
         self.stdout.write(
             f"Starting PreviewImage compression [{mode_str}] (Total: {total_count} images, "
             f"max_dim={max_dim}px, quality={quality}, min_size={options['min_size_kb']}KB)..."

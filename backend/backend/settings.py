@@ -74,13 +74,22 @@ TEMPLATES = [
 WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Database — Postgres by default (docker-compose dev/prod, unchanged), or
-# SQLite when DB_ENGINE=sqlite3 is set — the exe-packaged distribution's own
-# launcher sets this so each user's install is a single local DB file with
-# no separate DB server/container to run (see RELEASE_LOCAL.md's docker
-# workflow, which never sets DB_ENGINE and so keeps using Postgres exactly
-# as before). Default stays 'postgresql' specifically so nothing about the
-# existing docker-compose setup changes unless this is opted into.
-if os.environ.get('DB_ENGINE', 'postgresql') == 'sqlite3':
+# SQLite when DB_ENGINE=sqlite3 is set or when running standalone locally
+# with an existing SQLite database (in ~/.fanart_viewer or backend/data/).
+_user_sqlite = Path.home() / '.fanart_viewer' / 'db.sqlite3'
+_local_sqlite = BASE_DIR / 'data' / 'db.sqlite3'
+
+_use_sqlite = (
+    os.environ.get('DB_ENGINE') == 'sqlite3'
+    or (
+        os.environ.get('DB_ENGINE') is None
+        and 'DATABASE_HOST' not in os.environ
+        and (_user_sqlite.exists() or _local_sqlite.exists())
+    )
+)
+
+if _use_sqlite:
+    _default_sqlite_path = _user_sqlite if _user_sqlite.exists() else _local_sqlite
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
@@ -89,7 +98,7 @@ if os.environ.get('DB_ENGINE', 'postgresql') == 'sqlite3':
             # persists locally, and (for the docker path) already a
             # volume-mounted directory so it isn't lost on container
             # recreation.
-            'NAME': os.environ.get('SQLITE_PATH', str(BASE_DIR / 'data' / 'db.sqlite3')),
+            'NAME': os.environ.get('SQLITE_PATH', str(_default_sqlite_path)),
         }
     }
 else:
