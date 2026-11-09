@@ -22,6 +22,7 @@ import tempfile
 
 import requests
 from .proxy_manager import acquire_proxy_session
+from .extractors import get_extractors_dir
 
 # The exe-packaged build has no separate `gallery-dl` executable on PATH
 # (pip's normal console-script wrapper never gets bundled by PyInstaller --
@@ -29,10 +30,16 @@ from .proxy_manager import acquire_proxy_session
 # with its own --run-gallery-dl mode, re-invoking this same frozen exe as a
 # subprocess instead of a nonexistent `gallery-dl` binary. `sys.frozen` is
 # the standard PyInstaller idiom for "am I running from a frozen build".
-_GALLERYDL_CMD = (
+_EXTRACTORS_DIR = get_extractors_dir()
+_GALLERYDL_BASE = (
     [sys.executable, '--run-gallery-dl']
     if getattr(sys, 'frozen', False)
     else (['gallery-dl'] if shutil.which('gallery-dl') else [sys.executable, '-m', 'gallery_dl'])
+)
+_GALLERYDL_CMD = (
+    [*_GALLERYDL_BASE, "-X", _EXTRACTORS_DIR]
+    if _EXTRACTORS_DIR and os.path.isdir(_EXTRACTORS_DIR)
+    else _GALLERYDL_BASE
 )
 
 logger = logging.getLogger(__name__)

@@ -91,6 +91,11 @@ if IS_GALLERYDL_MODE:
     _flag_index = sys.argv.index(RUN_GALLERYDL_FLAG)
     _gallerydl_argv = sys.argv[_flag_index + 1:]
     import gallery_dl
+    try:
+        from item.extractors import register_custom_extractors
+        register_custom_extractors()
+    except Exception:
+        pass
 
     sys.argv = ['gallery-dl', *_gallerydl_argv]
     sys.exit(gallery_dl.main())

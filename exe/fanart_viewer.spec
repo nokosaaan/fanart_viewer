@@ -78,6 +78,7 @@ def _compute_spec_cache_fingerprint():
     tracked_dirs = [
         os.path.join(BACKEND_ROOT, 'item', 'migrations'),
         os.path.join(BACKEND_ROOT, 'item', 'management', 'commands'),
+        os.path.join(BACKEND_ROOT, 'item', 'extractors'),
         *site_dirs,
     ]
     tracked_files = [
@@ -93,7 +94,7 @@ def _compute_spec_cache_fingerprint():
         except OSError:
             file_sigs.append([os.path.abspath(fpath), -1, 0.0])
     return {
-        'cache_version': 2,
+        'cache_version': 3,
         'python': sys.executable,
         'version': sys.version,
         'platform': sys.platform,
@@ -132,6 +133,8 @@ base_hiddenimports = [
     'item.models',
     'item.urls',
     'item.auth_urls',
+    'item.extractors',
+    'item.extractors.dynamic_reader',
 ]
 
 if _cached_collect is not None:
@@ -155,6 +158,7 @@ else:
     # MigrationLoader discovers migrations — same silent-failure-in-frozen-
     # build class of bug fixed above for item.migrations.
     collected_hidden += collect_submodules('item.management.commands')
+    collected_hidden += collect_submodules('item.extractors')
     # item.drive_creds_views only imports this lazily (inside a function, for
     # the Google Drive OAuth consent flow) -- confirmed live that PyInstaller's
     # static analysis doesn't follow it: "google-auth-oauthlib がインストール
@@ -420,6 +424,9 @@ if os.path.isdir(FRONTEND_DIST_ROOT):
 _item_fixtures_dir = os.path.join(BACKEND_ROOT, 'item', 'fixtures')
 if os.path.isdir(_item_fixtures_dir):
     extra_collect_trees.append(Tree(_item_fixtures_dir, prefix=os.path.join('item', 'fixtures')))
+_item_extractors_dir = os.path.join(BACKEND_ROOT, 'item', 'extractors')
+if os.path.isdir(_item_extractors_dir):
+    extra_collect_trees.append(Tree(_item_extractors_dir, prefix=os.path.join('item', 'extractors')))
 
 # Tor Expert Bundle for Windows standalone package:
 # Collected under tor/ only when building on Windows and exe/tor_win/ exists.
