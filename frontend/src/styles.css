@@ -228,6 +228,7 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
   width: auto;
   height: auto;
   max-width: 100%;
+  min-height: 360px;
   display: block;
   border-radius: 0 0 6px 6px;
   background: #000;

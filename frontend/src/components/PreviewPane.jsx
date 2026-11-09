@@ -955,7 +955,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                                 className="comic-page-img"
                                 src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`}
                                 alt={`Page ${p.index + 1}`}
-                                loading="lazy"
+                                loading={p.index < 2 ? 'eager' : 'lazy'}
+                                decoding="async"
                               />
                               <ImageTranslationOverlay
                                 translations={translationsMap[`${previewItems[selectedIndex].id}_${p.index}`]}
@@ -1368,6 +1369,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       ) : (
                         <div key={p.id} style={{position:'relative', flex:'0 0 auto', lineHeight:0}}>
                           <img src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
+                            loading="lazy"
+                            decoding="async"
                             className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}
                             style={selectMode && pickedIds.has(p.id) ? {borderColor:'#3b82f6', opacity:1} : undefined}
                             title={p.filename ? `${p.index + 1}. ${p.filename}` : `ページ ${p.index + 1}`}

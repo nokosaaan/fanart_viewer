@@ -81,6 +81,9 @@ class PreviewImage(models.Model):
 
     class Meta:
         ordering = ['order']
+        indexes = [
+            models.Index(fields=['item', 'order', 'id', 'content_type', 'filename'], name='item_prev_meta_idx'),
+        ]
 
     def __str__(self):
         return f"PreviewImage {self.item_id}#{self.order} ({self.content_type})"

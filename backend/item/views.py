@@ -1119,12 +1119,16 @@ def _select_image_bytes(item, image_index=None):
     ambiguous which image a suggestion result is based on), or None when
     there were no PreviewImage rows to index into.
     """
-    imgs = list(item.preview_images.order_by('order'))
-    if imgs:
-        if image_index is not None and 0 <= image_index < len(imgs):
-            return bytes(imgs[image_index].data), image_index
-        best_idx = max(range(len(imgs)), key=lambda i: len(imgs[i].data or b''))
-        return bytes(imgs[best_idx].data), best_idx
+    from django.db.models.functions import Length
+
+    rows = list(item.preview_images.order_by('order').annotate(size=Length('data')).values('id', 'size'))
+    if rows:
+        if image_index is not None and 0 <= image_index < len(rows):
+            target_idx = image_index
+        else:
+            target_idx = max(range(len(rows)), key=lambda i: rows[i]['size'] or 0)
+        img = PreviewImage.objects.only('id', 'data').get(pk=rows[target_idx]['id'])
+        return bytes(img.data or b''), target_idx
     if item.preview_data:
         return bytes(item.preview_data), None
     return None, None
@@ -1203,7 +1207,7 @@ def _reorder_preview_images(item, new_ordered_ids):
     from django.db import transaction
 
     with transaction.atomic():
-        rows = list(item.preview_images.order_by('order'))
+        rows = list(item.preview_images.order_by('order').defer('data'))
         if not rows:
             return {'count': 0, 'regions_remapped': 0}
 
@@ -1271,15 +1275,22 @@ def _select_images(item, image_index=None, max_images=DEFAULT_MAX_IMAGES):
     the cap they are sampled evenly, first and last included, so a long post
     is still covered end to end. Falls back to the legacy single preview
     blob when there are no PreviewImage rows (index None)."""
-    imgs = list(item.preview_images.order_by('order'))
-    if imgs:
-        if image_index is not None and 0 <= image_index < len(imgs):
-            return [(image_index, bytes(imgs[image_index].data))]
-        if len(imgs) > max_images > 1:
-            picks = sorted({round(k * (len(imgs) - 1) / (max_images - 1)) for k in range(max_images)})
+    ids = list(item.preview_images.order_by('order').values_list('id', flat=True))
+    if ids:
+        if image_index is not None and 0 <= image_index < len(ids):
+            img = PreviewImage.objects.only('id', 'data').get(pk=ids[image_index])
+            return [(image_index, bytes(img.data))] if img.data else []
+        if len(ids) > max_images > 1:
+            picks = sorted({round(k * (len(ids) - 1) / (max_images - 1)) for k in range(max_images)})
         else:
-            picks = list(range(min(len(imgs), max(1, max_images))))
-        return [(i, bytes(imgs[i].data)) for i in picks if imgs[i].data]
+            picks = list(range(min(len(ids), max(1, max_images))))
+        picked_ids = [ids[i] for i in picks]
+        blobs_by_id = {
+            r.id: bytes(r.data)
+            for r in PreviewImage.objects.filter(pk__in=picked_ids).only('id', 'data')
+            if r.data
+        }
+        return [(i, blobs_by_id[ids[i]]) for i in picks if ids[i] in blobs_by_id]
     if item.preview_data:
         return [(None, bytes(item.preview_data))]
     return []
@@ -2443,24 +2454,41 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['get'])
     def preview(self, request, pk=None):
         item = self.get_object()
-        imgs = list(item.preview_images.order_by('order'))
         idx_param = request.GET.get('index')
         if idx_param is not None:
             try:
                 idx = int(idx_param)
             except Exception:
                 return Response({'detail': 'invalid index'}, status=status.HTTP_400_BAD_REQUEST)
-            if idx < 0 or idx >= len(imgs):
+            if idx < 0:
                 return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
-            img = imgs[idx]
-            return HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+            target_id = (
+                item.preview_images.order_by('order')
+                .values_list('id', flat=True)[idx:idx + 1]
+                .first()
+            )
+            if target_id is None:
+                return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
+            img = PreviewImage.objects.only('id', 'data', 'content_type').get(pk=target_id)
+            resp = HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+            resp['Cache-Control'] = 'private, max-age=300'
+            return resp
 
-        if imgs:
-            first = imgs[0]
-            return HttpResponse(first.data, content_type=first.content_type or 'application/octet-stream')
+        first_id = (
+            item.preview_images.order_by('order')
+            .values_list('id', flat=True)[:1]
+            .first()
+        )
+        if first_id is not None:
+            first = PreviewImage.objects.only('id', 'data', 'content_type').get(pk=first_id)
+            resp = HttpResponse(first.data, content_type=first.content_type or 'application/octet-stream')
+            resp['Cache-Control'] = 'private, max-age=300'
+            return resp
 
         if item.preview_data:
-            return HttpResponse(item.preview_data, content_type=item.preview_content_type or 'application/octet-stream')
+            resp = HttpResponse(item.preview_data, content_type=item.preview_content_type or 'application/octet-stream')
+            resp['Cache-Control'] = 'private, max-age=300'
+            return resp
 
         return Response({'detail': 'No preview'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -3512,15 +3540,15 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 logging.exception('Failed to delete all previews')
                 return Response({'detail': 'Failed to delete previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        imgs = item.preview_images.order_by('order')
+        rows = item.preview_images.order_by('order').values('id', 'content_type', 'filename')
         data = []
-        for idx, img in enumerate(imgs):
+        for idx, row in enumerate(rows):
             data.append({
-                'id': img.id,
+                'id': row['id'],
                 'index': idx,
                 'url': f"/api/items/{item.id}/previews/{idx}/",
-                'content_type': img.content_type,
-                'filename': getattr(img, 'filename', '') or '',
+                'content_type': row['content_type'],
+                'filename': row.get('filename') or '',
             })
         return Response(data)
 
@@ -3529,7 +3557,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         """DELETE a preview image by its database id for robustness against index drift."""
         item = self.get_object()
         try:
-            pi = PreviewImage.objects.get(pk=int(pid), item=item)
+            pi = PreviewImage.objects.only('id', 'item_id').get(pk=int(pid), item=item)
         except Exception:
             return Response({'detail': 'preview not found'}, status=status.HTTP_404_NOT_FOUND)
         try:
@@ -3546,21 +3574,29 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             idxi = int(idx)
         except Exception:
             return Response({'detail': 'invalid index'}, status=status.HTTP_400_BAD_REQUEST)
-        imgs = list(item.preview_images.order_by('order'))
-        if idxi < 0 or idxi >= len(imgs):
+        if idxi < 0:
+            return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
+        target_id = (
+            item.preview_images.order_by('order')
+            .values_list('id', flat=True)[idxi:idxi + 1]
+            .first()
+        )
+        if target_id is None:
             return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
         # DELETE: remove a single preview image at the given index
         if request.method == 'DELETE':
             try:
-                _remove_preview_images(item, [imgs[idxi].pk])
+                _remove_preview_images(item, [target_id])
                 return Response({'status': 'deleted', 'index': idxi})
             except Exception as e:
                 logging.exception('Failed to delete preview image')
                 return Response({'detail': 'Failed to delete preview', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # GET: return the image bytes for the requested index
-        img = imgs[idxi]
-        return HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+        img = PreviewImage.objects.only('id', 'data', 'content_type').get(pk=target_id)
+        resp = HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+        resp['Cache-Control'] = 'private, max-age=300'
+        return resp
 
     @action(detail=True, methods=['post'], url_path='delete_previews')
     def delete_previews(self, request, pk=None):
@@ -3626,7 +3662,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         data = request.data if isinstance(request.data, dict) else {}
         action_name = data.get('action')
 
-        rows = list(item.preview_images.order_by('order'))
+        rows = list(item.preview_images.order_by('order').defer('data'))
         if not rows:
             return Response({'status': 'ok', 'previews': []})
 
@@ -3662,10 +3698,10 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to reorder previews for item %s', item.pk)
             return Response({'detail': 'Failed to reorder previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        updated_imgs = item.preview_images.order_by('order')
+        updated_rows = item.preview_images.order_by('order').values('id', 'content_type', 'filename')
         preview_list = [
-            {'id': img.id, 'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': img.content_type, 'filename': getattr(img, 'filename', '') or ''}
-            for idx, img in enumerate(updated_imgs)
+            {'id': row['id'], 'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': row['content_type'], 'filename': row.get('filename') or ''}
+            for idx, row in enumerate(updated_rows)
         ]
         return Response({'status': 'reordered', **result, 'previews': preview_list})
 
