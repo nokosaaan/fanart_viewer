@@ -1001,7 +1001,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       </div>
                     </div>
                   ) : (
-                    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', maxWidth: '70vw', maxHeight: '78vh' }}>
+                    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', maxWidth: '100%', maxHeight: '78vh' }}>
                       <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
                       <ImageTranslationOverlay translations={currentTranslations} mode={translationMode} />
                     </div>
@@ -1016,8 +1016,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       onClick={() => changeReaderLayout('comic')}
                       style={{
                         flex: 1,
-                        fontSize: 12,
-                        padding: '6px 8px',
+                        fontSize: 11,
+                        padding: '6px 4px',
                         background: readerLayout === 'comic' ? '#2563eb' : 'transparent',
                         color: readerLayout === 'comic' ? '#fff' : '#94a3b8',
                         border: 'none',
@@ -1026,11 +1026,12 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: 5
+                        gap: 4,
+                        whiteSpace: 'nowrap'
                       }}
                       title="漫画ビュー: 縦スクロールで1ページ内に全画像をおさめ、スクロールで一気に読み進めます"
                     >
-                      <span>📖</span> 漫画 (縦スクロール)
+                      <span>📖</span> 漫画 (スクロール)
                     </button>
                     <button
                       type="button"
@@ -1038,8 +1039,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       onClick={() => changeReaderLayout('single')}
                       style={{
                         flex: 1,
-                        fontSize: 12,
-                        padding: '6px 8px',
+                        fontSize: 11,
+                        padding: '6px 4px',
                         background: readerLayout === 'single' ? '#2563eb' : 'transparent',
                         color: readerLayout === 'single' ? '#fff' : '#94a3b8',
                         border: 'none',
@@ -1048,7 +1049,8 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: 5
+                        gap: 4,
+                        whiteSpace: 'nowrap'
                       }}
                       title="単一ページビュー: 1画像ずつ大きく切り替えて表示します"
                     >

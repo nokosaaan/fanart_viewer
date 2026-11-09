@@ -164,8 +164,19 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
 .modal-top{ display:flex; gap:16px; align-items:center; flex:1 1 0; min-height:0; overflow:hidden; padding-bottom:8px }
 .modal-top.comic-mode{ align-items:stretch; flex:1 1 0; min-height:0; height:100%; overflow:hidden; padding-bottom:0 }
 .modal-main{ flex:1 1 0; min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; overflow:hidden }
-.modal-meta{ flex:0 0 auto; max-width:320px; display:flex; flex-direction:column; gap:8px }
-.modal-meta.comic-mode{ max-width:280px; overflow-y:auto; max-height:100%; padding-right:4px }
+.preview-modal-img{
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #000;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+}
+.modal-meta{ flex:0 0 300px; width:300px; max-width:320px; display:flex; flex-direction:column; gap:8px }
+.modal-meta.comic-mode{ flex:0 0 280px; width:280px; max-width:280px; overflow-y:auto; max-height:100%; padding-right:4px }
 
 /* Comic / vertical scroll reader mode */
 .modal-main.comic-mode{
