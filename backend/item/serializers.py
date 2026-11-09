@@ -16,9 +16,7 @@ class ItemSerializer(serializers.ModelSerializer):
 
     def get_preview_count(self, obj):
         if hasattr(obj, 'annotated_preview_count'):
-            cnt = obj.annotated_preview_count
-            if cnt > 0:
-                return cnt
+            return obj.annotated_preview_count or 0
         try:
             if hasattr(obj, 'preview_images'):
                 c = obj.preview_images.count()
@@ -39,11 +37,12 @@ class ItemSerializer(serializers.ModelSerializer):
             # use hasattr to avoid accidental DB hits if relation broken
             if hasattr(obj, 'preview_images'):
                 try:
-                    return obj.preview_images.exists()
+                    if obj.preview_images.exists():
+                        return True
                 except Exception:
                     # if relation access fails, fall back
                     pass
-            return bool(obj.preview_data)
+            return bool(getattr(obj, 'preview_data', None))
         except Exception:
             return False
 

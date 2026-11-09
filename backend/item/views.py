@@ -9,7 +9,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse, JsonResponse
-from django.db.models import Q, Exists, OuterRef, Count
+from django.db.models import Q, Exists, OuterRef, Count, Subquery, Case, When, Value, IntegerField, BooleanField, F
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from collections import Counter, defaultdict
 import hashlib
@@ -515,8 +516,8 @@ def _match_tagger_characters(candidates):
             norm_c = _normalize_char_name(c)
             existing_by_norm.setdefault(norm_c, []).append((c, group))
             group_by_char_norm[norm_c] = group
-    for item in Item.objects.only('characters'):
-        for c in (item.characters or []):
+    for chars in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).values_list('characters', flat=True).iterator():
+        for c in (chars or []):
             if c:
                 existing_by_norm.setdefault(_normalize_char_name(c), []).append((c, None))
 
@@ -1163,9 +1164,13 @@ def _remove_preview_images(item, ids):
         default_pos = max(range(len(rows)), key=lambda pos: rows[pos]['size'] or 0)
 
         PreviewImage.objects.filter(item=item, id__in=[rows[pos]['id'] for pos in doomed]).delete()
-        for old, new in new_index.items():
-            if old != new:
-                PreviewImage.objects.filter(pk=rows[old]['id']).update(order=new)
+        to_update = [
+            PreviewImage(pk=rows[old]['id'], order=new)
+            for old, new in new_index.items()
+            if old != new
+        ]
+        if to_update:
+            PreviewImage.objects.bulk_update(to_update, ['order'])
 
         dropped = remapped = 0
         regions = []
@@ -1224,9 +1229,13 @@ def _reorder_preview_images(item, new_ordered_ids):
         pos_map = {old_index_by_id[rid]: new_index_by_id[rid] for rid in final_ids}
 
         # Update PreviewImage order
-        for rid, new_idx in new_index_by_id.items():
-            if old_index_by_id[rid] != new_idx:
-                PreviewImage.objects.filter(pk=rid).update(order=new_idx)
+        to_update = [
+            PreviewImage(pk=rid, order=new_idx)
+            for rid, new_idx in new_index_by_id.items()
+            if old_index_by_id[rid] != new_idx
+        ]
+        if to_update:
+            PreviewImage.objects.bulk_update(to_update, ['order'])
 
         # Update character_regions
         remapped_regions = 0
@@ -2425,12 +2434,45 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     }
 
 
+def _base_item_queryset():
+    """Return base Item queryset with deferred preview binary and precomputed
+    preview count/existence without triggering heavy table JOINs or GROUP BYs.
+    """
+    sub_count = Coalesce(
+        Subquery(
+            PreviewImage.objects.filter(item=OuterRef('pk'))
+            .values('item')
+            .annotate(cnt=Count('id'))
+            .values('cnt')[:1],
+            output_field=IntegerField(),
+        ),
+        0,
+    )
+    return (
+        Item.objects.defer('preview_data')
+        .annotate(
+            annotated_preview_images_count=sub_count,
+        )
+        .annotate(
+            annotated_preview_count=Case(
+                When(annotated_preview_images_count__gt=0, then=F('annotated_preview_images_count')),
+                When(preview_data__isnull=False, then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+            annotated_has_preview=Case(
+                When(annotated_preview_images_count__gt=0, then=Value(True)),
+                When(preview_data__isnull=False, then=Value(True)),
+                default=Value(False),
+                output_field=BooleanField(),
+            ),
+        )
+    )
+
+
 class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     """Item viewset exposing read-only item list/retrieve and minimal preview endpoints."""
-    queryset = Item.objects.defer('preview_data').annotate(
-        annotated_has_preview=Exists(PreviewImage.objects.filter(item=OuterRef('pk'))),
-        annotated_preview_count=Count('preview_images', distinct=True)
-    ).order_by('-id')
+    queryset = _base_item_queryset().order_by('-id')
     serializer_class = ItemSerializer
 
     def list(self, request, *args, **kwargs):
@@ -3732,9 +3774,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     def all_titles(self, request):
         """Return all unique titles used across all items, sorted alphabetically."""
         all_titles = set()
-        for item in Item.objects.only('titles'):
-            if isinstance(item.titles, list):
-                for t in item.titles:
+        for titles in Item.objects.exclude(titles=[]).exclude(titles__isnull=True).values_list('titles', flat=True).iterator():
+            if isinstance(titles, list):
+                for t in titles:
                     if t and isinstance(t, str):
                         all_titles.add(t.strip())
         return Response(sorted(all_titles))
@@ -3743,9 +3785,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     def all_characters(self, request):
         """Return all unique characters used across all items, sorted alphabetically."""
         all_chars = set()
-        for item in Item.objects.only('characters'):
-            if isinstance(item.characters, list):
-                for c in item.characters:
+        for chars in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).values_list('characters', flat=True).iterator():
+            if isinstance(chars, list):
+                for c in chars:
                     if c and isinstance(c, str):
                         all_chars.add(c.strip())
         return Response(sorted(all_chars))
@@ -3781,7 +3823,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 # JSONField list (titles/characters/tags): empty means [] or null
                 q |= Q(**{f: []}) | Q(**{f'{f}__isnull': True})
 
-        queryset = Item.objects.filter(q).order_by('-id')
+        queryset = self.get_queryset().filter(q)
         total_count = queryset.count()
 
         before_id = request.GET.get('before_id')
@@ -3832,11 +3874,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         and anything with no image to annotate at all.
         """
         queryset = (
-            Item.objects.exclude(situation='SOLO')
-            .filter(character_regions=[])
-            .exclude(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
-            .order_by('-id')
-            .distinct()
+            self.get_queryset()
+            .exclude(situation='SOLO')
+            .filter(character_regions=[], annotated_has_preview=True)
         )
         total_count = queryset.count()
 
@@ -3898,10 +3938,10 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         region_q = (
             Q(character_regions=[])
             & ~Q(situation='SOLO')
-            & ~(Q(preview_images__isnull=True) & Q(preview_data__isnull=True))
+            & Q(annotated_has_preview=True)
         )
 
-        queryset = Item.objects.filter(missing_q | region_q).order_by('-id').distinct()
+        queryset = self.get_queryset().filter(missing_q | region_q)
         total_count = queryset.count()
 
         before_id = request.GET.get('before_id')
@@ -3976,8 +4016,10 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         cursoring as the other queue actions, applied to the
         already-computed mismatch list.
         """
-        candidates = Item.objects.exclude(character_regions=[]).order_by('-id')
-        mismatched = []
+        candidates = Item.objects.exclude(character_regions=[]).only(
+            'id', 'character_regions', 'characters', 'character_regions_ack_signature'
+        ).order_by('-id')
+        mismatched_ids = []
         for item in candidates.iterator():
             region_chars = {c for r in (item.character_regions or []) for c in (r.get('characters') or [])}
             item_chars = set(item.characters or [])
@@ -3985,22 +4027,25 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 continue
             if _char_diff_signature(region_chars, item_chars) == item.character_regions_ack_signature:
                 continue
-            mismatched.append(item)
+            mismatched_ids.append(item.id)
 
-        total_count = len(mismatched)
+        total_count = len(mismatched_ids)
 
         before_id = request.GET.get('before_id')
         if before_id:
             try:
                 bid = int(before_id)
-                mismatched = [it for it in mismatched if it.id < bid]
+                mismatched_ids = [i for i in mismatched_ids if i < bid]
             except (TypeError, ValueError):
                 pass
 
         page_size = 50
-        batch = mismatched[:page_size + 1]
-        has_more = len(batch) > page_size
-        batch = batch[:page_size]
+        batch_ids = mismatched_ids[:page_size + 1]
+        has_more = len(batch_ids) > page_size
+        batch_ids = batch_ids[:page_size]
+
+        item_map = {it.id: it for it in self.get_queryset().filter(id__in=batch_ids)}
+        batch = [item_map[i] for i in batch_ids if i in item_map]
 
         serialized = self.get_serializer(batch, many=True).data
         for entry, item in zip(serialized, batch):
@@ -4775,7 +4820,7 @@ def items_from_db(request):
 
     This replaces the older `items_from_rust` name and endpoint.
     """
-    qs = Item.objects.all().order_by('-id')
+    qs = _base_item_queryset().order_by('-id')
     serializer = ItemSerializer(qs, many=True, context={'request': request})
     return JsonResponse(serializer.data, safe=False)
 
