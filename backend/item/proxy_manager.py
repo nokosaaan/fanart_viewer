@@ -121,16 +121,31 @@ def is_port_open(host: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def _get_tor_data_dir() -> Path:
+    """Return a persistent data directory for Tor consensus and guard cache."""
+    base_dir = Path.home() / ".fanart_viewer"
+    if not base_dir.exists():
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            base_dir = _DATA_DIR
+    d = base_dir / "tor_data"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 class TorProcessManager:
     """Thread-safe manager for an on-demand background Tor process."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
-        self._temp_data_dir: str | None = None
+        self._data_dir: Path | None = None
         self._ref_count = 0
         self._idle_timer: threading.Timer | None = None
         self._current_port = 9052
+        self._bootstrapped_event = threading.Event()
+        self._bootstrap_status = ""
 
     def is_running(self) -> bool:
         with self._lock:
@@ -168,7 +183,9 @@ class TorProcessManager:
                     "Tor の実行ファイルが見つかりません。システムに tor をインストールするか、パスを指定してください。"
                 )
 
-            self._temp_data_dir = tempfile.mkdtemp(prefix="tor_data_")
+            self._data_dir = _get_tor_data_dir()
+            self._bootstrapped_event.clear()
+            self._bootstrap_status = "起動中..."
 
             # Look for optional geoip files located alongside tor binary
             geoip_file = None
@@ -187,8 +204,8 @@ class TorProcessManager:
             cmd = [
                 binary,
                 "--SocksPort", str(port),
-                "--DataDirectory", self._temp_data_dir,
-                "--PidFile", os.path.join(self._temp_data_dir, "tor.pid"),
+                "--DataDirectory", str(self._data_dir),
+                "--PidFile", str(self._data_dir / "tor.pid"),
                 "--Log", "notice stdout",
             ]
             if geoip_file:
@@ -202,22 +219,51 @@ class TorProcessManager:
                 cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 env=env,
                 **({"creationflags": subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, "CREATE_NO_WINDOW") else {}),
             )
 
-            # Wait for port to become ready (up to 15 seconds)
+            # Background thread to continuously read Tor stdout to prevent pipe deadlocks
+            # and detect when circuit bootstrapping completes (100% Done).
+            def _pump_tor_stdout(proc: subprocess.Popen, event: threading.Event):
+                try:
+                    for raw in iter(proc.stdout.readline, ""):
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        if (
+                            "Bootstrapped" in line
+                            or "Opening Socks" in line
+                            or "Opened Socks" in line
+                            or "warn" in line.lower()
+                        ):
+                            logger.info("Tor: %s", line)
+                        if "Bootstrapped" in line:
+                            self._bootstrap_status = line
+                        if ("Bootstrapped 100%" in line and "Done" in line) or "100%: Done" in line:
+                            event.set()
+                except Exception:
+                    pass
+
+            pump_thread = threading.Thread(
+                target=_pump_tor_stdout,
+                args=(self._proc, self._bootstrapped_event),
+                daemon=True,
+            )
+            pump_thread.start()
+
+            # Wait for SOCKS listener port to open (up to 15 seconds)
             ready = False
             deadline = time.monotonic() + 15.0
             while time.monotonic() < deadline:
                 if self._proc.poll() is not None:
-                    # Exited prematurely
-                    stderr = self._proc.stderr.read() if self._proc.stderr else ""
                     self._cleanup_process_locked()
                     self._ref_count -= 1
-                    raise RuntimeError(f"Tor の起動に失敗しました: {stderr[:300]}")
+                    raise RuntimeError("Tor の起動に失敗しました (プロセスが早期終了しました)")
                 if is_port_open("127.0.0.1", port):
                     ready = True
                     break
@@ -227,6 +273,14 @@ class TorProcessManager:
                 self.stop_locked()
                 self._ref_count -= 1
                 raise RuntimeError("Tor の起動待受タイムアウト (15秒) を超過しました")
+
+            # Wait for Tor circuit bootstrapping to finish (up to 45s on cold start, 1-3s on warm start)
+            bootstrapped = self._bootstrapped_event.wait(timeout=45.0)
+            if not bootstrapped:
+                logger.warning(
+                    "Tor bootstrap did not complete within 45s (current status: %s), proceeding anyway",
+                    self._bootstrap_status,
+                )
 
             logger.info("Tor successfully started and listening on 127.0.0.1:%d", port)
             return f"socks5h://127.0.0.1:{port}"
@@ -270,13 +324,7 @@ class TorProcessManager:
                 except Exception:
                     pass
             self._proc = None
-
-        if self._temp_data_dir and os.path.isdir(self._temp_data_dir):
-            try:
-                shutil.rmtree(self._temp_data_dir, ignore_errors=True)
-            except Exception:
-                pass
-            self._temp_data_dir = None
+            self._bootstrapped_event.clear()
 
 
 _tor_manager = TorProcessManager()
