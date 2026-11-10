@@ -3764,6 +3764,65 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to delete Item %s', pk)
             return Response({'detail': 'Failed to delete item', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=False, methods=['get', 'post'], url_path='multi_image_curation')
+    def multi_image_curation(self, request):
+        """Get or update dismissed (kept as-is) multi-image item IDs.
+
+        Persisted to multi_image_curated.json so curation progress survives
+        reloads, window closes, and browser localStorage quota limits.
+        """
+        from pathlib import Path
+        import json
+
+        # Check ~/.fanart_viewer (packaged exe) or backend/data (docker/dev)
+        user_dir = Path.home() / '.fanart_viewer'
+        if user_dir.exists():
+            cfg_path = user_dir / 'multi_image_curated.json'
+        else:
+            cfg_path = Path(__file__).resolve().parent.parent / 'data' / 'multi_image_curated.json'
+
+        dismissed = set()
+        if cfg_path.exists():
+            try:
+                with open(cfg_path, 'r', encoding='utf-8') as fp:
+                    data = json.load(fp)
+                    if isinstance(data, list):
+                        dismissed = set(int(x) for x in data if str(x).isdigit())
+            except Exception:
+                pass
+
+        if request.method == 'GET':
+            return Response({'dismissed_ids': sorted(dismissed)})
+
+        body = request.data if isinstance(request.data, dict) else {}
+        action_name = body.get('action')  # 'dismiss' (default) | 'restore'
+        item_id = body.get('id')
+        bulk_ids = body.get('dismissed_ids')
+
+        if isinstance(bulk_ids, list):
+            for x in bulk_ids:
+                if str(x).isdigit():
+                    dismissed.add(int(x))
+        elif item_id is not None:
+            try:
+                iid = int(item_id)
+                if action_name == 'restore':
+                    dismissed.discard(iid)
+                else:
+                    dismissed.add(iid)
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cfg_path, 'w', encoding='utf-8') as fp:
+                json.dump(sorted(dismissed), fp)
+        except Exception as e:
+            logging.exception('Failed to save multi_image_curated.json: %s', e)
+            return Response({'detail': 'Failed to save curation state', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'status': 'ok', 'dismissed_ids': sorted(dismissed), 'count': len(dismissed)})
+
 
     @action(detail=False, methods=['get'], url_path='tagger_capabilities')
     def tagger_capabilities(self, request):

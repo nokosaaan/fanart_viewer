@@ -7,7 +7,9 @@ const DISMISSED_STORAGE_KEY = 'fv_multi_image_dismissed_ids'
 function getDismissedIds() {
   try {
     const raw = localStorage.getItem(DISMISSED_STORAGE_KEY)
-    return raw ? new Set(JSON.parse(raw)) : new Set()
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? new Set(arr.map(Number)) : new Set()
   } catch {
     return new Set()
   }
@@ -16,7 +18,15 @@ function getDismissedIds() {
 function saveDismissedIds(set) {
   try {
     localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(Array.from(set)))
-  } catch {}
+  } catch (e) {
+    console.warn('localStorage quota exceeded while saving dismissed IDs, evicting items cache...', e)
+    try {
+      localStorage.removeItem('fv_items_cache_v1')
+      localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify(Array.from(set)))
+    } catch (e2) {
+      console.error('Failed to save dismissed IDs to localStorage:', e2)
+    }
+  }
 }
 
 function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss, onRestore, isDismissed, readOnly }) {
@@ -289,7 +299,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
             style={{ fontSize: 12, padding: '4px 8px' }}
             title="詳細プレビュー (漫画モード / 拡大表示) を開く"
           >
-            🔍 プレビュー
+            📖 プレビュー
           </button>
           <button
             className="btn"
@@ -451,22 +461,62 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
   const [page, setPage] = useState(0)
   const PAGE_SIZE = 15
 
+  // Fetch persisted dismissed IDs from backend to guarantee multi-device and quota-safe sync
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/items/multi_image_curation/')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (cancelled || !data || !Array.isArray(data.dismissed_ids)) return
+        setDismissedIds(prev => {
+          const merged = new Set(prev)
+          data.dismissed_ids.forEach(id => merged.add(Number(id)))
+          saveDismissedIds(merged)
+          // If local had IDs that weren't on server yet, sync full list to server
+          if (merged.size > data.dismissed_ids.length) {
+            fetch('/api/items/multi_image_curation/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dismissed_ids: Array.from(merged) })
+            }).catch(() => {})
+          }
+          return merged
+        })
+      })
+      .catch(e => console.error('Failed to fetch multi_image_curation:', e))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function handleDismiss(id) {
+    const numId = Number(id)
     setDismissedIds(prev => {
       const next = new Set(prev)
-      next.add(id)
+      next.add(numId)
       saveDismissedIds(next)
       return next
     })
+    fetch('/api/items/multi_image_curation/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'dismiss', id: numId })
+    }).catch(e => console.error('Failed to sync dismiss with backend:', e))
   }
 
   function handleRestore(id) {
+    const numId = Number(id)
     setDismissedIds(prev => {
       const next = new Set(prev)
-      next.delete(id)
+      next.delete(numId)
       saveDismissedIds(next)
       return next
     })
+    fetch('/api/items/multi_image_curation/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'restore', id: numId })
+    }).catch(e => console.error('Failed to sync restore with backend:', e))
   }
 
   // 各アイテムのメイン画面と同じ通し番号（count番号: 全体件数 - 全体インデックス）を計算
@@ -494,7 +544,7 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
     let list = multiItems
     // 「問題なしとして除外」されたアイテムを通常は非表示、showDismissed===trueなら含める
     if (!showDismissed) {
-      list = list.filter(it => !dismissedIds.has(it.id))
+      list = list.filter(it => !dismissedIds.has(Number(it.id)))
     }
     if (!filterQuery.trim()) return list
     const q = filterQuery.toLowerCase().trim()
@@ -519,7 +569,7 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
   }, [filtered, page])
 
   const dismissedCount = useMemo(() => {
-    return multiItems.filter(it => dismissedIds.has(it.id)).length
+    return multiItems.filter(it => dismissedIds.has(Number(it.id))).length
   }, [multiItems, dismissedIds])
 
   return (
@@ -601,7 +651,7 @@ export default function MultiImageManager({ onClose, allItems, onOpenPreview, re
                 onOpenPreview={onOpenPreview}
                 onDismiss={handleDismiss}
                 onRestore={handleRestore}
-                isDismissed={dismissedIds.has(item.id)}
+                isDismissed={dismissedIds.has(Number(item.id))}
                 readOnly={readOnly}
               />
             ))

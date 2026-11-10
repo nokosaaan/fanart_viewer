@@ -35,7 +35,7 @@ const PANE_PAGE_SIZE = 50
 // from a different place in the app.
 export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId, embedded=false, onLightboxClose}){
   const previewItems = useMemo(() => (
-    (filteredItems || []).filter(it => it && (it.has_preview === true || it.has_preview === 'true'))
+    (filteredItems || []).filter(it => it && Boolean(it.has_preview) && it.has_preview !== 'false')
   ), [filteredItems])
 
   // Which item's enlarged view is open, tracked by STABLE id rather than a
@@ -54,7 +54,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   const [selectedItemId, setSelectedItemId] = useState(null)
   const selectedIndex = useMemo(() => {
     if (selectedItemId == null) return null
-    const idx = previewItems.findIndex(it => it && it.id === selectedItemId)
+    const idx = previewItems.findIndex(it => it && String(it.id) === String(selectedItemId))
     return idx === -1 ? null : idx
   }, [previewItems, selectedItemId])
   // Guards the initialItemId auto-jump below so it fires exactly once per
@@ -178,11 +178,11 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     if(initialItemId == null) return
     if(jumpedItemIdRef.current === initialItemId) return
     if(!previewItems || previewItems.length === 0) return
-    const idx = previewItems.findIndex(it => it && it.id === initialItemId)
+    const idx = previewItems.findIndex(it => it && String(it.id) === String(initialItemId))
     if(idx !== -1){
       jumpedItemIdRef.current = initialItemId
       setPanePageIndex(Math.floor(idx / PANE_PAGE_SIZE))
-      setSelectedItemId(initialItemId)
+      setSelectedItemId(previewItems[idx].id)
     }
   }, [open, initialItemId, previewItems])
 
@@ -314,6 +314,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   // opened because of a List-view thumbnail click (see App.jsx's
   // openPreviewForItem) rather than the user actually choosing Gallery.
   function closeLightbox(){
+    jumpedItemIdRef.current = null
     setSelectedItemId(null)
     if(onLightboxClose) onLightboxClose()
   }
@@ -350,7 +351,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }
 
   useEffect(()=>{
-    const it = selectedItemId != null ? previewItems.find(x => x && x.id === selectedItemId) : null
+    const it = selectedItemId != null ? previewItems.find(x => x && String(x.id) === String(selectedItemId)) : null
     loadPreviewsForItem(it)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedItemId])

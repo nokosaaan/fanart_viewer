@@ -95,12 +95,37 @@ function AppMain({ role, onLogout }){
   // to List instead of stranding the user in Gallery's grid, which is all
   // they'd meant to open in the first place.
   const [galleryEntryWasFromList, setGalleryEntryWasFromList] = useState(false)
-  function openPreviewForItem(itemId){
+  const [returnToMultiImageManager, setReturnToMultiImageManager] = useState(false)
+
+  function openPreviewForItem(itemId, fromMultiImage = false){
+    if (fromMultiImage) {
+      setReturnToMultiImageManager(true)
+    }
     setGalleryEntryWasFromList(true)
+    let idx = (filtered || []).findIndex(it => it && String(it.id) === String(itemId))
+    if(idx === -1 && items){
+      setQuery('')
+      setFilters([])
+      idx = (items || []).findIndex(it => it && String(it.id) === String(itemId))
+    }
+    if(idx !== -1){
+      setPageIndex(Math.floor(idx / PAGE_SIZE))
+    }
     setViewMode('gallery')
     setGalleryInitialItemId(itemId)
   }
+
   function onGalleryLightboxClose(){
+    setGalleryInitialItemId(null)
+    if (returnToMultiImageManager) {
+      setReturnToMultiImageManager(false)
+      setMultiImageManagerOpen(true)
+      if (galleryEntryWasFromList) {
+        setGalleryEntryWasFromList(false)
+        setViewMode('list')
+      }
+      return
+    }
     if(galleryEntryWasFromList){
       setGalleryEntryWasFromList(false)
       setViewMode('list')
@@ -1005,9 +1030,18 @@ function AppMain({ role, onLogout }){
         // (PANE_PAGE_SIZE), which duplicated the Pagination component below
         // with an out-of-sync page number of its own. One page, one
         // pagination control, shared by both view modes.
-        <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
-          <PreviewPane embedded open readOnly={readOnly} filteredItems={paginatedItems} initialItemId={galleryInitialItemId} onClose={()=>{}} onLightboxClose={onGalleryLightboxClose} />
-        </React.Suspense>
+        (() => {
+          let itemsForGallery = paginatedItems
+          if (galleryInitialItemId && !paginatedItems.some(it => it && String(it.id) === String(galleryInitialItemId))) {
+            const target = (items || []).find(it => it && String(it.id) === String(galleryInitialItemId))
+            if (target) itemsForGallery = [target, ...paginatedItems]
+          }
+          return (
+            <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
+              <PreviewPane embedded open readOnly={readOnly} filteredItems={itemsForGallery} initialItemId={galleryInitialItemId} onClose={()=>{}} onLightboxClose={onGalleryLightboxClose} />
+            </React.Suspense>
+          )
+        })()
       )}
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>
@@ -1074,7 +1108,7 @@ function AppMain({ role, onLogout }){
           allItems={items}
           onOpenPreview={(id) => {
             setMultiImageManagerOpen(false)
-            openPreviewForItem(id)
+            openPreviewForItem(id, true)
           }}
           readOnly={readOnly}
         />
