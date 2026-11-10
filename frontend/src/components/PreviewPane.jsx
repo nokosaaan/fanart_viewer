@@ -1001,7 +1001,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                       </div>
                     </div>
                   ) : (
-                    <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', maxWidth: '100%', maxHeight: '100%' }}>
+                    <div className="preview-img-wrap">
                       <img className="preview-modal-img" src={previewImgSrc} alt={(previewItems[selectedIndex].titles && previewItems[selectedIndex].titles[0])||previewItems[selectedIndex].title||''} />
                       <ImageTranslationOverlay translations={currentTranslations} mode={translationMode} />
                     </div>
