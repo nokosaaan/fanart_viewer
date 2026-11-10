@@ -650,10 +650,9 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   }
 
   // One call for both "delete these" and "keep only these" (see the backend's
-  // delete_previews). The server renumbers the remaining images (and moves
-  // their region labels with them), so unlike the single-image tombstone
-  // above this reloads the filmstrip: every remaining thumbnail's index has
-  // changed, and a stale index would show the wrong picture.
+  // delete_previews). Like the broom icon single-image delete, deleted images
+  // are kept as dedicated tombstone slots ("削除済み") in the filmstrip without
+  // shifting the visual position of surviving images.
   async function runBulkDelete(body, confirmText){
     if(selectedIndex===null) return
     const it = previewItems[selectedIndex]
@@ -666,7 +665,29 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       })
       const j = await resp.json().catch(()=>({}))
       if(!resp.ok){ alert('Failed to delete previews: '+(j.detail||j.error||resp.status)); return }
-      await loadPreviewsForItem(it)
+
+      const doomedIds = body.delete_ids
+        ? body.delete_ids
+        : (previews || []).filter(p => !body.keep_ids.includes(p.id)).map(p => p.id)
+
+      setDeletedPreviewIds(prev => {
+        const next = new Set(prev)
+        doomedIds.forEach(id => next.add(id))
+        return next
+      })
+
+      const remainingAlive = (previews || []).filter(p => !doomedIds.includes(p.id) && !deletedPreviewIds.has(p.id))
+      if(remainingAlive.length > 0){
+        const curPid = selectedPreviewId || ((previews && previews[currentPreviewIdx]) ? previews[currentPreviewIdx].id : null)
+        if(doomedIds.includes(curPid)){
+          selectPreviewIndex(remainingAlive[0].index)
+        }
+      } else {
+        setCurrentPreviewIdx(0)
+        setSelectedPreviewId(null)
+      }
+
+      leaveSelectMode()
       notify('item-preview-updated', { id: it.id })
       let msg = `${j.deleted}枚の画像を削除しました(残り${j.remaining}枚)。`
       if(j.regions_dropped) msg += `\n削除した画像上の領域指定 ${j.regions_dropped} 件も削除しました。`
@@ -881,7 +902,10 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                 const hasAnyPreview = (previews && previews.length>0)
                 const alivePreviews = (previews || []).filter(p => !deletedPreviewIds.has(p.id))
                 const aliveCount = alivePreviews.length
-                const previewImgSrc = hasAnyPreview
+                const currentPreview = previews && previews.length > currentPreviewIdx ? previews[currentPreviewIdx] : null
+                const previewImgSrc = currentPreview && currentPreview.id && !deletedPreviewIds.has(currentPreview.id)
+                  ? `/api/items/${previewItems[selectedIndex].id}/preview/?id=${currentPreview.id}`
+                  : hasAnyPreview
                   ? `/api/items/${previewItems[selectedIndex].id}/preview/?index=${currentPreviewIdx}`
                   : `/api/items/${previewItems[selectedIndex].id}/preview/`
                 const allDeleted = hasAnyPreview && aliveCount===0
@@ -954,7 +978,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                             <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
                               <img
                                 className="comic-page-img"
-                                src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`}
+                                src={p.id ? `/api/items/${previewItems[selectedIndex].id}/preview/?id=${p.id}` : `/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`}
                                 alt={`Page ${p.index + 1}`}
                                 loading={p.index < 2 ? 'eager' : 'lazy'}
                                 decoding="async"
@@ -1371,7 +1395,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
                         </div>
                       ) : (
                         <div key={p.id} style={{position:'relative', flex:'0 0 auto', lineHeight:0}}>
-                          <img src={`/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
+                          <img src={p.id ? `/api/items/${previewItems[selectedIndex].id}/preview/?id=${p.id}` : `/api/items/${previewItems[selectedIndex].id}/preview/?index=${p.index}`} alt={`preview-${p.index}`}
                             loading="lazy"
                             decoding="async"
                             className={currentPreviewIdx===p.index? 'timeline-thumb selected':'timeline-thumb'}

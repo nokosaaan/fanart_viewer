@@ -17,8 +17,9 @@ class MultiImageCurationTests(TestCase):
         self.addCleanup(self.tmp_dir.cleanup)
 
     def test_multi_image_curation_flow(self):
-        user_dir = Path(self.tmp_dir.name)
-        with patch('pathlib.Path.home', return_value=user_dir):
+        user_home = Path(self.tmp_dir.name)
+        (user_home / '.fanart_viewer').mkdir(parents=True, exist_ok=True)
+        with patch('pathlib.Path.home', return_value=user_home):
             # 1. Initially empty
             res = self.client.get('/api/items/multi_image_curation/')
             self.assertEqual(res.status_code, 200)

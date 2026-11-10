@@ -2498,6 +2498,17 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['get'])
     def preview(self, request, pk=None):
         item = self.get_object()
+        pid_param = request.GET.get('id')
+        if pid_param is not None:
+            try:
+                pid = int(pid_param)
+                img = item.preview_images.only('id', 'data', 'content_type').get(pk=pid)
+                resp = HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
+                resp['Cache-Control'] = 'private, max-age=300'
+                return resp
+            except Exception:
+                return Response({'detail': 'preview not found'}, status=status.HTTP_404_NOT_FOUND)
+
         idx_param = request.GET.get('index')
         if idx_param is not None:
             try:

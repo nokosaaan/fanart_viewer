@@ -80,3 +80,13 @@ class SavePreviewsAppendTests(TestCase):
         self.assertEqual(len(all_imgs), 1)
         self.assertEqual(all_imgs[0].order, 0)
         self.assertEqual(bytes(all_imgs[0].data), b'replacement')
+
+    def test_preview_get_by_id(self):
+        p = PreviewImage.objects.create(item=self.item, order=0, data=b'stable_bytes', content_type='image/png')
+        resp = self.client.get(f'/api/items/{self.item.id}/preview/?id={p.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.content, b'stable_bytes')
+        self.assertEqual(resp['Content-Type'], 'image/png')
+
+        resp_bad = self.client.get(f'/api/items/{self.item.id}/preview/?id=999999')
+        self.assertEqual(resp_bad.status_code, 404)

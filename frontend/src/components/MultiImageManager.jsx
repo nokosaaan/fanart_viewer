@@ -33,6 +33,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
   const [previews, setPreviews] = useState(null)
   const [loading, setLoading] = useState(false)
   const [selectedIds, setSelectedIds] = useState(new Set())
+  const [deletedPreviewIds, setDeletedPreviewIds] = useState(() => new Set())
   const [deleting, setDeleting] = useState(false)
   const [deletingItem, setDeletingItem] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
@@ -46,6 +47,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
       const j = await resp.json()
       if (Array.isArray(j)) {
         setPreviews(j)
+        setDeletedPreviewIds(new Set())
         if (j.length <= 1) setDone(true)
       }
     } catch (e) {
@@ -59,7 +61,12 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
     loadPreviews()
   }, [loadPreviews])
 
+  const alivePreviews = useMemo(() => {
+    return (previews || []).filter(p => !deletedPreviewIds.has(p.id))
+  }, [previews, deletedPreviewIds])
+
   function toggleSelect(id) {
+    if (deletedPreviewIds.has(id)) return
     setSelectedIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -69,14 +76,47 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
   }
 
   function selectAll() {
-    if (!previews) return
-    setSelectedIds(new Set(previews.map(p => p.id)))
+    setSelectedIds(new Set(alivePreviews.map(p => p.id)))
   }
 
   function clearSelect() {
     setSelectedIds(new Set())
   }
 
+  // 単一画像の削除（ホウキアイコン）: 削除箇所は空欄（削除済み）として維持し、他の画像の位置をずらさない
+  async function deleteSinglePreview(pid) {
+    if (!pid || deleting) return
+    setDeleting(true)
+    try {
+      const resp = await fetch(`/api/items/${item.id}/previews/id/${pid}/`, { method: 'DELETE' })
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}))
+        alert('画像の削除に失敗しました: ' + (j.detail || j.error || resp.status))
+        return
+      }
+      setDeletedPreviewIds(prev => {
+        const next = new Set(prev)
+        next.add(pid)
+        return next
+      })
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        next.delete(pid)
+        return next
+      })
+      notify('item-preview-updated', { id: item.id })
+      const remaining = alivePreviews.length - 1
+      if (onUpdated) onUpdated(item.id, remaining)
+      if (remaining <= 1) setDone(true)
+    } catch (e) {
+      console.error(e)
+      alert('画像の削除に失敗しました')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  // 一括削除処理: 画面を再取得して位置をずらすのではなく、ホウキ削除と同様に削除済みスロットとして保持
   async function runDelete(body, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return
     setDeleting(true)
@@ -91,8 +131,16 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
         alert('削除に失敗しました: ' + (j.detail || j.error || resp.status))
         return
       }
+      const doomedIds = body.delete_ids
+        ? body.delete_ids
+        : (previews || []).filter(p => !body.keep_ids.includes(p.id)).map(p => p.id)
+
+      setDeletedPreviewIds(prev => {
+        const next = new Set(prev)
+        doomedIds.forEach(id => next.add(id))
+        return next
+      })
       setSelectedIds(new Set())
-      await loadPreviews()
       notify('item-preview-updated', { id: item.id })
       if (onUpdated) onUpdated(item.id, j.remaining)
       if (j.remaining <= 1) setDone(true)
@@ -104,10 +152,10 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
     }
   }
 
-  // 1枚目だけ残す（他の画像をすべて削除）※この画面に限り確認アラートなしで即座に実行
+  // 1枚目だけ残す（他の画像をすべて削除）※確認アラートなしで即座に実行
   function keepFirstOnly() {
-    if (!previews || previews.length <= 1) return
-    const first = previews[0]
+    if (!alivePreviews || alivePreviews.length <= 1) return
+    const first = alivePreviews[0]
     runDelete({ keep_ids: [first.id] }, null)
   }
 
@@ -122,7 +170,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
   function keepSelected() {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
-    const removeCount = (previews ? previews.length : 0) - ids.length
+    const removeCount = alivePreviews.length - ids.length
     if (removeCount <= 0) {
       alert('削除される画像がありません（すべて選択されています）')
       return
@@ -132,7 +180,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
 
   // 全画像削除
   async function deleteAll() {
-    if (!window.confirm(`このアイテムの画像（全${previews ? previews.length : 0}枚）をすべて削除しますか？`)) return
+    if (!window.confirm(`このアイテムの画像（全${alivePreviews.length}枚）をすべて削除しますか？`)) return
     setDeleting(true)
     try {
       const resp = await fetch(`/api/items/${item.id}/previews/`, { method: 'DELETE' })
@@ -140,7 +188,8 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
         alert('画像の全削除に失敗しました')
         return
       }
-      setPreviews([])
+      setDeletedPreviewIds(new Set((previews || []).map(p => p.id)))
+      setSelectedIds(new Set())
       setDone(true)
       notify('item-preview-updated', { id: item.id })
       if (onUpdated) onUpdated(item.id, 0)
@@ -230,7 +279,11 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
                 ? '1px solid rgba(34, 197, 94, 0.4)'
                 : '1px solid rgba(56, 189, 248, 0.4)'
             }}>
-              {isDismissed ? `維持済み (${previews.length}枚)` : done ? `整理済 (${previews.length}枚)` : `全 ${previews.length} 枚`}
+              {isDismissed
+                ? `維持済み (${alivePreviews.length}枚)`
+                : (done || alivePreviews.length <= 1)
+                ? `整理済 (${alivePreviews.length}枚)`
+                : `全 ${alivePreviews.length} 枚`}
             </span>
           )}
         </div>
@@ -258,7 +311,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
             </button>
           )}
 
-          {!readOnly && previews && previews.length > 1 && (
+          {!readOnly && alivePreviews.length > 1 && (
             <>
               <button
                 className="btn"
@@ -326,6 +379,70 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
               alignItems: 'flex-start'
             }}>
               {previews.map((p, idx) => {
+                const isDeleted = deletedPreviewIds.has(p.id)
+                if (isDeleted) {
+                  return (
+                    <div
+                      key={p.id}
+                      style={{
+                        flex: '0 0 auto',
+                        width: 104,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: 4,
+                        position: 'relative'
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: 'relative',
+                          width: 100,
+                          height: 110,
+                          borderRadius: 6,
+                          overflow: 'hidden',
+                          border: '1px dashed rgba(255, 255, 255, 0.25)',
+                          background: 'rgba(255, 255, 255, 0.04)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 3,
+                          color: 'rgba(255, 255, 255, 0.4)',
+                          boxSizing: 'border-box',
+                          userSelect: 'none'
+                        }}
+                        title={`削除済み (${idx + 1}/${previews.length})`}
+                      >
+                        <span aria-hidden="true" style={{ fontSize: 18 }}>🗑</span>
+                        <span style={{ fontSize: 11, fontWeight: 500 }}>削除済み</span>
+                        <span style={{
+                          position: 'absolute',
+                          top: 2,
+                          left: 2,
+                          background: 'rgba(0,0,0,0.6)',
+                          color: 'rgba(255,255,255,0.4)',
+                          fontSize: 9,
+                          padding: '1px 4px',
+                          borderRadius: 2
+                        }}>
+                          {idx + 1}
+                        </span>
+                      </div>
+                      <span style={{
+                        fontSize: 10,
+                        color: 'rgba(255,255,255,0.3)',
+                        maxWidth: 100,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }} title={p.filename || `Page ${idx + 1}`}>
+                        {p.filename || `Page ${idx + 1}`}
+                      </span>
+                    </div>
+                  )
+                }
+
                 const isSelected = selectedIds.has(p.id)
                 return (
                   <div
@@ -356,7 +473,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
                       title={`クリックして選択切替 (${idx + 1}/${previews.length})`}
                     >
                       <img
-                        src={`/api/items/${item.id}/preview/?index=${p.index}`}
+                        src={`/api/items/${item.id}/preview/?id=${p.id}`}
                         alt=""
                         loading="lazy"
                         style={{
@@ -378,20 +495,46 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
                         {idx + 1}
                       </span>
                       {!readOnly && (
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelect(p.id)}
-                          style={{
-                            position: 'absolute',
-                            top: 4,
-                            right: 4,
-                            cursor: 'pointer',
-                            accentColor: '#3b82f6',
-                            transform: 'scale(1.2)'
-                          }}
-                          onClick={e => e.stopPropagation()}
-                        />
+                        <>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelect(p.id)}
+                            style={{
+                              position: 'absolute',
+                              top: 4,
+                              right: 4,
+                              cursor: 'pointer',
+                              accentColor: '#3b82f6',
+                              transform: 'scale(1.2)'
+                            }}
+                            onClick={e => e.stopPropagation()}
+                          />
+                          <button
+                            type="button"
+                            style={{
+                              position: 'absolute',
+                              bottom: 3,
+                              right: 3,
+                              background: 'rgba(15, 23, 42, 0.85)',
+                              border: '1px solid rgba(255, 255, 255, 0.25)',
+                              borderRadius: 4,
+                              padding: '2px 5px',
+                              fontSize: 11,
+                              lineHeight: 1,
+                              cursor: 'pointer',
+                              opacity: 0.9,
+                              color: '#fff'
+                            }}
+                            title="この画像だけを削除 (delete this preview)"
+                            onClick={e => {
+                              e.stopPropagation()
+                              deleteSinglePreview(p.id)
+                            }}
+                          >
+                            🧹
+                          </button>
+                        </>
                       )}
                     </div>
                     <span style={{
@@ -411,7 +554,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
           )}
 
           {/* Batch action bar for selected items */}
-          {!readOnly && previews && previews.length > 1 && (
+          {!readOnly && alivePreviews.length > 1 && (
             <div style={{
               display: 'flex',
               alignItems: 'center',
