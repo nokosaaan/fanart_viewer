@@ -28,6 +28,7 @@ class DynamicScrollReaderExtractor(GalleryExtractor):
     """Extractor for multi-page vertical scroll readers backed by a script data manifest."""
 
     category = "scroll_reader"
+    browser = "chrome:windows"
     pattern = (
         _DOMAIN_PATTERN
         + r"/(?:photos-(?:slide|index|item|view)-(?:page-\d+-)?(?:aid-|id-)?|albums-(?:index|intro)-(?:page-\d+-)?(?:id-|aid-)?|feed-index-aid-)(\d+)"
@@ -38,9 +39,58 @@ class DynamicScrollReaderExtractor(GalleryExtractor):
         self.gallery_aid = match.group(1)
         m = re.match(r"(https?://[^/]+)", match.group(0))
         self.root = m.group(1) if m else "https://example.com"
-        # Use canonical index page for initial metadata fetch
-        url = f"{self.root}/photos-index-aid-{self.gallery_aid}.html"
-        super().__init__(match, url)
+        original_url = match.string if (match.string and match.string.startswith("http")) else f"{self.root}/photos-slide-aid-{self.gallery_aid}.html"
+        super().__init__(match, original_url)
+
+    def _fetch_page_with_fallback(self):
+        candidate_urls = [
+            self.page_url,
+            f"{self.root}/photos-slide-aid-{self.gallery_aid}.html",
+            f"{self.root}/photos-index-aid-{self.gallery_aid}.html",
+            f"{self.root}/photos-gallery-aid-{self.gallery_aid}.html",
+        ]
+        seen = set()
+        urls_to_try = []
+        for u in candidate_urls:
+            if u and u not in seen:
+                seen.add(u)
+                urls_to_try.append(u)
+
+        last_exc = None
+        for u in urls_to_try:
+            try:
+                resp = self.request(u, headers={"Referer": f"{self.root}/"})
+                sc = getattr(resp, "status_code", None)
+                if resp is not None and (not isinstance(sc, int) or sc < 400):
+                    self.page_url = u
+                    return resp.text
+            except Exception as e:
+                last_exc = e
+                self.log.debug("Failed candidate %s: %s", u, e)
+
+        if last_exc:
+            raise last_exc
+        return ""
+
+    def items(self):
+        from gallery_dl.extractor.common import Message
+
+        self.login()
+        page = self._fetch_page_with_fallback()
+        data = self.metadata(page)
+        imgs = self.images(page)
+
+        data["count"] = len(imgs)
+        yield Message.Directory, "", data
+        enum_key = self.enum
+        for data[enum_key], (url, imgdata) in enumerate(imgs, self.start):
+            if imgdata:
+                data.update(imgdata)
+                if "extension" not in imgdata:
+                    text.nameext_from_url(url, data)
+            else:
+                text.nameext_from_url(url, data)
+            yield Message.Url, url, data
 
     def metadata(self, page):
         title = None
@@ -63,15 +113,39 @@ class DynamicScrollReaderExtractor(GalleryExtractor):
 
     def images(self, page):
         # Fetch the auxiliary script/data manifest containing the complete URL array
-        manifest_url = f"{self.root}/photos-item-aid-{self.gallery_aid}.html"
-        resp = self.request(manifest_url, headers={"Referer": self.page_url})
-        raw = resp.text
+        manifest_urls = [
+            f"{self.root}/photos-item-aid-{self.gallery_aid}.html",
+            f"{self.root}/photos-gallery-aid-{self.gallery_aid}.html",
+        ]
+        raw = ""
+        last_exc = None
+        for manifest_url in manifest_urls:
+            try:
+                resp = self.request(manifest_url, headers={"Referer": self.page_url or f"{self.root}/"})
+                sc = getattr(resp, "status_code", None)
+                if resp is not None and (not isinstance(sc, int) or sc < 400) and resp.text:
+                    raw = resp.text
+                    if re.search(r'"(//[^"]+|https?://[^"]+)"', raw):
+                        break
+            except Exception as e:
+                last_exc = e
+                continue
+
+        if not raw and page:
+            raw = page
+        elif not raw and last_exc:
+            raise last_exc
 
         # Extract signed or direct image URLs from manifest
         urls = []
+        seen = set()
         for u in re.findall(r'"(//[^"]+|https?://[^"]+)"', raw):
+            if any(u.lower().endswith(ext) for ext in (".js", ".css", ".html", ".htm", ".ico")):
+                continue
             if u.startswith("//"):
                 u = "https:" + u
-            urls.append((u, None))
+            if u not in seen:
+                seen.add(u)
+                urls.append((u, None))
 
         return urls

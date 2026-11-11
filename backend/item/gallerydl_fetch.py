@@ -213,6 +213,7 @@ def _write_generic_config(cookies_path: str | None = None, pixiv_phpsessid: str 
     """Write a gallery-dl config file for general web gallery fetching."""
     extractor_cfg: dict = {
         "skip": "enumerate",
+        "browser": "chrome:windows",
         "generic": {
             "enabled": True,
         },
@@ -276,72 +277,76 @@ def fetch_media_gallerydl(url: str, timeout: int = 120) -> tuple[list[tuple[byte
             if proxy_url:
                 logger.info("gallery-dl: running with proxy %s", proxy_url)
 
-            stdout_chunks: list[str] = []
-            stderr_chunks: list[str] = []
-            last_activity = [time.monotonic()]
+            def _run_dl(cur_proxy_args):
+                stdout_chunks: list[str] = []
+                stderr_chunks: list[str] = []
+                last_activity = [time.monotonic()]
 
-            def _pump(stream, sink, is_err):
-                try:
-                    for raw in iter(stream.readline, ""):
-                        sink.append(raw)
+                def _pump(stream, sink, is_err):
+                    try:
+                        for raw in iter(stream.readline, ""):
+                            sink.append(raw)
+                            last_activity[0] = time.monotonic()
+                            if is_err and raw.strip():
+                                logger.info("gallery-dl: %s", raw.rstrip()[:400])
+                    except Exception:
+                        pass
+
+                p = subprocess.Popen(
+                    [
+                        *_GALLERYDL_CMD,
+                        "-v",
+                        "--config", config_path,
+                        *cur_proxy_args,
+                        "-D", tmpdir,
+                        "--no-mtime",
+                        "--no-colors",
+                        "--write-info-json",
+                        url,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=sub_env,
+                    **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
+                )
+                pumps = [
+                    threading.Thread(target=_pump, args=(p.stdout, stdout_chunks, False), daemon=True),
+                    threading.Thread(target=_pump, args=(p.stderr, stderr_chunks, True), daemon=True),
+                ]
+                for t in pumps:
+                    t.start()
+
+                seen_cnt = 0
+                t_out = False
+                while p.poll() is None:
+                    time.sleep(1.0)
+                    try:
+                        n = len(os.listdir(tmpdir))
+                    except OSError:
+                        n = seen_cnt
+                    if n != seen_cnt:
+                        seen_cnt = n
                         last_activity[0] = time.monotonic()
-                        if is_err and raw.strip():
-                            logger.info("gallery-dl: %s", raw.rstrip()[:400])
+                    if time.monotonic() - last_activity[0] > timeout:
+                        t_out = True
+                        p.kill()
+                        break
+                try:
+                    p.wait(timeout=10)
                 except Exception:
                     pass
+                for t in pumps:
+                    t.join(timeout=5)
+                return p, "".join(stdout_chunks), "".join(stderr_chunks), t_out, seen_cnt
 
-            proc = subprocess.Popen(
-                [
-                    *_GALLERYDL_CMD,
-                    "-v",
-                    "--config", config_path,
-                    *proxy_args,
-                    "-D", tmpdir,
-                    "--no-mtime",
-                    "--no-colors",
-                    "--write-info-json",
-                    url,
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=sub_env,
-                **({'creationflags': subprocess.CREATE_NO_WINDOW} if hasattr(subprocess, 'CREATE_NO_WINDOW') else {}),
-            )
-            pumps = [
-                threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks, False), daemon=True),
-                threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks, True), daemon=True),
-            ]
-            for t in pumps:
-                t.start()
-
-            seen_files = 0
-            timed_out = False
-            while proc.poll() is None:
-                time.sleep(1.0)
-                try:
-                    n = len(os.listdir(tmpdir))
-                except OSError:
-                    n = seen_files
-                if n != seen_files:
-                    seen_files = n
-                    last_activity[0] = time.monotonic()
-                if time.monotonic() - last_activity[0] > timeout:
-                    timed_out = True
-                    proc.kill()
-                    break
-            try:
-                proc.wait(timeout=10)
-            except Exception:
-                pass
-            for t in pumps:
-                t.join(timeout=5)
-
-            stdout_text = "".join(stdout_chunks)
-            stderr_text = "".join(stderr_chunks)
+            proc, stdout_text, stderr_text, timed_out, seen_files = _run_dl(proxy_args)
+            if proxy_args and seen_files == 0 and ("403" in stderr_text or "Forbidden" in stderr_text):
+                logger.warning("gallery-dl: proxy %s returned 403 Forbidden; retrying with direct connection...", proxy_url)
+                proc, stdout_text, stderr_text, timed_out, seen_files = _run_dl([])
         if timed_out:
             logger.warning(
                 "gallery-dl made no progress for %ss on %s (files so far: %d); collecting what was downloaded",
