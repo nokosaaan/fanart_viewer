@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import CharacterPicker from './CharacterPicker'
 import RegionAnnotator from './RegionAnnotator'
 import { getPlatformIcon } from '../lib/platformIcon'
