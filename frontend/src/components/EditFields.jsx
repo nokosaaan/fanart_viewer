@@ -239,8 +239,12 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // (ItemQueuePanel) so it can decide whether to show the region-labeling
   // section in real time, without waiting for a save — see this component's
   // own onSituationChange prop.
+  const lastNotifiedSitRef = useRef(situation)
   useEffect(()=>{
-    if(onSituationChange) onSituationChange(situation)
+    if(onSituationChange && lastNotifiedSitRef.current !== situation){
+      lastNotifiedSitRef.current = situation
+      onSituationChange(situation)
+    }
   }, [situation, onSituationChange])
 
   // Same idea, for the live (unsaved) title list — lets an embedding parent
@@ -909,12 +913,27 @@ export function ItemQueuePanel({
 
   const fieldsRef = useRef(null)
   const boxesRef = useRef(null)
+  const situationRef = useRef(situationDraft)
+  situationRef.current = situationDraft
 
-  function handleSituationChange(newSit){
-    const s = (newSit || '').toUpperCase()
+  useEffect(() => {
+    const s = (item.situation || '').toUpperCase()
+    situationRef.current = s
     setSituationDraft(s)
+    setTitlesDraft(item.titles || [])
     setManualShowRegion(null)
-  }
+    setFieldsDirty(false)
+    setRegionDirty(false)
+  }, [item.id])
+
+  const handleSituationChange = useCallback((newSit) => {
+    const s = (newSit || '').toUpperCase()
+    if (situationRef.current !== s) {
+      situationRef.current = s
+      setSituationDraft(s)
+      setManualShowRegion(null)
+    }
+  }, [])
 
   const showRegionSection = manualShowRegion !== null ? manualShowRegion : (situationDraft !== 'SOLO')
 

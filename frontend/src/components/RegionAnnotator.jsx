@@ -169,6 +169,12 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
         ? `/api/items/${item.id}/preview/?id=${item.first_preview_id}`
         : `/api/items/${item.id}/preview/`))
 
+  useEffect(() => {
+    if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
+      setNaturalSize({ width: imgRef.current.naturalWidth, height: imgRef.current.naturalHeight })
+    }
+  }, [previewUrl])
+
   const visibleBoxes = boxes.filter(b => b.imageIndex === currentImageIndex)
 
   // Character counts per box on current image
