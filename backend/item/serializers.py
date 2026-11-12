@@ -7,12 +7,23 @@ class ItemSerializer(serializers.ModelSerializer):
     # a preview exists without embedding the full binary data in every item.
     has_preview = serializers.SerializerMethodField()
     preview_count = serializers.SerializerMethodField()
+    first_preview_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
         # exclude binary field from normal serialized output (use detail `preview/` endpoint to fetch bytes)
         exclude = ('preview_data',)
-        read_only_fields = ('preview_content_type', 'has_preview', 'preview_count')
+        read_only_fields = ('preview_content_type', 'has_preview', 'preview_count', 'first_preview_id')
+
+    def get_first_preview_id(self, obj):
+        if hasattr(obj, 'annotated_first_preview_id'):
+            return obj.annotated_first_preview_id
+        try:
+            if hasattr(obj, 'preview_images'):
+                return obj.preview_images.order_by('order', 'id').values_list('id', flat=True).first()
+        except Exception:
+            pass
+        return None
 
     def get_preview_count(self, obj):
         if hasattr(obj, 'annotated_preview_count'):

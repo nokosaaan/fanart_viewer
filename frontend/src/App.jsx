@@ -571,7 +571,7 @@ function AppMain({ role, onLogout }){
       if(id == null) return
       ;(async () => {
         try{
-          const r = await fetch(`/api/items/${id}/`)
+          const r = await fetch(`/api/items/${id}/`, { cache: 'no-store' })
           if(!r.ok) return
           const fresh = await r.json()
           setItems(prev => Array.isArray(prev) ? prev.map(it => it.id === fresh.id ? { ...it, ...fresh } : it) : prev)

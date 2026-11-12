@@ -202,6 +202,16 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   const [images, setImages] = useState([])
   const [selectedImageIndex, setSelectedImageIndex] = useState(null)
 
+  const loadItemPreviews = useCallback((id) => {
+    fetch(`/api/items/${id}/previews/`, { cache: 'no-store' })
+      .then(r=>r.json()).then(d=>{
+        if(Array.isArray(d)){
+          setImages(d)
+          setSelectedImageIndex(prev => (prev !== null && d.some(img => img.index === prev)) ? prev : null)
+        }
+      }).catch(()=>{})
+  }, [])
+
   useEffect(()=>{
     fetch('/api/items/all_titles/')
       .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setAllTitles(d) }).catch(()=>{})
@@ -209,9 +219,21 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setAllChars(d) }).catch(()=>{})
     fetch('/api/items/tagger_capabilities/')
       .then(r=>r.json()).then(d=>setHaveTimm(!!d.have_timm)).catch(()=>{})
-    fetch(`/api/items/${item.id}/previews/`)
-      .then(r=>r.json()).then(d=>{ if(Array.isArray(d)) setImages(d) }).catch(()=>{})
-  }, [item.id])
+  }, [])
+
+  useEffect(()=>{
+    loadItemPreviews(item.id)
+  }, [item.id, item.preview_count, item.first_preview_id, loadItemPreviews])
+
+  useEffect(()=>{
+    function onPreviewUpdated(ev){
+      if(ev && ev.detail && ev.detail.id === item.id){
+        loadItemPreviews(item.id)
+      }
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
+  }, [item.id, loadItemPreviews])
 
   // Publishes the live (unsaved) situation value up to an embedding parent
   // (ItemQueuePanel) so it can decide whether to show the region-labeling
@@ -473,28 +495,42 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
           開く(新しいタブ、このフォームは閉じない)か、この画像自体を新しい
           タブで開く。編集キューを閉じずに済むので、いちいち別ウィンドウを
           開き直す必要がない(このフォームの入力内容もそのまま残る)。 */}
-      <div style={{...SECTION.wrap, background:'#0f172a', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap'}}>
-        <img
-          src={`/api/items/${item.id}/preview/${selectedImageIndex !== null ? `?index=${selectedImageIndex}` : ''}`}
-          alt=""
-          style={{width:120, height:120, objectFit:'cover', borderRadius:6, flexShrink:0, background:'#1e293b'}}
-        />
-        <div style={{display:'flex', flexDirection:'column', gap:8}}>
-          {item.link && (
-            <a className="link-text" href={item.link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
-              {(() => {
-                const platform = getPlatformIcon(item.link)
-                return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
-              })()}
-              元リンクを開く(実際の画像を確認)
-            </a>
-          )}
-          <a className="link-text" href={`/api/items/${item.id}/preview/${selectedImageIndex !== null ? `?index=${selectedImageIndex}` : ''}`} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            この画像を新しいタブで開く
-          </a>
-        </div>
-      </div>
+      {(() => {
+        const selectedImgObj = selectedImageIndex !== null
+          ? images.find(img => img.index === selectedImageIndex)
+          : images[0]
+        const activePreviewUrl = selectedImgObj && selectedImgObj.id != null
+          ? `/api/items/${item.id}/preview/?id=${selectedImgObj.id}`
+          : (selectedImageIndex !== null
+            ? `/api/items/${item.id}/preview/?index=${selectedImageIndex}`
+            : (item.first_preview_id != null
+              ? `/api/items/${item.id}/preview/?id=${item.first_preview_id}`
+              : `/api/items/${item.id}/preview/`))
+        return (
+          <div style={{...SECTION.wrap, background:'#0f172a', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap'}}>
+            <img
+              src={activePreviewUrl}
+              alt=""
+              style={{width:120, height:120, objectFit:'cover', borderRadius:6, flexShrink:0, background:'#1e293b'}}
+            />
+            <div style={{display:'flex', flexDirection:'column', gap:8}}>
+              {item.link && (
+                <a className="link-text" href={item.link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                  {(() => {
+                    const platform = getPlatformIcon(item.link)
+                    return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
+                  })()}
+                  元リンクを開く(実際の画像を確認)
+                </a>
+              )}
+              <a className="link-text" href={activePreviewUrl} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                この画像を新しいタブで開く
+              </a>
+            </div>
+          </div>
+        )
+      })()}
 
       <div style={{...SECTION.wrap, background:'#0f172a'}}>
         <label style={SECTION.label}>取得した本文(確認用) <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— ハッシュタグが正しく取れているか確認できます</span></label>
@@ -530,7 +566,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
             >自動</button>
             {images.map(img => (
               <button
-                key={img.index}
+                key={img.id ?? img.index}
                 onClick={()=>setSelectedImageIndex(img.index)}
                 title={`${img.index + 1}枚目でこの画像に対して提案する`}
                 style={{
@@ -538,7 +574,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                   border: selectedImageIndex === img.index ? '2px solid #3b82f6' : '1px solid #334155',
                 }}
               >
-                <img src={`/api/items/${item.id}/preview/?index=${img.index}`} alt={`${img.index + 1}枚目`}
+                <img src={img.id != null ? `/api/items/${item.id}/preview/?id=${img.id}` : `/api/items/${item.id}/preview/?index=${img.index}`} alt={`${img.index + 1}枚目`}
                   style={{width:'100%', height:'100%', objectFit:'cover', display:'block'}} />
                 <span style={{position:'absolute', right:2, bottom:2, fontSize:10, color:'#fff',
                   background:'rgba(0,0,0,0.6)', borderRadius:3, padding:'0 3px'}}>{img.index + 1}</span>

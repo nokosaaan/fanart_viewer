@@ -335,7 +335,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
     if(comicContainerRef.current) comicContainerRef.current.scrollTop = 0
     if(!item) return
     try{
-      const r = await fetch(`/api/items/${item.id}/previews/`)
+      const r = await fetch(`/api/items/${item.id}/previews/`, { cache: 'no-store' })
       if(!r.ok) return
       const j = await r.json()
       if(!mountedRef.current) return
@@ -353,6 +353,19 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
   useEffect(()=>{
     const it = selectedItemId != null ? previewItems.find(x => x && String(x.id) === String(selectedItemId)) : null
     loadPreviewsForItem(it)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedItemId])
+
+  useEffect(()=>{
+    function onPreviewUpdated(ev){
+      const detail = ev && ev.detail
+      if(!detail || detail.id == null || detail.tombstoneOnly) return
+      if(selectedItemId != null && String(detail.id) === String(selectedItemId)){
+        loadPreviewsForItem({ id: detail.id })
+      }
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedItemId])
 
@@ -630,7 +643,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
         // reload of this item's filmstrip, same as before.
         await loadPreviewsForItem(it)
       }
-      notify('item-preview-updated', { id: it.id })
+      notify('item-preview-updated', { id: it.id, tombstoneOnly: true })
       alert('Preview deleted.')
     }catch(e){ console.error(e); alert('Failed to delete preview') }
     finally{ setDeleting(false) }
@@ -688,7 +701,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
       }
 
       leaveSelectMode()
-      notify('item-preview-updated', { id: it.id })
+      notify('item-preview-updated', { id: it.id, tombstoneOnly: true })
       let msg = `${j.deleted}枚の画像を削除しました(残り${j.remaining}枚)。`
       if(j.regions_dropped) msg += `\n削除した画像上の領域指定 ${j.regions_dropped} 件も削除しました。`
       if(j.regions_remapped) msg += `\n残った画像の領域指定 ${j.regions_remapped} 件を新しい画像番号に付け替えました。`
@@ -851,7 +864,7 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
               const globalIdx = panePageIndex * PANE_PAGE_SIZE + localIdx
               return (
                 <button className="preview-grid-cell" key={it.id} onClick={()=>openLarge(globalIdx)}>
-                  <img src={`/api/items/${it.id}/preview/?index=0`} alt={it.title||''} loading="lazy" />
+                  <img src={it.first_preview_id != null ? `/api/items/${it.id}/preview/?id=${it.first_preview_id}` : `/api/items/${it.id}/preview/?index=0`} alt={it.title||''} loading="lazy" />
                 </button>
               )
             })}

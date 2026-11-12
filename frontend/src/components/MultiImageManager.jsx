@@ -42,13 +42,13 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
   const loadPreviews = useCallback(async () => {
     setLoading(true)
     try {
-      const resp = await fetch(`/api/items/${item.id}/previews/`)
+      const resp = await fetch(`/api/items/${item.id}/previews/`, { cache: 'no-store' })
       if (!resp.ok) return
       const j = await resp.json()
       if (Array.isArray(j)) {
         setPreviews(j)
         setDeletedPreviewIds(new Set())
-        if (j.length <= 1) setDone(true)
+        setDone(j.length <= 1)
       }
     } catch (e) {
       console.error(e)
@@ -60,6 +60,17 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
   useEffect(() => {
     loadPreviews()
   }, [loadPreviews])
+
+  useEffect(() => {
+    function onPreviewUpdated(ev) {
+      const detail = ev && ev.detail
+      if (!detail || detail.id !== item.id) return
+      if (detail.source === 'MultiItemRow') return
+      loadPreviews()
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
+  }, [item.id, loadPreviews])
 
   const alivePreviews = useMemo(() => {
     return (previews || []).filter(p => !deletedPreviewIds.has(p.id))
@@ -104,7 +115,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
         next.delete(pid)
         return next
       })
-      notify('item-preview-updated', { id: item.id })
+      notify('item-preview-updated', { id: item.id, source: 'MultiItemRow' })
       const remaining = alivePreviews.length - 1
       if (onUpdated) onUpdated(item.id, remaining)
       if (remaining <= 1) setDone(true)
@@ -141,7 +152,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
         return next
       })
       setSelectedIds(new Set())
-      notify('item-preview-updated', { id: item.id })
+      notify('item-preview-updated', { id: item.id, source: 'MultiItemRow' })
       if (onUpdated) onUpdated(item.id, j.remaining)
       if (j.remaining <= 1) setDone(true)
     } catch (e) {
@@ -191,7 +202,7 @@ function MultiItemRow({ item, serialNumber, onOpenPreview, onUpdated, onDismiss,
       setDeletedPreviewIds(new Set((previews || []).map(p => p.id)))
       setSelectedIds(new Set())
       setDone(true)
-      notify('item-preview-updated', { id: item.id })
+      notify('item-preview-updated', { id: item.id, source: 'MultiItemRow' })
       if (onUpdated) onUpdated(item.id, 0)
     } catch (e) {
       console.error(e)

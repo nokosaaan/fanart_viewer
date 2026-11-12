@@ -69,7 +69,7 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
     }
     // Also fetch live to be exact
     setLoadingExisting(true)
-    fetch(`/api/items/${openEntry.itemId}/previews/`)
+    fetch(`/api/items/${openEntry.itemId}/previews/`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : [])
       .then(list => {
         if (Array.isArray(list)) setExistingCount(list.length)
@@ -77,6 +77,21 @@ export default function FetchQueueManager({ queue, onRemove, onClose, currentPag
       .catch(() => {})
       .finally(() => setLoadingExisting(false))
   }, [openEntry?.itemId, openId, currentPageItems])
+
+  React.useEffect(() => {
+    function onPreviewUpdated(ev) {
+      if (!openEntry || !ev || !ev.detail) return
+      if (String(ev.detail.id) !== String(openEntry.itemId)) return
+      fetch(`/api/items/${openEntry.itemId}/previews/`, { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : [])
+        .then(list => {
+          if (Array.isArray(list)) setExistingCount(list.length)
+        })
+        .catch(() => {})
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
+  }, [openEntry?.itemId])
 
   // This page's not-yet-fetched items.
   const pendingItems = (currentPageItems || []).filter(it => it && !it.has_preview && it.link)

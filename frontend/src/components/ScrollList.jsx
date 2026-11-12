@@ -113,6 +113,10 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
   const [urlEditable, setUrlEditable] = useState(false)
   const urlInputRef = useRef(null)
 
+  useEffect(() => {
+    setHasPreviewLocal(!!it.has_preview)
+  }, [it.id, it.has_preview])
+
   // Saving now happens from the fetch queue (see FetchQueueManager), which is
   // a separate component from whichever ItemRow originally fetched the
   // candidates — so this row needs to hear about it after the fact to flip
@@ -143,6 +147,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
       const j = await resp.json().catch(()=>({}))
       if(!resp.ok){ alert('画像のアップロードに失敗しました: '+(j.detail||resp.status)); return }
       setHasPreviewLocal(true)
+      if(j.item) notify('item-updated', { id: it.id, item: j.item })
       notify('item-preview-updated', { id: it.id })
       showToast(`画像を追加しました(${j.added||files.length}件) ✓`, 'success')
     }catch(err){
@@ -170,6 +175,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
       const j = await resp.json().catch(()=>({}))
       if(!resp.ok){ showToast('サルベージ失敗: '+(j.detail||resp.status), 'error'); return }
       setHasPreviewLocal(true)
+      if(j.item) notify('item-updated', { id: it.id, item: j.item })
       notify('item-preview-updated', { id: it.id })
       showToast(`サルベージ成功: ${j.added}件の画像を復元しました ✓`, 'success')
     }catch(err){
@@ -373,7 +379,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
               <>
                 <img
                   className="preview"
-                  src={`/api/items/${it.id}/preview/?index=0`}
+                  src={it.first_preview_id != null ? `/api/items/${it.id}/preview/?id=${it.first_preview_id}` : `/api/items/${it.id}/preview/?index=0`}
                   alt="preview"
                   style={{ cursor: onOpenPreview ? 'zoom-in' : undefined }}
                   title="Preview Timelineでこのアイテムを開く"

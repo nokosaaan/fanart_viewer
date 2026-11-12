@@ -1103,6 +1103,36 @@ def _merge_unique(*lists):
     return out
 
 
+def _clear_item_preview_annotations(item):
+    """Clear precomputed queryset annotations on `item` after mutating its
+    PreviewImage rows so a subsequent ItemSerializer(item) re-queries live
+    preview_count / has_preview / first_preview_id instead of returning stale
+    pre-mutation values."""
+    for attr in (
+        'annotated_preview_count',
+        'annotated_has_preview',
+        'annotated_first_preview_id',
+        'annotated_preview_images_count',
+    ):
+        if hasattr(item, attr):
+            delattr(item, attr)
+
+
+def _normalize_preview_orders(item):
+    """Ensure all existing PreviewImage rows for `item` have contiguous
+    0..N-1 `order` values (ordered by order, id) and return the count N.
+    """
+    rows = list(item.preview_images.order_by('order', 'id').values('id', 'order'))
+    to_update = [
+        PreviewImage(pk=row['id'], order=idx)
+        for idx, row in enumerate(rows)
+        if row['order'] != idx
+    ]
+    if to_update:
+        PreviewImage.objects.bulk_update(to_update, ['order'])
+    return len(rows)
+
+
 def _select_image_bytes(item, image_index=None):
     """Pick which of `item`'s images to feed the tagger for inference.
 
@@ -1124,7 +1154,7 @@ def _select_image_bytes(item, image_index=None):
     """
     from django.db.models.functions import Length
 
-    rows = list(item.preview_images.order_by('order').annotate(size=Length('data')).values('id', 'size'))
+    rows = list(item.preview_images.order_by('order', 'id').annotate(size=Length('data')).values('id', 'size'))
     if rows:
         if image_index is not None and 0 <= image_index < len(rows):
             target_idx = image_index
@@ -1156,7 +1186,7 @@ def _remove_preview_images(item, ids):
 
     ids = {int(i) for i in ids}
     with transaction.atomic():
-        rows = list(item.preview_images.order_by('order').annotate(size=Length('data')).values('id', 'size'))
+        rows = list(item.preview_images.order_by('order', 'id').annotate(size=Length('data')).values('id', 'order', 'size'))
         doomed = [pos for pos, row in enumerate(rows) if row['id'] in ids]
         if not doomed:
             return {'deleted': 0, 'remaining': len(rows), 'regions_dropped': 0, 'regions_remapped': 0}
@@ -1169,7 +1199,7 @@ def _remove_preview_images(item, ids):
         to_update = [
             PreviewImage(pk=rows[old]['id'], order=new)
             for old, new in new_index.items()
-            if old != new
+            if rows[old]['order'] != new
         ]
         if to_update:
             PreviewImage.objects.bulk_update(to_update, ['order'])
@@ -1192,10 +1222,54 @@ def _remove_preview_images(item, ids):
         if dropped or remapped:
             item.character_regions = regions
             item.save(update_fields=['character_regions'])
+
+        # Update checkpoints if present so chapter markers follow surviving pages
+        if item.checkpoints:
+            new_checkpoints = []
+            seen_pages = set()
+            cp_changed = False
+            for cp in item.checkpoints:
+                if not isinstance(cp, dict) or 'page_index' not in cp:
+                    continue
+                old_pg = cp.get('page_index')
+                if not isinstance(old_pg, int):
+                    continue
+                if old_pg in new_index:
+                    mapped_pg = new_index[old_pg]
+                else:
+                    mapped_pg = next((new_index[old] for old in survivors if old > old_pg), None)
+                if mapped_pg is None or mapped_pg in seen_pages:
+                    cp_changed = True
+                    continue
+                seen_pages.add(mapped_pg)
+                if mapped_pg != old_pg:
+                    cp_changed = True
+                    new_checkpoints.append({**cp, 'page_index': mapped_pg})
+                else:
+                    new_checkpoints.append(cp)
+            if cp_changed:
+                item.checkpoints = new_checkpoints
+                item.save(update_fields=['checkpoints'])
+
+        # Update translation_caches (drop deleted pages, remap surviving pages)
+        caches = list(item.translation_caches.all())
+        if caches:
+            doomed_cache_ids = [c.id for c in caches if c.image_index in doomed_set]
+            if doomed_cache_ids:
+                item.translation_caches.filter(id__in=doomed_cache_ids).delete()
+            for c in caches:
+                if c.image_index not in doomed_set and c.image_index in new_index and new_index[c.image_index] != c.image_index:
+                    c.image_index = 100000 + new_index[c.image_index]
+                    c.save(update_fields=['image_index'])
+            for c in item.translation_caches.filter(image_index__gte=100000):
+                c.image_index = c.image_index - 100000
+                c.save(update_fields=['image_index'])
+
         if not survivors:
             item.preview_data = None
             item.preview_content_type = None
             item.save(update_fields=['preview_data', 'preview_content_type'])
+    _clear_item_preview_annotations(item)
     return {'deleted': len(doomed), 'remaining': len(survivors), 'regions_dropped': dropped, 'regions_remapped': remapped}
 
 
@@ -1214,7 +1288,7 @@ def _reorder_preview_images(item, new_ordered_ids):
     from django.db import transaction
 
     with transaction.atomic():
-        rows = list(item.preview_images.order_by('order').defer('data'))
+        rows = list(item.preview_images.order_by('order', 'id').defer('data'))
         if not rows:
             return {'count': 0, 'regions_remapped': 0}
 
@@ -1234,7 +1308,7 @@ def _reorder_preview_images(item, new_ordered_ids):
         to_update = [
             PreviewImage(pk=rid, order=new_idx)
             for rid, new_idx in new_index_by_id.items()
-            if old_index_by_id[rid] != new_idx
+            if row_map[rid].order != new_idx
         ]
         if to_update:
             PreviewImage.objects.bulk_update(to_update, ['order'])
@@ -1264,6 +1338,7 @@ def _reorder_preview_images(item, new_ordered_ids):
                 c.image_index = c.image_index - 100000
                 c.save(update_fields=['image_index'])
 
+        _clear_item_preview_annotations(item)
         return {'count': len(final_ids), 'regions_remapped': remapped_regions}
 
 
@@ -1286,7 +1361,7 @@ def _select_images(item, image_index=None, max_images=DEFAULT_MAX_IMAGES):
     the cap they are sampled evenly, first and last included, so a long post
     is still covered end to end. Falls back to the legacy single preview
     blob when there are no PreviewImage rows (index None)."""
-    ids = list(item.preview_images.order_by('order').values_list('id', flat=True))
+    ids = list(item.preview_images.order_by('order', 'id').values_list('id', flat=True))
     if ids:
         if image_index is not None and 0 <= image_index < len(ids):
             img = PreviewImage.objects.only('id', 'data').get(pk=ids[image_index])
@@ -2450,10 +2525,17 @@ def _base_item_queryset():
         ),
         0,
     )
+    first_id_sub = Subquery(
+        PreviewImage.objects.filter(item=OuterRef('pk'))
+        .order_by('order', 'id')
+        .values('id')[:1],
+        output_field=IntegerField(),
+    )
     return (
         Item.objects.defer('preview_data')
         .annotate(
             annotated_preview_images_count=sub_count,
+            annotated_first_preview_id=first_id_sub,
         )
         .annotate(
             annotated_preview_count=Case(
@@ -2518,7 +2600,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             if idx < 0:
                 return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
             target_id = (
-                item.preview_images.order_by('order')
+                item.preview_images.order_by('order', 'id')
                 .values_list('id', flat=True)[idx:idx + 1]
                 .first()
             )
@@ -2526,23 +2608,23 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
             img = PreviewImage.objects.only('id', 'data', 'content_type').get(pk=target_id)
             resp = HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
-            resp['Cache-Control'] = 'private, max-age=300'
+            resp['Cache-Control'] = 'no-cache, no-store, must-revalidate'
             return resp
 
         first_id = (
-            item.preview_images.order_by('order')
+            item.preview_images.order_by('order', 'id')
             .values_list('id', flat=True)[:1]
             .first()
         )
         if first_id is not None:
             first = PreviewImage.objects.only('id', 'data', 'content_type').get(pk=first_id)
             resp = HttpResponse(first.data, content_type=first.content_type or 'application/octet-stream')
-            resp['Cache-Control'] = 'private, max-age=300'
+            resp['Cache-Control'] = 'no-cache, no-store, must-revalidate'
             return resp
 
         if item.preview_data:
             resp = HttpResponse(item.preview_data, content_type=item.preview_content_type or 'application/octet-stream')
-            resp['Cache-Control'] = 'private, max-age=300'
+            resp['Cache-Control'] = 'no-cache, no-store, must-revalidate'
             return resp
 
         return Response({'detail': 'No preview'}, status=status.HTTP_404_NOT_FOUND)
@@ -3095,13 +3177,19 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Persist ALL successful candidates as preview images (preserve order)
         PreviewImage.objects.filter(item=item).delete()
+        if item.preview_data is not None or item.preview_content_type is not None:
+            item.preview_data = None
+            item.preview_content_type = None
+            item.save(update_fields=['preview_data', 'preview_content_type'])
+        item.translation_caches.all().delete()
         saved = []
         for idx, (url_f, body, ctype) in enumerate(candidates):
             try:
                 if body:
                     body, ctype = optimize_image_data(body, ctype)
-                pi = PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype)
-                saved.append({'id': pi.id, 'index': idx, 'url': url_f, 'size': len(body) if body else 0, 'content_type': ctype})
+                order_idx = len(saved)
+                pi = PreviewImage.objects.create(item=item, order=order_idx, data=body, content_type=ctype)
+                saved.append({'id': pi.id, 'index': order_idx, 'url': url_f, 'size': len(body) if body else 0, 'content_type': ctype})
             except Exception:
                 # skip individual failures but continue saving others
                 logging.exception('Failed to save preview candidate %s for item %s', url_f, item.id)
@@ -3110,6 +3198,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not saved:
             return Response({'detail': 'Failed to save any preview images'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        _clear_item_preview_annotations(item)
         return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
 
     @action(detail=True, methods=['post'], url_path='gallerydl_start')
@@ -3545,18 +3634,17 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         if clear_existing:
             PreviewImage.objects.filter(item=item).delete()
-            base_offset = 0
+            if item.preview_data is not None or item.preview_content_type is not None:
+                item.preview_data = None
+                item.preview_content_type = None
+                item.save(update_fields=['preview_data', 'preview_content_type'])
+            item.translation_caches.all().delete()
+            base_offset = start_index
         else:
-            # When appending to existing preview images:
-            # If the client did not offset start_index (start_index is smaller than existing count),
-            # automatically offset so new images are appended after the last existing image.
-            from django.db.models import Max
-            max_existing_order = PreviewImage.objects.filter(item=item).aggregate(Max('order'))['order__max']
-            existing_count = PreviewImage.objects.filter(item=item).count()
-            if start_index < existing_count and max_existing_order is not None:
-                base_offset = max_existing_order + 1
-            else:
-                base_offset = 0
+            # Normalize existing orders to 0..existing_count-1 first so new
+            # images are always appended contiguously without gaps or order collisions.
+            existing_count = _normalize_preview_orders(item)
+            base_offset = existing_count if existing_count > 0 else start_index
 
         saved = []
         for idx, img in enumerate(images):
@@ -3570,13 +3658,14 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     m = re.match(r'data:([^;]+);base64', header)
                     ctype = m.group(1) if m else 'application/octet-stream'
                     body, ctype = optimize_image_data(body, ctype)
-                    order = base_offset + start_index + idx
-                    PreviewImage.objects.create(item=item, order=order, data=body, content_type=ctype)
-                    saved.append({'index': order, 'url': url, 'size': len(body), 'content_type': ctype})
+                    order = base_offset + len(saved)
+                    pi = PreviewImage.objects.create(item=item, order=order, data=body, content_type=ctype)
+                    saved.append({'id': pi.id, 'index': order, 'url': url, 'size': len(body), 'content_type': ctype})
                 except Exception:
                     continue
         if not saved:
             return Response({'detail': 'No images saved'}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        _clear_item_preview_annotations(item)
         return Response({'status': 'saved', 'count': len(saved), 'saved': saved})
 
     @action(detail=True, methods=['get', 'delete'], url_path='previews')
@@ -3586,19 +3675,28 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if request.method == 'DELETE':
             try:
                 PreviewImage.objects.filter(item=item).delete()
-                # clear any inline preview_data stored on the Item
+                item.translation_caches.all().delete()
+                # clear any inline preview_data / region / checkpoint state stored on the Item
                 try:
+                    update_fields = ['preview_data', 'preview_content_type']
                     item.preview_data = None
                     item.preview_content_type = None
-                    item.save(update_fields=['preview_data', 'preview_content_type'])
+                    if item.character_regions:
+                        item.character_regions = []
+                        update_fields.append('character_regions')
+                    if item.checkpoints:
+                        item.checkpoints = []
+                        update_fields.append('checkpoints')
+                    item.save(update_fields=update_fields)
                 except Exception:
                     logging.exception('Failed to clear item.preview_data')
+                _clear_item_preview_annotations(item)
                 return Response({'status': 'deleted', 'count': 0})
             except Exception as e:
                 logging.exception('Failed to delete all previews')
                 return Response({'detail': 'Failed to delete previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        rows = item.preview_images.order_by('order').values('id', 'content_type', 'filename')
+        rows = item.preview_images.order_by('order', 'id').values('id', 'content_type', 'filename')
         data = []
         for idx, row in enumerate(rows):
             data.append({
@@ -3608,7 +3706,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 'content_type': row['content_type'],
                 'filename': row.get('filename') or '',
             })
-        return Response(data)
+        resp = Response(data)
+        resp['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return resp
 
     @action(detail=True, methods=['delete'], url_path='previews/id/(?P<pid>[^/]+)')
     def preview_delete_by_id(self, request, pk=None, pid=None):
@@ -3635,7 +3735,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if idxi < 0:
             return Response({'detail': 'index out of range'}, status=status.HTTP_404_NOT_FOUND)
         target_id = (
-            item.preview_images.order_by('order')
+            item.preview_images.order_by('order', 'id')
             .values_list('id', flat=True)[idxi:idxi + 1]
             .first()
         )
@@ -3653,7 +3753,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         # GET: return the image bytes for the requested index
         img = PreviewImage.objects.only('id', 'data', 'content_type').get(pk=target_id)
         resp = HttpResponse(img.data, content_type=img.content_type or 'application/octet-stream')
-        resp['Cache-Control'] = 'private, max-age=300'
+        resp['Cache-Control'] = 'no-cache, no-store, must-revalidate'
         return resp
 
     @action(detail=True, methods=['post'], url_path='delete_previews')
@@ -3720,7 +3820,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         data = request.data if isinstance(request.data, dict) else {}
         action_name = data.get('action')
 
-        rows = list(item.preview_images.order_by('order').defer('data'))
+        rows = list(item.preview_images.order_by('order', 'id').defer('data'))
         if not rows:
             return Response({'status': 'ok', 'previews': []})
 
@@ -3756,7 +3856,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('Failed to reorder previews for item %s', item.pk)
             return Response({'detail': 'Failed to reorder previews', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        updated_rows = item.preview_images.order_by('order').values('id', 'content_type', 'filename')
+        updated_rows = item.preview_images.order_by('order', 'id').values('id', 'content_type', 'filename')
         preview_list = [
             {'id': row['id'], 'index': idx, 'url': f"/api/items/{item.id}/previews/{idx}/", 'content_type': row['content_type'], 'filename': row.get('filename') or ''}
             for idx, row in enumerate(updated_rows)
@@ -4468,12 +4568,14 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             tags=None,
         )
 
+        created_manual = 0
         for idx, f in enumerate(files):
             try:
                 body = f.read()
                 ctype = f.content_type or 'image/jpeg'
                 body, ctype = optimize_image_data(body, ctype)
-                PreviewImage.objects.create(item=item, order=idx, data=body, content_type=ctype, filename=f.name or '')
+                PreviewImage.objects.create(item=item, order=created_manual, data=body, content_type=ctype, filename=f.name or '')
+                created_manual += 1
             except Exception:
                 logging.exception('Failed to save manually-uploaded image %s for item %s', f.name, item.pk)
 
@@ -4481,6 +4583,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             item.delete()
             return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        _clear_item_preview_annotations(item)
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'created', 'item': serializer.data}, status=status.HTTP_201_CREATED)
 
@@ -4518,7 +4621,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        start_order = item.preview_images.count()
+        start_order = _normalize_preview_orders(item)
         created = 0
         for offset, f in enumerate(files):
             try:
@@ -4526,7 +4629,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 ctype = f.content_type or 'image/jpeg'
                 body, ctype = optimize_image_data(body, ctype)
                 PreviewImage.objects.create(
-                    item=item, order=start_order + offset,
+                    item=item, order=start_order + created,
                     data=body, content_type=ctype,
                     filename=f.name or '',
                 )
@@ -4537,6 +4640,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if created == 0:
             return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        _clear_item_preview_annotations(item)
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'uploaded', 'added': created, 'item': serializer.data})
 
@@ -4581,12 +4685,12 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not images:
             return Response({'detail': '画像の発見には成功しましたが、ダウンロードに失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
 
-        start_order = item.preview_images.count()
+        start_order = _normalize_preview_orders(item)
         created = 0
         for offset, (data, content_type) in enumerate(images):
             try:
                 data, content_type = optimize_image_data(data, content_type)
-                PreviewImage.objects.create(item=item, order=start_order + offset, data=data, content_type=content_type)
+                PreviewImage.objects.create(item=item, order=start_order + created, data=data, content_type=content_type)
                 created += 1
             except Exception:
                 logging.exception('Failed to save salvaged image for item %s', item.pk)
@@ -4594,6 +4698,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if created == 0:
             return Response({'detail': '画像の保存に失敗しました'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+        _clear_item_preview_annotations(item)
         serializer = ItemSerializer(item, context={'request': request})
         return Response({'status': 'salvaged', 'found': len(urls), 'added': created, 'item': serializer.data})
 

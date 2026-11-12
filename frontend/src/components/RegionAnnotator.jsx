@@ -86,14 +86,39 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [stampChar, activeBoxId, selectedBoxIds.size])
 
-  useEffect(() => {
-    fetch(`/api/items/${item.id}/previews/`)
+  const loadItemPreviews = useCallback((id) => {
+    fetch(`/api/items/${id}/previews/`, { cache: 'no-store' })
       .then(r => r.json()).then(d => {
         if (!Array.isArray(d)) return
         setImages(d)
-        setCurrentImageIndex(prev => prev != null ? prev : (d[0] ? d[0].index : null))
+        setCurrentImageIndex(prev => (prev != null && d.some(img => img.index === prev)) ? prev : (d[0] ? d[0].index : null))
       }).catch(() => {})
-  }, [item.id])
+  }, [])
+
+  useEffect(() => {
+    loadItemPreviews(item.id)
+  }, [item.id, item.preview_count, item.first_preview_id, loadItemPreviews])
+
+  useEffect(() => {
+    function onPreviewUpdated(ev) {
+      if (ev && ev.detail && ev.detail.id === item.id) {
+        loadItemPreviews(item.id)
+        fetch(`/api/items/${item.id}/`, { cache: 'no-store' })
+          .then(r => r.json())
+          .then(fresh => {
+            if (fresh && Array.isArray(fresh.character_regions)) {
+              setBoxes(fresh.character_regions.map(r => ({
+                id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+              })))
+              setSelectedBoxIds(new Set())
+              setActiveBoxId(null)
+            }
+          }).catch(() => {})
+      }
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    return () => window.removeEventListener('item-preview-updated', onPreviewUpdated)
+  }, [item.id, loadItemPreviews])
 
   // Pre-fill from any previously saved labels for this item
   useEffect(() => {
@@ -133,9 +158,16 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
     }
   }, [proposedRegions, item.character_regions, onDirtyChange])
 
-  const previewUrl = currentImageIndex != null
-    ? `/api/items/${item.id}/preview/?index=${currentImageIndex}`
-    : `/api/items/${item.id}/preview/`
+  const currentImageObj = currentImageIndex != null
+    ? images.find(img => img.index === currentImageIndex)
+    : images[0]
+  const previewUrl = currentImageObj && currentImageObj.id != null
+    ? `/api/items/${item.id}/preview/?id=${currentImageObj.id}`
+    : (currentImageIndex != null
+      ? `/api/items/${item.id}/preview/?index=${currentImageIndex}`
+      : (item.first_preview_id != null
+        ? `/api/items/${item.id}/preview/?id=${item.first_preview_id}`
+        : `/api/items/${item.id}/preview/`))
 
   const visibleBoxes = boxes.filter(b => b.imageIndex === currentImageIndex)
 
@@ -360,7 +392,7 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
       {images.length > 1 && (
         <div style={{ marginBottom: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {images.map(img => (
-            <button key={img.index} className="btn" style={{ fontSize: 12 }}
+            <button key={img.id ?? img.index} className="btn" style={{ fontSize: 12 }}
               onClick={() => { setCurrentImageIndex(img.index); setSelectedBoxIds(new Set()) }}
               disabled={currentImageIndex === img.index}
             >

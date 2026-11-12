@@ -224,8 +224,6 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   }, [])
 
   const load = useCallback(async () => {
-    setSelectedId(null)
-
     // allItems-scoped mode: scopedItems is already fully loaded data (no
     // request needed) — filter it client-side by the same predicate the
     // corresponding server-side action uses.
@@ -234,6 +232,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
         ? scopedItems.filter(isMismatched)
         : scopedItems.filter(it => isNeedsAttention(it, activeFields))
       setItems(list)
+      setSelectedId(prev => (prev != null && list.some(it => it.id === prev)) ? prev : null)
       setCount(list.length)
       setHasMore(false)
       setNextBeforeId(null)
@@ -253,18 +252,65 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       const data = await r.json().catch(()=>({}))
       const list = data.results || []
       setItems(list)
+      setSelectedId(prev => (prev != null && list.some(it => it.id === prev)) ? prev : null)
       setCount(data.count ?? list.length)
       setHasMore(!!data.has_more)
       setNextBeforeId(data.next_before_id ?? null)
     }catch(e){
       console.error('Failed to load item queue', e)
-      setItems([]); setCount(0); setHasMore(false); setNextBeforeId(null)
+      setItems([]); setSelectedId(null); setCount(0); setHasMore(false); setNextBeforeId(null)
     }finally{
       setLoading(false)
     }
   }, [activeFields, scopedItems, mode])
 
   useEffect(()=>{ load() }, [load])
+
+  useEffect(() => {
+    function onPreviewUpdated(ev) {
+      const id = ev && ev.detail && ev.detail.id
+      if (id == null) return
+      if (suggestionsRef.current[id]) {
+        const nextSug = { ...suggestionsRef.current }
+        delete nextSug[id]
+        suggestionsRef.current = nextSug
+        setSuggestions(nextSug)
+      }
+      fetch(`/api/items/${id}/`, { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null)
+        .then(fresh => {
+          if (!fresh) return
+          setItems(prev => prev.map(it => it.id === fresh.id ? { ...it, ...fresh } : it))
+        })
+        .catch(() => {})
+    }
+    function onItemUpdated(ev) {
+      const detail = ev && ev.detail
+      if (!detail || detail.id == null) return
+      if (detail.item) {
+        setItems(prev => prev.map(it => it.id === detail.id ? { ...it, ...detail.item } : it))
+      }
+    }
+    function onItemDeleted(ev) {
+      const id = ev && ev.detail && ev.detail.id
+      if (id == null) return
+      setItems(prev => {
+        if (!prev.some(it => it.id === id)) return prev
+        const rest = prev.filter(it => it.id !== id)
+        setSelectedId(sel => sel === id ? null : sel)
+        setCount(c => Math.max(0, c - 1))
+        return rest
+      })
+    }
+    window.addEventListener('item-preview-updated', onPreviewUpdated)
+    window.addEventListener('item-updated', onItemUpdated)
+    window.addEventListener('item-deleted', onItemDeleted)
+    return () => {
+      window.removeEventListener('item-preview-updated', onPreviewUpdated)
+      window.removeEventListener('item-updated', onItemUpdated)
+      window.removeEventListener('item-deleted', onItemDeleted)
+    }
+  }, [])
 
   // Standalone-only (see `load`). Same before_id id-cutoff cursor as the two
   // former queue managers — see their own comments for why (a page/offset
@@ -719,7 +765,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                   </div>
 
                   <img
-                    src={`/api/items/${selected.id}/preview/`}
+                    src={selected.first_preview_id != null ? `/api/items/${selected.id}/preview/?id=${selected.first_preview_id}` : `/api/items/${selected.id}/preview/`}
                     alt=""
                     style={{ maxWidth: '100%', maxHeight: 380, display: 'block', margin: '0 auto 16px', borderRadius: 6 }}
                   />

@@ -25,7 +25,7 @@ export async function saveImagesChunked(itemId, images, options = {}){
   let baseOffset = 0
   if (append) {
     try {
-      const r = await fetch(`/api/items/${itemId}/previews/`)
+      const r = await fetch(`/api/items/${itemId}/previews/`, { cache: 'no-store' })
       if (r.ok) {
         const existing = await r.json()
         if (Array.isArray(existing)) {
