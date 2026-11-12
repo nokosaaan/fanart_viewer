@@ -83,3 +83,5 @@ pykakasi
 deep-translator
 # SOCKS5 proxy support for gallery-dl and requests (Tor / proxy integration)
 PySocks>=1.7.1
+# OS credential store access (Windows Credential Manager, macOS Keychain, Linux Secret Service)
+keyring>=24.0.0

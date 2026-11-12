@@ -129,6 +129,7 @@ base_hiddenimports = [
     'backend.cors',
     'backend.pagination',
     'security.auth_middleware',
+    'security.keyring_store',
     'item.apps',
     'item.models',
     'item.urls',

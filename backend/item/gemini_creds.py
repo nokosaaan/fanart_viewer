@@ -21,6 +21,12 @@ def _fernet():
 
     key = os.environ.get('GEMINI_CREDS_ENC_KEY', '').strip()
     if not key:
+        try:
+            from security.keyring_store import get_credential
+            key = (get_credential('gemini_creds_key') or '').strip()
+        except Exception:
+            pass
+    if not key:
         # Fall back gracefully by deriving a deterministic Fernet key from
         # DJANGO_SECRET_KEY or other creds keys so users don't need manual config.
         fallback_source = (

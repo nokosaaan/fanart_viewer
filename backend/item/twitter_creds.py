@@ -30,12 +30,12 @@ def _fernet():
 
     key = os.environ.get('TWITTER_CREDS_ENC_KEY', '').strip()
     if not key:
-        # Should never actually happen -- exe/launcher.py always sets this
-        # before Django even starts, and the docker deployment's own setup
-        # docs cover it. No env-var/terminal-command instructions here:
-        # this message reaches an ordinary exe user with no .env or shell
-        # to act on it, so a generic "something's wrong" beats a technical
-        # instruction they can't follow anyway.
+        try:
+            from security.keyring_store import get_credential
+            key = (get_credential('twitter_creds_key') or '').strip()
+        except Exception:
+            pass
+    if not key:
         raise TwitterCredsConfigError('内部エラー: 暗号化キーが設定されていません。アプリを再起動しても直らない場合は開発者にご連絡ください。')
     return Fernet(key.encode())
 

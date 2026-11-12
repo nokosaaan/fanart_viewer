@@ -198,36 +198,7 @@ os.environ.setdefault('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost')
 # fetch requests were silently 403ing before this was added.
 os.environ.setdefault('HEADLESS_ALLOWED', '1')
 
-# A real random secret key, generated once and reused across launches
-# (settings.py refuses to start in non-DEBUG mode with the placeholder
-# default) — regenerating it every launch would silently invalidate every
-# existing session cookie/CSRF token each time the app restarts.
-_secret_key_path = USER_DATA_DIR / 'secret_key.txt'
-if not _secret_key_path.exists():
-    _secret_key_path.write_text(secrets.token_hex(32))
-os.environ.setdefault('DJANGO_SECRET_KEY', _secret_key_path.read_text().strip())
-
-
-def _persistent_fernet_key(filename):
-    """Same pattern as the Django secret key above, for item.twitter_creds
-    / item.pixiv_creds's own encryption keys — generated once, reused
-    across launches, so credentials saved through the settings panel
-    stay decryptable after a restart."""
-    from cryptography.fernet import Fernet
-
-    path = USER_DATA_DIR / filename
-    if not path.exists():
-        path.write_text(Fernet.generate_key().decode())
-    return path.read_text().strip()
-
-
-os.environ.setdefault('TWITTER_CREDS_ENC_KEY', _persistent_fernet_key('twitter_creds_key.txt'))
-os.environ.setdefault('PIXIV_CREDS_ENC_KEY', _persistent_fernet_key('pixiv_creds_key.txt'))
-os.environ.setdefault('DRIVE_CREDS_ENC_KEY', _persistent_fernet_key('drive_creds_key.txt'))
-os.environ.setdefault('POIPIKU_CREDS_ENC_KEY', _persistent_fernet_key('poipiku_creds_key.txt'))
-os.environ.setdefault('GEMINI_CREDS_ENC_KEY', _persistent_fernet_key('gemini_creds_key.txt'))
-
-
+# --- Bundle and Backend Path Setup -----------------------------------
 def _bundle_path(relative):
     """Bundled, read-only assets — these DO live inside the PyInstaller
     extraction dir, since they're static per-build (rebuilt fresh every
@@ -245,6 +216,42 @@ os.environ.setdefault('FRONTEND_DIST', _bundle_path('frontend_dist'))
 _bundle_root = _bundle_path('.')
 if all(os.path.normcase(os.path.normpath(p)) != os.path.normcase(_bundle_root) for p in sys.path):
     sys.path.insert(0, _bundle_root)
+_dev_backend = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
+if os.path.isdir(_dev_backend) and all(os.path.normcase(os.path.normpath(p)) != os.path.normcase(_dev_backend) for p in sys.path):
+    sys.path.insert(0, _dev_backend)
+
+# A real random secret key, generated once and reused across launches,
+# stored securely in the OS credential store (Windows Credential Manager /
+# Keyring) rather than on disk in plaintext — regenerating it every launch
+# would silently invalidate every existing session cookie/CSRF token each
+# time the app restarts. Automatically migrates legacy secret_key.txt if present.
+from security.keyring_store import get_or_create_persistent_key
+
+os.environ.setdefault('DJANGO_SECRET_KEY', get_or_create_persistent_key(
+    'django_secret_key',
+    legacy_file_path=USER_DATA_DIR / 'secret_key.txt',
+    generator=lambda: secrets.token_hex(32),
+))
+
+# Fernet encryption keys for stored credentials (Twitter, Pixiv, Drive, Poipiku, Gemini) —
+# saved in the OS credential store (Windows Credential Manager / Keyring) so plaintext
+# key files (*_creds_key.txt) are eliminated from disk. Existing key files are
+# seamlessly migrated and cleaned up on first launch to preserve database decryption.
+os.environ.setdefault('TWITTER_CREDS_ENC_KEY', get_or_create_persistent_key(
+    'twitter_creds_key', legacy_file_path=USER_DATA_DIR / 'twitter_creds_key.txt',
+))
+os.environ.setdefault('PIXIV_CREDS_ENC_KEY', get_or_create_persistent_key(
+    'pixiv_creds_key', legacy_file_path=USER_DATA_DIR / 'pixiv_creds_key.txt',
+))
+os.environ.setdefault('DRIVE_CREDS_ENC_KEY', get_or_create_persistent_key(
+    'drive_creds_key', legacy_file_path=USER_DATA_DIR / 'drive_creds_key.txt',
+))
+os.environ.setdefault('POIPIKU_CREDS_ENC_KEY', get_or_create_persistent_key(
+    'poipiku_creds_key', legacy_file_path=USER_DATA_DIR / 'poipiku_creds_key.txt',
+))
+os.environ.setdefault('GEMINI_CREDS_ENC_KEY', get_or_create_persistent_key(
+    'gemini_creds_key', legacy_file_path=USER_DATA_DIR / 'gemini_creds_key.txt',
+))
 
 # Ensure on-disk .py files under _internal/{backend,item,security} always
 # take precedence over any bytecode that might exist in PYZ, allowing

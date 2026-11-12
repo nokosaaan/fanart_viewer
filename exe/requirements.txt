@@ -6,3 +6,4 @@ waitress
 # uses the OS's built-in webview (WebView2 on Windows, already present on
 # Windows 10 2004+/11) rather than bundling a browser of its own.
 pywebview
+keyring>=24.0.0

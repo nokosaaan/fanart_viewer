@@ -25,9 +25,12 @@ def _fernet():
 
     key = os.environ.get('PIXIV_CREDS_ENC_KEY', '').strip()
     if not key:
-        # Should never actually happen -- see TwitterCredsConfigError's
-        # identical comment in item/twitter_creds.py for why this message
-        # deliberately says nothing about env vars or terminal commands.
+        try:
+            from security.keyring_store import get_credential
+            key = (get_credential('pixiv_creds_key') or '').strip()
+        except Exception:
+            pass
+    if not key:
         raise PixivCredsConfigError('内部エラー: 暗号化キーが設定されていません。アプリを再起動しても直らない場合は開発者にご連絡ください。')
     return Fernet(key.encode())
 
