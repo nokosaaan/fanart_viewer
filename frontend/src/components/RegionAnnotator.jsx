@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { groupsForTitles } from '../lib/groupScope'
 import { handleGroupingResponse } from '../lib/groupChoice'
 import { saveCharacterRegions } from '../lib/itemFieldsApi'
