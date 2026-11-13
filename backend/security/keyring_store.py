@@ -274,3 +274,37 @@ def get_or_create_persistent_key(
 
     set_credential(key_name, new_key, service_name=service_name)
     return new_key
+
+
+def migrate_legacy_keys(user_data_dir: Path | None = None, service_name: str = SERVICE_NAME) -> list[str]:
+    """Migrate all legacy *_creds_key.txt and secret_key.txt in user_data_dir
+    into OS credential store and delete the plaintext files.
+    Returns list of migrated filenames.
+    """
+    if user_data_dir is None:
+        user_data_dir = Path.home() / '.fanart_viewer'
+
+    migrated = []
+    keys_map = {
+        'django_secret_key': ('secret_key.txt', lambda: secrets.token_hex(32)),
+        'twitter_creds_key': ('twitter_creds_key.txt', None),
+        'pixiv_creds_key': ('pixiv_creds_key.txt', None),
+        'drive_creds_key': ('drive_creds_key.txt', None),
+        'poipiku_creds_key': ('poipiku_creds_key.txt', None),
+        'gemini_creds_key': ('gemini_creds_key.txt', None),
+    }
+    for key_name, (filename, gen) in keys_map.items():
+        f = user_data_dir / filename
+        if f.exists():
+            get_or_create_persistent_key(key_name, legacy_file_path=f, generator=gen, service_name=service_name)
+            migrated.append(filename)
+    return migrated
+
+
+if __name__ == '__main__':
+    target_dir = Path.home() / '.fanart_viewer'
+    res = migrate_legacy_keys(target_dir)
+    if res:
+        print(f"移行完了: 以下のファイルをOS資格情報ストアへ格納し、削除しました:\n  " + "\n  ".join(res))
+    else:
+        print(f"{target_dir} に移行対象の平文キーファイル（*.txt）は見つかりませんでした（既に移行済みか、新規環境です）。")
