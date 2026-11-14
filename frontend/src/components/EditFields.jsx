@@ -282,6 +282,15 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         tags: tags.trim()==='' ? [] : parseList(tags),
         artist: artist.trim(),
       }),
+      syncRegionCharacters: (regionChars) => {
+        if (Array.isArray(regionChars) && regionChars.length > 0) {
+          setCharList(prev => {
+            const merged = [...new Set([...prev, ...regionChars])]
+            if (merged.length !== prev.length) return merged
+            return prev
+          })
+        }
+      },
     }
   })
 
@@ -328,6 +337,18 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     if(newCandidates.length > 0) added = true
     setCharCandidates(newCandidates)
     setExpandedCandidate(null)
+
+    // For non-SOLO (or any detector result with proposed bounding box regions),
+    // characters directly assigned to proposed regions ARE the detected identities.
+    // Sync them into charList so the character list reflects the detected regions.
+    if(Array.isArray(j.proposed_regions) && j.proposed_regions.length > 0){
+      const proposedChars = [...new Set(j.proposed_regions.flatMap(r => r.characters || []))]
+        .map(c => (c || '').trim()).filter(Boolean)
+      if(proposedChars.length > 0){
+        setCharList(prev => [...new Set([...prev, ...proposedChars])])
+        added = true
+      }
+    }
     setTags(prev => {
       const existing = parseList(prev)
       const toAdd = (j.tags || []).map(t => t.name).filter(n => !existing.includes(n))
@@ -948,20 +969,48 @@ export function ItemQueuePanel({
     if(onDirtyChange) onDirtyChange(fieldsDirty || regionDirty)
   }, [fieldsDirty, regionDirty, onDirtyChange])
 
+  const handleRegionCharactersChange = useCallback((chars) => {
+    if (fieldsRef.current && fieldsRef.current.syncRegionCharacters) {
+      fieldsRef.current.syncRegionCharacters(chars)
+    }
+  }, [])
+
   async function handleSave(){
     if(!fieldsRef.current) return
     setSaving(true)
     setError('')
     try{
       const payload = fieldsRef.current.getPayload()
+
+      // Current labeled regions from RegionAnnotator
+      const currentRegions = (showRegionSection && boxesRef.current) ? (boxesRef.current.getPayload() || []) : []
+      const regionChars = [...new Set(currentRegions.flatMap(r => r.characters || []))]
+        .map(c => (c || '').trim()).filter(Boolean)
+
+      // Ensure region characters are merged into payload.characters so characters are never empty
+      // when regions already specify characters
+      if (regionChars.length > 0) {
+        payload.characters = [...new Set([...(payload.characters || []), ...regionChars])]
+      }
+
       const j = await saveItemFields(item.id, payload)
       let latestItem = j.item
 
       await handleGroupingResponse(item.id, j)
 
-      if(regionDirty && boxesRef.current){
-        const regions = boxesRef.current.getPayload()
-        const j2 = await saveCharacterRegions(item.id, regions)
+      // Normalize regions to detect changes (user edits OR unsaved AI proposals accepted as-is)
+      const normalizeRegions = (regs) => regs.map(r => ({
+        image_index: r.image_index ?? null,
+        box: r.box,
+        characters: [...new Set((r.characters || []).map(c => (c || '').trim()).filter(Boolean))].sort(),
+      })).sort((a, b) => (a.image_index ?? 0) - (b.image_index ?? 0) || (a.box[0] - b.box[0]))
+
+      const existingNorm = normalizeRegions(item.character_regions || [])
+      const currentNorm = normalizeRegions(currentRegions)
+      const regionsDiffer = JSON.stringify(currentNorm) !== JSON.stringify(existingNorm)
+
+      if (showRegionSection && boxesRef.current && (regionDirty || regionsDiffer)) {
+        const j2 = await saveCharacterRegions(item.id, currentRegions)
         latestItem = j2.item
         await handleGroupingResponse(item.id, j2)
       }
@@ -999,6 +1048,7 @@ export function ItemQueuePanel({
             showOwnActions={false}
             boxesRef={boxesRef}
             onDirtyChange={setRegionDirty}
+            onCharactersChange={handleRegionCharactersChange}
           />
         </div>
       ) : (

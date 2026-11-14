@@ -31,7 +31,16 @@ function getCharColor(charName) {
   return CHAR_COLORS[Math.abs(hash) % CHAR_COLORS.length]
 }
 
-export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef = null, showOwnActions = true, titles = null, proposedRegions = null }) {
+export default function RegionAnnotator({
+  item,
+  onSaved,
+  onDirtyChange,
+  onCharactersChange = null,
+  boxesRef = null,
+  showOwnActions = true,
+  titles = null,
+  proposedRegions = null,
+}) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
@@ -194,6 +203,13 @@ export default function RegionAnnotator({ item, onSaved, onDirtyChange, boxesRef
     }
     return counts
   }, [boxes])
+
+  useEffect(() => {
+    if (onCharactersChange) {
+      const chars = Object.keys(allAssignedCharCounts).filter(Boolean)
+      onCharactersChange(chars)
+    }
+  }, [allAssignedCharCounts, onCharactersChange])
 
   // Frequently used / already assigned characters for quick one-click picking
   const quickPickChars = useMemo(() => {
