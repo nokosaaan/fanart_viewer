@@ -5002,6 +5002,271 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'elapsed_ms': meta.get('elapsed_ms'),
         })
 
+    @action(detail=False, methods=['get'], url_path='merge_candidates')
+    def merge_candidates(self, request):
+        """Find groups of items that are likely duplicates (e.g. identical tag sets)
+        so the user can review and merge them.
+        """
+        rows = list(
+            Item.objects.annotate(
+                has_legacy=Case(
+                    When(preview_data__isnull=False, then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                )
+            ).values(
+                'id', 'external_id', 'artist', 'situation', 'titles',
+                'characters', 'tags', 'link', 'description', 'created_at', 'has_legacy',
+            )
+        )
+
+        by_tags = defaultdict(list)
+        for row in rows:
+            raw_tags = row.get('tags') or []
+            norm_tags = tuple(sorted({t.strip() for t in raw_tags if isinstance(t, str) and t.strip()}))
+            if not norm_tags:
+                continue
+            by_tags[norm_tags].append(row)
+
+        candidate_groups = []
+        candidate_item_ids = set()
+        for tag_key, group_rows in by_tags.items():
+            if len(group_rows) < 2:
+                continue
+            artists = [r.get('artist', '').strip().lower() for r in group_rows if (r.get('artist') or '').strip()]
+            same_artist = len(artists) >= 2 and len(set(artists)) < len(artists)
+            group_rows_sorted = sorted(group_rows, key=lambda r: r['id'], reverse=True)
+            candidate_groups.append({
+                'tag_key': list(tag_key),
+                'tag_count': len(tag_key),
+                'same_artist': same_artist,
+                'rows': group_rows_sorted,
+            })
+            for r in group_rows_sorted:
+                candidate_item_ids.add(r['id'])
+
+        previews_by_item = defaultdict(list)
+        if candidate_item_ids:
+            for pi in PreviewImage.objects.filter(item_id__in=candidate_item_ids).order_by('item_id', 'order', 'id').values('id', 'item_id'):
+                previews_by_item[pi['item_id']].append(pi['id'])
+
+        candidate_groups.sort(
+            key=lambda g: (
+                -int(g['same_artist']),
+                -g['tag_count'],
+                -max(r['id'] for r in g['rows']),
+            )
+        )
+
+        groups_out = []
+        for idx, g in enumerate(candidate_groups):
+            items_out = []
+            for r in g['rows']:
+                pids = previews_by_item.get(r['id'], [])
+                items_out.append({
+                    'id': r['id'],
+                    'external_id': r['external_id'],
+                    'artist': r['artist'] or '',
+                    'situation': r['situation'] or '',
+                    'titles': r['titles'] or [],
+                    'characters': r['characters'] or [],
+                    'tags': r['tags'] or [],
+                    'link': r['link'] or '',
+                    'description': r['description'] or '',
+                    'created_at': r['created_at'],
+                    'preview_count': len(pids) if pids else (1 if r['has_legacy'] else 0),
+                    'first_preview_id': pids[0] if pids else None,
+                })
+            groups_out.append({
+                'group_id': f"tags-{idx}",
+                'reason': 'タグ完全一致' + ('・同一作者' if g['same_artist'] else ''),
+                'same_artist': g['same_artist'],
+                'tag_count': g['tag_count'],
+                'tags': g['tag_key'],
+                'items': items_out,
+            })
+
+        return Response({'groups': groups_out, 'total_groups': len(groups_out)})
+
+    @action(detail=False, methods=['post'], url_path='merge')
+    def merge(self, request):
+        """Merge one or more source items into target_id, keeping/reordering
+        selected images and remapping character_regions / checkpoints.
+        """
+        from django.db import transaction
+
+        data = request.data if isinstance(request.data, dict) else {}
+        try:
+            target_id = int(data.get('target_id'))
+        except (TypeError, ValueError):
+            return Response({'detail': 'target_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        raw_source_ids = data.get('source_ids') or []
+        if not isinstance(raw_source_ids, list) or not raw_source_ids:
+            return Response({'detail': 'source_ids must be a non-empty list'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            source_ids = [int(sid) for sid in raw_source_ids]
+        except (TypeError, ValueError):
+            return Response({'detail': 'source_ids must contain integers'}, status=status.HTTP_400_BAD_REQUEST)
+
+        source_ids = list(dict.fromkeys(sid for sid in source_ids if sid != target_id))
+        if not source_ids:
+            return Response({'detail': 'No valid source_ids distinct from target_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        all_ids = [target_id] + source_ids
+        items_map = {it.id: it for it in Item.objects.filter(id__in=all_ids)}
+        target = items_map.get(target_id)
+        if target is None:
+            return Response({'detail': f'Target item {target_id} not found'}, status=status.HTTP_404_NOT_FOUND)
+        sources = []
+        for sid in source_ids:
+            if sid not in items_map:
+                return Response({'detail': f'Source item {sid} not found'}, status=status.HTTP_404_NOT_FOUND)
+            sources.append(items_map[sid])
+
+        # Build old (item_id, old_index) lookup for existing PreviewImages
+        all_previews = {
+            pi.id: pi
+            for pi in PreviewImage.objects.filter(item_id__in=all_ids).only('id', 'item_id', 'order', 'content_type', 'filename')
+        }
+        old_preview_index_map = {}  # preview_id -> (item_id, old_idx)
+        item_preview_lists = defaultdict(list)
+        for pi in sorted(all_previews.values(), key=lambda p: (p.item_id, p.order, p.id)):
+            old_idx = len(item_preview_lists[pi.item_id])
+            item_preview_lists[pi.item_id].append(pi.id)
+            old_preview_index_map[pi.id] = (pi.item_id, old_idx)
+
+        images_spec = data.get('images')
+        if images_spec is None:
+            # Default: keep all target images followed by all source images
+            images_spec = []
+            for it in [target] + sources:
+                pids = item_preview_lists.get(it.id, [])
+                if pids:
+                    for pid in pids:
+                        images_spec.append({'type': 'preview', 'id': pid})
+                elif it.preview_data:
+                    images_spec.append({'type': 'legacy', 'item_id': it.id})
+        elif not isinstance(images_spec, list):
+            return Response({'detail': 'images must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            kept_preview_ids = set()
+            index_remap = {}  # (old_item_id, old_idx) -> new_idx
+            first_preview_id = None
+
+            for new_idx, entry in enumerate(images_spec):
+                if not isinstance(entry, dict):
+                    return Response({'detail': 'each image entry must be an object'}, status=status.HTTP_400_BAD_REQUEST)
+                etype = entry.get('type')
+                if etype == 'preview':
+                    try:
+                        pid = int(entry.get('id'))
+                    except (TypeError, ValueError):
+                        return Response({'detail': 'invalid preview id'}, status=status.HTTP_400_BAD_REQUEST)
+                    pi = all_previews.get(pid)
+                    if pi is None:
+                        return Response({'detail': f'PreviewImage {pid} does not belong to target/source items'}, status=status.HTTP_400_BAD_REQUEST)
+                    if pid in kept_preview_ids:
+                        continue
+                    kept_preview_ids.add(pid)
+                    old_item_id, old_idx = old_preview_index_map[pid]
+                    index_remap[(old_item_id, old_idx)] = new_idx
+                    if old_idx == 0 and not item_preview_lists[old_item_id]:
+                        index_remap[(old_item_id, None)] = new_idx
+                    PreviewImage.objects.filter(pk=pid).update(item=target, order=new_idx)
+                    if first_preview_id is None:
+                        first_preview_id = pid
+                elif etype == 'legacy':
+                    try:
+                        iid = int(entry.get('item_id'))
+                    except (TypeError, ValueError):
+                        return Response({'detail': 'invalid legacy item_id'}, status=status.HTTP_400_BAD_REQUEST)
+                    src_it = items_map.get(iid)
+                    if src_it is None or not src_it.preview_data:
+                        return Response({'detail': f'Legacy preview for item {iid} not found'}, status=status.HTTP_400_BAD_REQUEST)
+                    new_pi = PreviewImage.objects.create(
+                        item=target,
+                        order=new_idx,
+                        data=src_it.preview_data,
+                        content_type=src_it.preview_content_type,
+                        filename='',
+                    )
+                    kept_preview_ids.add(new_pi.id)
+                    index_remap[(iid, None)] = new_idx
+                    index_remap[(iid, 0)] = new_idx
+                    if first_preview_id is None:
+                        first_preview_id = new_pi.id
+                else:
+                    return Response({'detail': f'unknown image type: {etype}'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Delete unkept PreviewImages that belonged to target
+            target_unkept = [pid for pid in item_preview_lists.get(target.id, []) if pid not in kept_preview_ids]
+            if target_unkept:
+                PreviewImage.objects.filter(id__in=target_unkept).delete()
+
+            # Sync target.preview_data with the first kept image
+            if first_preview_id is not None:
+                first_pi = PreviewImage.objects.get(pk=first_preview_id)
+                target.preview_data = first_pi.data
+                target.preview_content_type = first_pi.content_type
+            else:
+                target.preview_data = None
+                target.preview_content_type = None
+
+            # Remap character_regions & checkpoints from target and sources
+            merged_regions = []
+            merged_checkpoints = []
+            for it in [target] + sources:
+                for reg in (it.character_regions or []):
+                    if not isinstance(reg, dict):
+                        continue
+                    old_idx = reg.get('image_index')
+                    if (it.id, old_idx) in index_remap:
+                        merged_regions.append({**reg, 'image_index': index_remap[(it.id, old_idx)]})
+                for cp in (it.checkpoints or []):
+                    if not isinstance(cp, dict):
+                        continue
+                    old_idx = cp.get('page_index', 0)
+                    if (it.id, old_idx) in index_remap:
+                        merged_checkpoints.append({**cp, 'page_index': index_remap[(it.id, old_idx)]})
+
+            target.character_regions = merged_regions
+            target.checkpoints = merged_checkpoints
+            target.character_regions_ack_signature = ''
+
+            # Update metadata fields if provided
+            if 'titles' in data and isinstance(data['titles'], list):
+                target.titles = [str(t).strip() for t in data['titles'] if str(t).strip()]
+            if 'characters' in data and isinstance(data['characters'], list):
+                target.characters = [str(c).strip() for c in data['characters'] if str(c).strip()]
+            if 'tags' in data and (isinstance(data['tags'], list) or data['tags'] is None):
+                target.tags = [str(t).strip() for t in data['tags'] if str(t).strip()] if isinstance(data['tags'], list) else None
+            if 'situation' in data and isinstance(data['situation'], str):
+                target.situation = data['situation'].strip().upper()
+            if 'artist' in data and isinstance(data['artist'], str):
+                target.artist = data['artist'].strip()
+            if 'link' in data and isinstance(data['link'], str):
+                target.link = data['link'].strip()
+            if 'description' in data and isinstance(data['description'], str):
+                target.description = data['description']
+
+            target.translation_caches.all().delete()
+            target.save()
+
+            # Delete source items (cascades any remaining source PreviewImages / caches)
+            Item.objects.filter(id__in=source_ids).delete()
+
+        if target.characters:
+            ensure_characters_grouped(target)
+
+        serializer = ItemSerializer(target, context={'request': request})
+        return Response({
+            'status': 'merged',
+            'item': serializer.data,
+            'deleted_ids': source_ids,
+        })
+
 
 def items_from_db(request):
     """Return all items serialized from the Django DB.

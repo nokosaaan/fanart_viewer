@@ -1,0 +1,135 @@
+from django.test import TestCase
+from rest_framework.test import APIClient
+from item.models import Item, PreviewImage
+from security.token_utils import make_token
+
+
+class ItemMergeTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        token = make_token('admin')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        self.single = Item.objects.create(
+            external_id=1001,
+            artist='ArtistA',
+            titles=['Title1'],
+            characters=['CharA'],
+            tags=['1girl', 'blue_hair', 'solo'],
+            situation='SOLO',
+            link='https://example.com/single',
+            character_regions=[
+                {'image_index': 0, 'box': [10, 10, 100, 100], 'characters': ['CharA']},
+            ],
+        )
+        self.single_img = PreviewImage.objects.create(
+            item=self.single, order=0, data=b'IMG_A', content_type='image/png',
+        )
+
+        self.bundle = Item.objects.create(
+            external_id=1002,
+            artist='ArtistA',
+            titles=['Title1'],
+            characters=['CharA', 'CharB'],
+            tags=['solo', 'blue_hair', '1girl'],
+            situation='DUO',
+            link='https://example.com/bundle',
+            character_regions=[
+                {'image_index': 0, 'box': [20, 20, 200, 200], 'characters': ['CharB']},
+            ],
+            checkpoints=[
+                {'page_index': 1, 'label': 'Part 2'},
+            ],
+        )
+        self.bundle_img0 = PreviewImage.objects.create(
+            item=self.bundle, order=0, data=b'IMG_B', content_type='image/png',
+        )
+        self.bundle_img1 = PreviewImage.objects.create(
+            item=self.bundle, order=1, data=b'IMG_C', content_type='image/png',
+        )
+
+        self.other = Item.objects.create(
+            external_id=1003,
+            artist='ArtistB',
+            tags=['1boy', 'black_hair'],
+        )
+
+    def test_merge_candidates_groups_identical_tags(self):
+        res = self.client.get('/api/items/merge_candidates/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data['total_groups'], 1)
+        group = data['groups'][0]
+        self.assertTrue(group['same_artist'])
+        self.assertEqual(group['tag_count'], 3)
+        ids = {it['id'] for it in group['items']}
+        self.assertEqual(ids, {self.single.id, self.bundle.id})
+
+    def test_merge_append_source_image_and_remap_regions(self):
+        # Merge single into bundle, appending single_img at the end (index 2)
+        res = self.client.post(
+            '/api/items/merge/',
+            {
+                'target_id': self.bundle.id,
+                'source_ids': [self.single.id],
+                'images': [
+                    {'type': 'preview', 'id': self.bundle_img0.id},
+                    {'type': 'preview', 'id': self.bundle_img1.id},
+                    {'type': 'preview', 'id': self.single_img.id},
+                ],
+                'titles': ['Title1'],
+                'characters': ['CharA', 'CharB'],
+                'tags': ['1girl', 'blue_hair', 'solo'],
+                'situation': 'DUO',
+                'artist': 'ArtistA',
+                'link': 'https://example.com/bundle',
+                'description': 'merged desc',
+            },
+            format='json',
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data['status'], 'merged')
+        self.assertEqual(data['deleted_ids'], [self.single.id])
+
+        # Source item deleted
+        self.assertFalse(Item.objects.filter(pk=self.single.id).exists())
+
+        # Target item has 3 images in order B, C, A
+        self.bundle.refresh_from_db()
+        imgs = list(self.bundle.preview_images.order_by('order').values_list('data', flat=True))
+        self.assertEqual(imgs, [b'IMG_B', b'IMG_C', b'IMG_A'])
+
+        # Regions remapped: bundle's index 0 stays 0, single's index 0 becomes 2
+        regions = sorted(self.bundle.character_regions, key=lambda r: r['image_index'])
+        self.assertEqual(len(regions), 2)
+        self.assertEqual(regions[0]['image_index'], 0)
+        self.assertEqual(regions[0]['characters'], ['CharB'])
+        self.assertEqual(regions[1]['image_index'], 2)
+        self.assertEqual(regions[1]['characters'], ['CharA'])
+
+        # Checkpoints preserved at index 1
+        self.assertEqual(self.bundle.checkpoints, [{'page_index': 1, 'label': 'Part 2'}])
+
+    def test_merge_drop_duplicate_source_image(self):
+        # Merge single into bundle, dropping single_img (only keeping bundle's images)
+        res = self.client.post(
+            '/api/items/merge/',
+            {
+                'target_id': self.bundle.id,
+                'source_ids': [self.single.id],
+                'images': [
+                    {'type': 'preview', 'id': self.bundle_img0.id},
+                    {'type': 'preview', 'id': self.bundle_img1.id},
+                ],
+            },
+            format='json',
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(Item.objects.filter(pk=self.single.id).exists())
+        self.bundle.refresh_from_db()
+        imgs = list(self.bundle.preview_images.order_by('order').values_list('data', flat=True))
+        self.assertEqual(imgs, [b'IMG_B', b'IMG_C'])
+        # Region from dropped single_img is also dropped
+        self.assertEqual(len(self.bundle.character_regions), 1)
+        self.assertEqual(self.bundle.character_regions[0]['image_index'], 0)

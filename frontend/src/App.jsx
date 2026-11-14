@@ -13,6 +13,7 @@ import TrainClassifierManager from './components/TrainClassifierManager'
 import FetchQueueManager from './components/FetchQueueManager'
 import ItemQueueManager from './components/ItemQueueManager'
 import MultiImageManager from './components/MultiImageManager'
+import MergeCandidatesModal from './components/MergeCandidatesModal'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
 import TwitterFetchManager from './components/TwitterFetchManager'
@@ -143,6 +144,7 @@ function AppMain({ role, onLogout }){
   const [itemQueueOpen, setItemQueueOpen] = useState(false)
   const [itemQueueMounted, setItemQueueMounted] = useState(false)
   const [multiImageManagerOpen, setMultiImageManagerOpen] = useState(false)
+  const [mergeCandidatesOpen, setMergeCandidatesOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
@@ -920,6 +922,11 @@ function AppMain({ role, onLogout }){
                 badge: multiImageItemsCount > 0 ? multiImageItemsCount : null,
                 tourId: 'menu-multi-image',
               },
+              {
+                label: <MenuIconLabel iconNode="🔀" text="重複・マージ候補" />,
+                onClick: () => setMergeCandidatesOpen(true),
+                tourId: 'menu-merge-candidates',
+              },
               { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true), tourId: 'menu-manual-add' },
               { divider: true },
               {
@@ -1112,6 +1119,9 @@ function AppMain({ role, onLogout }){
           }}
           readOnly={readOnly}
         />
+      )}
+      {mergeCandidatesOpen && (
+        <MergeCandidatesModal onClose={() => setMergeCandidatesOpen(false)} />
       )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
       {/* Opposite corner from ScrollList/PreviewPane's own per-row .fv-toast

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import EditFields from './EditFields'
+import ItemMergeModal from './ItemMergeModal'
 import { fetchPreviewCandidates } from '../lib/fetchCandidates'
 import { notify } from '../lib/crossWindowSync'
 import { getPlatformIcon } from '../lib/platformIcon'
@@ -577,6 +578,7 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
 export default function ScrollList({items, totalCount=null, startIndex=0, readOnly=false, onEnqueueFetch, onOpenPreview, onAddFilter}){
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [mergeItems, setMergeItems] = useState(null)
 
   // Selection is scoped to "this page" (per the ask: a select-all here
   // should only ever mean this page's items, not the whole filtered set) —
@@ -644,6 +646,16 @@ export default function ScrollList({items, totalCount=null, startIndex=0, readOn
           {selectedIds.size > 0 && (
             <>
               <span style={{fontSize:12, color:'var(--muted)'}}>{selectedIds.size}件選択中</span>
+              {selectedIds.size >= 2 && (
+                <button
+                  className="btn"
+                  style={{background:'#2563eb', color:'#fff'}}
+                  onClick={() => setMergeItems(items.filter(it => selectedIds.has(it.id)))}
+                  disabled={bulkDeleting}
+                >
+                  選択した{selectedIds.size}件をマージ
+                </button>
+              )}
               <button className="btn" style={{background:'#a33', color:'#fff'}} onClick={bulkDelete} disabled={bulkDeleting}>
                 {bulkDeleting ? '削除中…' : `選択した${selectedIds.size}件を削除`}
               </button>
@@ -665,6 +677,16 @@ export default function ScrollList({items, totalCount=null, startIndex=0, readOn
           )
         })}
       </div>
+      {mergeItems && (
+        <ItemMergeModal
+          items={mergeItems}
+          onClose={() => setMergeItems(null)}
+          onMerged={() => {
+            setMergeItems(null)
+            setSelectedIds(new Set())
+          }}
+        />
+      )}
     </div>
   )
 }
