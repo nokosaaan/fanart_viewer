@@ -342,7 +342,20 @@ function ItemRow({ it, readOnly, onEnqueueFetch, onOpenPreview, onAddFilter, sel
               a plain div's text is technically selectable too, but an
               input is what actually behaves reliably for click-drag
               selection without a surrounding onClick swallowing the drag. */}
-          <input type="text" readOnly value={artistState || '—'} className="artist-chip" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="text" readOnly value={artistState || '—'} className="artist-chip" style={{ flex: 1, minWidth: 0 }} />
+            {artistState && onAddFilter && (
+              <button
+                type="button"
+                className="chip"
+                onClick={() => onAddFilter(artistState)}
+                title="この作者で絞り込む"
+                style={{ padding: '4px 6px', flexShrink: 0 }}
+              >
+                🔍
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="col tags-col">

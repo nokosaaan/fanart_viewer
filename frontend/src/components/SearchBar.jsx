@@ -38,7 +38,7 @@ export default function SearchBar({query, setQuery, suggestions, onAddSuggestion
           data-tour="search-input"
           value={query}
           onChange={e=>{ setQuery(e.target.value); setOpen(true)}}
-          placeholder="Search titles, characters, tags..."
+          placeholder="Search titles, characters, tags, artists..."
         />
         <div className="controls-vertical">
           <div className="options-panel">

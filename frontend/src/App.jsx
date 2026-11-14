@@ -668,6 +668,10 @@ function AppMain({ role, onLogout }){
       } else if(typeof it.tags === 'string' && it.tags) {
         set.add(it.tags)
       }
+
+      if(typeof it.artist === 'string' && it.artist.trim()) {
+        set.add(it.artist.trim())
+      }
     })
     return Array.from(set)
   }, [items])
@@ -1129,7 +1133,7 @@ function AppMain({ role, onLogout }){
       {artistStatsOpen && (
         <ArtistStatsModal
           onClose={() => setArtistStatsOpen(false)}
-          onSelectArtist={(artist) => setQuery(artist)}
+          onSelectArtist={(artist) => addFilter(artist)}
         />
       )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
