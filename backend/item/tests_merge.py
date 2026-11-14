@@ -145,3 +145,11 @@ class ItemMergeTestCase(TestCase):
         self.assertEqual(data['artists'][0]['image_count'], 3)
         self.assertEqual(data['artists'][1]['artist'], 'ArtistB')
         self.assertEqual(data['artists'][1]['item_count'], 1)
+
+    def test_query_param_filter(self):
+        res = self.client.get('/api/items/?q=ArtistA')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        results = data['results'] if isinstance(data, dict) and 'results' in data else data
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(r['artist'] == 'ArtistA' for r in results))

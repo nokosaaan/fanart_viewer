@@ -453,8 +453,9 @@ function AppMain({ role, onLogout }){
   // Fetch backend pages starting at `startUrl`, following `next` up to
   // `maxPages` times (Infinity = fetch everything). Shared by the initial
   // fast-path load, the on-demand full index, and the debug fetchAll().
-  async function fetchItemsPages(startUrl, maxPages = Infinity){
+  async function fetchItemsPages(startUrl, maxPages = Infinity, onBatch = null, batchSize = 5){
     const collected = []
+    let batch = []
     let url = startUrl
     let pages = 0
     while(url && pages < maxPages){
@@ -483,13 +484,23 @@ function AppMain({ role, onLogout }){
 
       if(Array.isArray(data)){
         collected.push(...data)
+        batch.push(...data)
         url = null
         break
       }
       const results = Array.isArray(data.results) ? data.results : []
       collected.push(...results)
+      batch.push(...results)
       url = data.next || null
       pages += 1
+      if(onBatch && batch.length > 0 && (pages % batchSize === 0 || !url)){
+        const toFlush = batch
+        batch = []
+        onBatch(toFlush, url)
+      }
+    }
+    if(onBatch && batch.length > 0){
+      onBatch(batch, url)
     }
     return { items: collected, nextUrl: url }
   }
@@ -615,36 +626,68 @@ function AppMain({ role, onLogout }){
   // on `items` here being complete, with no fetch of its own to fall back
   // on), which is exactly what made Preview Timeline look like it wasn't
   // honoring the current filter.
+  const isMountedRef = useRef(true)
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => { isMountedRef.current = false }
+  }, [])
+
+  // Fast targeted server-side fetch when query/filters are active and the full
+  // dataset hasn't finished loading yet — ensures all matching items (e.g. an
+  // artist's 40 items out of 11,000+) appear immediately without waiting for
+  // 200+ background pages to finish.
+  useEffect(()=>{
+    const terms = [...filters]
+    if(query.trim()) terms.push(query.trim())
+    if(terms.length === 0 || !nextPageUrl) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try{
+        const params = new URLSearchParams()
+        terms.forEach(t => params.append('q', t))
+        const { items: matched } = await fetchItemsPages(`/api/items/?${params.toString()}`)
+        if(cancelled || !isMountedRef.current || matched.length === 0) return
+        setItems(prev => {
+          const merged = mergeAndPrune(mergeFresh(prev, matched), false)
+          itemsCountRef.current = merged.length
+          return merged
+        })
+      }catch(err){
+        console.error('Targeted search fetch failed', err)
+      }
+    }, 120)
+    return ()=>{ cancelled = true; clearTimeout(timer) }
+  }, [query, filters, nextPageUrl])
+
   useEffect(()=>{
     const searching = query.trim() !== '' || filters.length > 0 ||
       situationFilter !== 'ALL' || titleMissingOnly || previewMissingOnly || multiImageOnly
     if((!searching && !restoredFromCacheRef.current) || !nextPageUrl || fullIndexStartedRef.current) return
     fullIndexStartedRef.current = true
-    let cancelled = false
     ;(async ()=>{
       setBackgroundIndexing(true)
       try{
-        const { items: rest, nextUrl } = await fetchItemsPages(nextPageUrl)
-        if(cancelled) return
-        rest.forEach(it => { const id = idOf(it); if(id != null) fetchedIdsRef.current.add(id) })
-        setItems(prev => {
-          // Freshly-fetched first (see the initial-load effect above for the
-          // same ordering, and why) -- a stale cached `prev` entry for an id
-          // that also appears in `rest` must not win over what was just
-          // re-fetched from the server.
-          const merged = mergeAndPrune(mergeFresh(prev, rest), nextUrl === null)
-          itemsCountRef.current = merged.length
-          return merged
+        const { nextUrl } = await fetchItemsPages(nextPageUrl, Infinity, (batch, latestNextUrl) => {
+          if(!isMountedRef.current) return
+          batch.forEach(it => { const id = idOf(it); if(id != null) fetchedIdsRef.current.add(id) })
+          setItems(prev => {
+            const merged = mergeAndPrune(mergeFresh(prev, batch), latestNextUrl === null)
+            itemsCountRef.current = merged.length
+            return merged
+          })
+          nextPageUrlRef.current = latestNextUrl
+          setNextPageUrl(latestNextUrl)
         })
+        if(!isMountedRef.current) return
         nextPageUrlRef.current = nextUrl
         setNextPageUrl(nextUrl)
       }catch(err){
         console.error('Background indexing failed', err)
+        fullIndexStartedRef.current = false
       }finally{
-        if(!cancelled) setBackgroundIndexing(false)
+        if(isMountedRef.current) setBackgroundIndexing(false)
       }
     })()
-    return ()=>{ cancelled = true }
   }, [query, filters, situationFilter, titleMissingOnly, previewMissingOnly, multiImageOnly, nextPageUrl])
 
   const suggestions = useMemo(()=>{

@@ -2559,6 +2559,19 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = _base_item_queryset().order_by('-id')
     serializer_class = ItemSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        terms = [t.strip() for t in self.request.query_params.getlist('q') if t and t.strip()]
+        for term in terms:
+            qs = qs.filter(
+                Q(artist__icontains=term)
+                | Q(link__icontains=term)
+                | Q(titles__icontains=term)
+                | Q(characters__icontains=term)
+                | Q(tags__icontains=term)
+            )
+        return qs
+
     def list(self, request, *args, **kwargs):
         # Log incoming request headers and remote addr to help reproduce
         # browser-specific 500s (captures headers, path and remote address).
