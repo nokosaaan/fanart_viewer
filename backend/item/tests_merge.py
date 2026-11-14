@@ -133,3 +133,15 @@ class ItemMergeTestCase(TestCase):
         # Region from dropped single_img is also dropped
         self.assertEqual(len(self.bundle.character_regions), 1)
         self.assertEqual(self.bundle.character_regions[0]['image_index'], 0)
+
+    def test_artist_stats(self):
+        res = self.client.get('/api/items/artist_stats/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data['total_items'], 3)
+        self.assertEqual(data['total_artists'], 2)
+        self.assertEqual(data['artists'][0]['artist'], 'ArtistA')
+        self.assertEqual(data['artists'][0]['item_count'], 2)
+        self.assertEqual(data['artists'][0]['image_count'], 3)
+        self.assertEqual(data['artists'][1]['artist'], 'ArtistB')
+        self.assertEqual(data['artists'][1]['item_count'], 1)

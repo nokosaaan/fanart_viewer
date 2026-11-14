@@ -1,0 +1,176 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+
+export default function ArtistStatsModal({ onClose, onSelectArtist }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [filterText, setFilterText] = useState('')
+  const [sortBy, setSortBy] = useState('items') // 'items' | 'images' | 'name'
+
+  const loadStats = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const resp = await fetch('/api/items/artist_stats/', { cache: 'no-store' })
+      const j = await resp.json().catch(() => ({}))
+      if (!resp.ok) throw new Error(j.detail || `統計の取得に失敗しました (${resp.status})`)
+      setData(j)
+    } catch (e) {
+      setError(e.message || '統計の取得に失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadStats()
+  }, [loadStats])
+
+  const displayedArtists = useMemo(() => {
+    const list = (data && Array.isArray(data.artists)) ? data.artists : []
+    const q = filterText.trim().toLowerCase()
+    const filtered = q
+      ? list.filter(a => a.artist.toLowerCase().includes(q))
+      : list
+    const sorted = [...filtered]
+    if (sortBy === 'images') {
+      sorted.sort((a, b) => (b.image_count - a.image_count) || (b.item_count - a.item_count) || a.artist.localeCompare(b.artist))
+    } else if (sortBy === 'name') {
+      sorted.sort((a, b) => a.artist.localeCompare(b.artist))
+    } else {
+      sorted.sort((a, b) => (b.item_count - a.item_count) || (b.image_count - a.image_count) || a.artist.localeCompare(b.artist))
+    }
+    return sorted
+  }, [data, filterText, sortBy])
+
+  const maxCount = useMemo(() => {
+    if (displayedArtists.length === 0) return 1
+    if (sortBy === 'images') {
+      return Math.max(1, ...displayedArtists.map(a => a.image_count))
+    }
+    return Math.max(1, ...displayedArtists.map(a => a.item_count))
+  }, [displayedArtists, sortBy])
+
+  return (
+    <div className="cgm-panel-backdrop" onClick={onClose} onWheel={e => e.stopPropagation()}>
+      <div
+        className="cgm-panel"
+        style={{ width: 720, maxWidth: '96vw', height: '84vh', maxHeight: '88vh' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="cgm-panel-header">
+          <div>
+            <strong>作者別アイテム統計</strong>
+            {data && (
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
+                作者 {data.total_artists}名 · 全{data.total_items}件
+                {data.unassigned_items > 0 ? `（作者未設定 ${data.unassigned_items}件）` : ''}
+                {' '}— 作者をクリックすると検索窓で絞り込みます
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button type="button" className="btn" style={{ fontSize: 12 }} onClick={loadStats} disabled={loading}>
+              {loading ? '集計中…' : '再集計'}
+            </button>
+            <button type="button" className="cgm-panel-close" onClick={onClose}>✕</button>
+          </div>
+        </div>
+
+        <div className="cgm-panel-search" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            className="cgm-search-input"
+            style={{ flex: '1 1 200px' }}
+            placeholder="作者名で絞り込み…"
+            value={filterText}
+            onChange={e => setFilterText(e.target.value)}
+          />
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[
+              { id: 'items', label: 'アイテム数順' },
+              { id: 'images', label: '画像数順' },
+              { id: 'name', label: '名前順' },
+            ].map(opt => (
+              <button
+                key={opt.id}
+                type="button"
+                className="btn"
+                onClick={() => setSortBy(opt.id)}
+                style={{
+                  fontSize: 12,
+                  padding: '5px 10px',
+                  fontWeight: sortBy === opt.id ? 700 : 400,
+                  background: sortBy === opt.id ? 'var(--active-bg)' : undefined,
+                  color: sortBy === opt.id ? 'var(--active-text)' : undefined,
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="cgm-panel-body" style={{ padding: '10px 16px', gap: 6 }}>
+          {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
+          {loading ? (
+            <div className="cgm-empty-hint" style={{ padding: 20 }}>統計を集計しています…</div>
+          ) : displayedArtists.length === 0 ? (
+            <div className="cgm-empty-hint" style={{ padding: 20 }}>該当する作者がいません</div>
+          ) : (
+            displayedArtists.map((row, idx) => {
+              const value = sortBy === 'images' ? row.image_count : row.item_count
+              const pct = Math.max(2, Math.round((value / maxCount) * 100))
+              const share = data && data.total_items > 0
+                ? ((row.item_count / data.total_items) * 100).toFixed(1)
+                : '0.0'
+              return (
+                <button
+                  key={row.artist}
+                  type="button"
+                  onClick={() => {
+                    if (onSelectArtist) onSelectArtist(row.artist)
+                    onClose()
+                  }}
+                  title={`「${row.artist}」で検索して絞り込む`}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    background: 'var(--bg)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 5,
+                    color: 'var(--text)',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--hover-bg)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg)' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <span style={{ fontSize: 11, color: 'var(--muted)', minWidth: 28 }}>#{idx + 1}</span>
+                      <span style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {row.artist}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, fontSize: 12 }}>
+                      <span style={{ fontWeight: 700, color: 'var(--active-text)' }}>{row.item_count}件</span>
+                      <span style={{ color: 'var(--muted)' }}>({row.image_count}枚)</span>
+                      <span style={{ color: 'var(--text-faint)', fontSize: 11, minWidth: 42, textAlign: 'right' }}>{share}%</span>
+                    </div>
+                  </div>
+                  <div style={{ width: '100%', height: 5, background: 'var(--divider)', borderRadius: 999, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: '#3b82f6', borderRadius: 999 }} />
+                  </div>
+                </button>
+              )
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

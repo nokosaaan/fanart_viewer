@@ -14,6 +14,7 @@ import FetchQueueManager from './components/FetchQueueManager'
 import ItemQueueManager from './components/ItemQueueManager'
 import MultiImageManager from './components/MultiImageManager'
 import MergeCandidatesModal from './components/MergeCandidatesModal'
+import ArtistStatsModal from './components/ArtistStatsModal'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
 import TwitterFetchManager from './components/TwitterFetchManager'
@@ -145,6 +146,7 @@ function AppMain({ role, onLogout }){
   const [itemQueueMounted, setItemQueueMounted] = useState(false)
   const [multiImageManagerOpen, setMultiImageManagerOpen] = useState(false)
   const [mergeCandidatesOpen, setMergeCandidatesOpen] = useState(false)
+  const [artistStatsOpen, setArtistStatsOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
   const [charLinkOpen, setCharLinkOpen] = useState(false)
@@ -888,6 +890,7 @@ function AppMain({ role, onLogout }){
             // データを更新した等)後に最新の状態を確実に反映させるため。
             { label: <MenuIconLabel iconNode={<ReloadIcon />} text="再読み込み" />, onClick: () => window.location.reload() },
             { label: <MenuIconLabel iconNode="🌓" text="表示設定" />, onClick: () => setThemeOpen(true) },
+            { label: <MenuIconLabel iconNode="📊" text="作者別統計" />, onClick: () => setArtistStatsOpen(true), tourId: 'menu-artist-stats' },
             ...(readOnly ? [] : [
               { divider: true },
               {
@@ -1122,6 +1125,12 @@ function AppMain({ role, onLogout }){
       )}
       {mergeCandidatesOpen && (
         <MergeCandidatesModal onClose={() => setMergeCandidatesOpen(false)} />
+      )}
+      {artistStatsOpen && (
+        <ArtistStatsModal
+          onClose={() => setArtistStatsOpen(false)}
+          onSelectArtist={(artist) => setQuery(artist)}
+        />
       )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
       {/* Opposite corner from ScrollList/PreviewPane's own per-row .fv-toast

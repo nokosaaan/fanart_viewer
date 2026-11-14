@@ -5267,6 +5267,44 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'deleted_ids': source_ids,
         })
 
+    @action(detail=False, methods=['get'], url_path='artist_stats')
+    def artist_stats(self, request):
+        """Return per-artist item and preview-image counts, sorted by item count descending."""
+        item_rows = Item.objects.values('artist').annotate(item_count=Count('id'))
+        img_rows = PreviewImage.objects.values('item__artist').annotate(image_count=Count('id'))
+
+        stats = {}
+        unassigned_items = 0
+        total_items = 0
+
+        for row in item_rows:
+            name = (row['artist'] or '').strip()
+            cnt = int(row['item_count'] or 0)
+            total_items += cnt
+            if not name:
+                unassigned_items += cnt
+                continue
+            entry = stats.setdefault(name, {'artist': name, 'item_count': 0, 'image_count': 0})
+            entry['item_count'] += cnt
+
+        for row in img_rows:
+            name = (row['item__artist'] or '').strip()
+            if not name or name not in stats:
+                continue
+            stats[name]['image_count'] += int(row['image_count'] or 0)
+
+        artists_list = sorted(
+            stats.values(),
+            key=lambda e: (-e['item_count'], -e['image_count'], e['artist'].lower()),
+        )
+
+        return Response({
+            'total_items': total_items,
+            'total_artists': len(artists_list),
+            'unassigned_items': unassigned_items,
+            'artists': artists_list,
+        })
+
 
 def items_from_db(request):
     """Return all items serialized from the Django DB.
