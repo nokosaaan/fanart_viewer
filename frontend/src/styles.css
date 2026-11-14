@@ -633,6 +633,20 @@ select{ background:var(--card); color:var(--text); border:1px solid var(--border
    between the narrow "Preview Timeline" overlay and the full-width
    embedded gallery, no separate layout needed for each. */
 .preview-grid{ columns: 220px; column-gap:10px }
-.preview-grid-cell{ display:block; width:100%; break-inside:avoid; margin-bottom:10px; border:0; padding:0; background:none; cursor:pointer; line-height:0 }
+.preview-grid-cell{ position:relative; display:block; width:100%; break-inside:avoid; margin-bottom:10px; border:0; padding:0; background:none; cursor:pointer; line-height:0 }
 .preview-grid-cell img{ width:100%; height:auto; display:block; border-radius:6px; transition:opacity 0.15s ease }
 .preview-grid-cell:hover img{ opacity:0.85 }
+.preview-grid-cell.is-selected img{ outline:3px solid #3b82f6; outline-offset:-3px; opacity:0.9 }
+.preview-grid-select-badge{
+	position:absolute; top:8px; right:8px;
+	width:24px; height:24px; border-radius:999px;
+	border:2px solid rgba(255,255,255,0.9);
+	background:rgba(15,23,42,0.55);
+	color:#fff; font-size:14px; font-weight:700; line-height:1;
+	display:flex; align-items:center; justify-content:center;
+	box-shadow:0 1px 4px rgba(0,0,0,0.45);
+	pointer-events:none;
+}
+.preview-grid-select-badge.is-selected{
+	background:#2563eb; border-color:#fff;
+}

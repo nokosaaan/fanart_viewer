@@ -1,6 +1,7 @@
 import React, {useEffect, useState, useMemo, useRef} from 'react'
 import SearchBar from './components/SearchBar'
 import ScrollList from './components/ScrollList'
+import BulkSelectionBar, { useItemSelection } from './components/BulkSelectionBar'
 import PreviewPane from './components/PreviewPane'
 import LoginScreen from './components/LoginScreen'
 import CharacterGroupManager from './components/CharacterGroupManager'
@@ -98,6 +99,7 @@ function AppMain({ role, onLogout }){
   // they'd meant to open in the first place.
   const [galleryEntryWasFromList, setGalleryEntryWasFromList] = useState(false)
   const [returnToMultiImageManager, setReturnToMultiImageManager] = useState(false)
+  const [gallerySelectMode, setGallerySelectMode] = useState(false)
 
   function openPreviewForItem(itemId, fromMultiImage = false){
     if (fromMultiImage) {
@@ -772,6 +774,37 @@ function AppMain({ role, onLogout }){
     return filtered.slice(start, start + PAGE_SIZE)
   }, [filtered, pageIndex])
 
+  const itemsForGallery = useMemo(() => {
+    if (galleryInitialItemId && !paginatedItems.some(it => it && String(it.id) === String(galleryInitialItemId))) {
+      const target = (items || []).find(it => it && String(it.id) === String(galleryInitialItemId))
+      if (target) return [target, ...paginatedItems]
+    }
+    return paginatedItems
+  }, [paginatedItems, galleryInitialItemId, items])
+
+  const galleryPreviewItems = useMemo(() => (
+    itemsForGallery.filter(it => it && Boolean(it.has_preview) && it.has_preview !== 'false')
+  ), [itemsForGallery])
+
+  const {
+    selectedIds: gallerySelectedIds,
+    setSelectedIds: setGallerySelectedIds,
+    toggleSelect: toggleGallerySelect,
+    toggleSelectAll: toggleGallerySelectAll,
+    clearSelection: clearGallerySelection,
+  } = useItemSelection(galleryPreviewItems)
+
+  useEffect(() => {
+    if (viewMode !== 'gallery') {
+      setGallerySelectMode(false)
+      clearGallerySelection()
+    }
+  }, [viewMode])
+
+  useEffect(() => {
+    if (!gallerySelectMode) clearGallerySelection()
+  }, [gallerySelectMode])
+
   function addFilter(value){
     if(!value) return
     setFilters(prev=> prev.includes(value)? prev : [...prev, value])
@@ -1067,6 +1100,22 @@ function AppMain({ role, onLogout }){
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           ギャラリー
         </button>
+        {!readOnly && viewMode === 'gallery' && (
+          <button
+            type="button"
+            className={`view-mode-btn${gallerySelectMode ? ' active' : ''}`}
+            style={{ marginLeft: 8 }}
+            aria-pressed={gallerySelectMode}
+            onClick={() => setGallerySelectMode(v => !v)}
+            title={gallerySelectMode ? '選択モードを終了' : '選択モード（クリックでアイテム選択）'}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="3" />
+              <polyline points="9 12 11.5 14.5 16 9.5" />
+            </svg>
+            選択モード
+          </button>
+        )}
       </div>
       {viewMode === 'list' ? (
         <ScrollList
@@ -1087,18 +1136,31 @@ function AppMain({ role, onLogout }){
         // (PANE_PAGE_SIZE), which duplicated the Pagination component below
         // with an out-of-sync page number of its own. One page, one
         // pagination control, shared by both view modes.
-        (() => {
-          let itemsForGallery = paginatedItems
-          if (galleryInitialItemId && !paginatedItems.some(it => it && String(it.id) === String(galleryInitialItemId))) {
-            const target = (items || []).find(it => it && String(it.id) === String(galleryInitialItemId))
-            if (target) itemsForGallery = [target, ...paginatedItems]
-          }
-          return (
-            <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
-              <PreviewPane embedded open readOnly={readOnly} filteredItems={itemsForGallery} initialItemId={galleryInitialItemId} onClose={()=>{}} onLightboxClose={onGalleryLightboxClose} />
-            </React.Suspense>
-          )
-        })()
+        <>
+          {!readOnly && gallerySelectMode && (
+            <BulkSelectionBar
+              items={galleryPreviewItems}
+              selectedIds={gallerySelectedIds}
+              setSelectedIds={setGallerySelectedIds}
+              onToggleSelectAll={toggleGallerySelectAll}
+              onClearSelection={clearGallerySelection}
+            />
+          )}
+          <React.Suspense fallback={<div className="preview-loading">Loading previews…</div>}>
+            <PreviewPane
+              embedded
+              open
+              readOnly={readOnly}
+              filteredItems={itemsForGallery}
+              initialItemId={galleryInitialItemId}
+              onClose={()=>{}}
+              onLightboxClose={onGalleryLightboxClose}
+              selectionMode={!readOnly && gallerySelectMode}
+              selectedIds={gallerySelectedIds}
+              onToggleSelect={toggleGallerySelect}
+            />
+          </React.Suspense>
+        </>
       )}
       {nextPageUrl && (
         <div className="load-more" style={{margin:'12px 0'}}>

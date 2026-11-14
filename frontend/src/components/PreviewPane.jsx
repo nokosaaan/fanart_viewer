@@ -33,7 +33,7 @@ const PANE_PAGE_SIZE = 50
 // same component — same masonry grid, same lightbox — since both are
 // fundamentally "browse every preview, click one for detail", just reached
 // from a different place in the app.
-export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId, embedded=false, onLightboxClose}){
+export default function PreviewPane({open, onClose, readOnly, filteredItems, initialItemId, embedded=false, onLightboxClose, selectionMode=false, selectedIds=null, onToggleSelect=null}){
   const previewItems = useMemo(() => (
     (filteredItems || []).filter(it => it && Boolean(it.has_preview) && it.has_preview !== 'false')
   ), [filteredItems])
@@ -862,9 +862,26 @@ export default function PreviewPane({open, onClose, readOnly, filteredItems, ini
           <div className="preview-grid">
             {previewItems.slice(panePageIndex*PANE_PAGE_SIZE, (panePageIndex+1)*PANE_PAGE_SIZE).map((it, localIdx) => {
               const globalIdx = panePageIndex * PANE_PAGE_SIZE + localIdx
+              const isSelected = Boolean(selectionMode && selectedIds && selectedIds.has(it.id))
               return (
-                <button className="preview-grid-cell" key={it.id} onClick={()=>openLarge(globalIdx)}>
+                <button
+                  className={`preview-grid-cell${selectionMode ? ' is-selectable' : ''}${isSelected ? ' is-selected' : ''}`}
+                  key={it.id}
+                  aria-pressed={selectionMode ? isSelected : undefined}
+                  onClick={() => {
+                    if (selectionMode && onToggleSelect) {
+                      onToggleSelect(it.id)
+                    } else {
+                      openLarge(globalIdx)
+                    }
+                  }}
+                >
                   <img src={it.first_preview_id != null ? `/api/items/${it.id}/preview/?id=${it.first_preview_id}` : `/api/items/${it.id}/preview/?index=0`} alt={it.title||''} loading="lazy" />
+                  {selectionMode && (
+                    <span className={`preview-grid-select-badge${isSelected ? ' is-selected' : ''}`} aria-hidden="true">
+                      {isSelected ? '✓' : ''}
+                    </span>
+                  )}
                 </button>
               )
             })}
