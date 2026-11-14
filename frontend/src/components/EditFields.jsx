@@ -32,7 +32,7 @@ function HighlightedText({ text }){
   const parts = String(text || '').split(/(#[\p{L}\p{N}_]+)/gu)
   return parts.map((part, i) => (
     part.startsWith('#')
-      ? <span key={i} style={{color:'#93c5fd', fontWeight:600}}>{part}</span>
+      ? <span key={i} style={{color:'#93c5fd', fontWeight:600, userSelect:'text', WebkitUserSelect:'text'}}>{part}</span>
       : <React.Fragment key={i}>{part}</React.Fragment>
   ))
 }
@@ -201,6 +201,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   // _select_image_bytes). null = "let the server pick" (largest image).
   const [images, setImages] = useState([])
   const [selectedImageIndex, setSelectedImageIndex] = useState(null)
+  const [copiedDesc, setCopiedDesc] = useState(false)
 
   const loadItemPreviews = useCallback((id) => {
     fetch(`/api/items/${id}/previews/`, { cache: 'no-store' })
@@ -285,9 +286,10 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       syncRegionCharacters: (regionChars) => {
         if (Array.isArray(regionChars) && regionChars.length > 0) {
           setCharList(prev => {
-            const merged = [...new Set([...prev, ...regionChars])]
-            if (merged.length !== prev.length) return merged
-            return prev
+            if (prev.length === regionChars.length && prev.every((c, i) => c === regionChars[i])) {
+              return prev
+            }
+            return regionChars
           })
         }
       },
@@ -533,34 +535,131 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
               : `/api/items/${item.id}/preview/`))
         return (
           <div style={{...SECTION.wrap, background:'#0f172a', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap'}}>
-            <img
-              src={activePreviewUrl}
-              alt=""
-              style={{width:120, height:120, objectFit:'cover', borderRadius:6, flexShrink:0, background:'#1e293b'}}
-            />
-            <div style={{display:'flex', flexDirection:'column', gap:8}}>
-              {item.link && (
-                <a className="link-text" href={item.link} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
+            <a
+              href={activePreviewUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="新しいタブで画像を開く"
+              style={{
+                display: 'block',
+                flexShrink: 0,
+                borderRadius: 6,
+                overflow: 'hidden',
+                lineHeight: 0,
+                transition: 'opacity 0.15s ease',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = '0.85' }}
+              onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
+            >
+              <img
+                src={activePreviewUrl}
+                alt=""
+                style={{width:120, height:120, objectFit:'cover', borderRadius:6, background:'#1e293b', display:'block', cursor:'pointer'}}
+              />
+            </a>
+            {item.link && (
+              <div style={{display:'flex', alignItems:'center'}}>
+                <a
+                  className="link-text"
+                  href={item.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="元リンクを開く(実際の画像を確認)"
+                  aria-label="元リンクを開く(実際の画像を確認)"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 10px',
+                    borderRadius: 6,
+                    background: 'rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.12)'
+                    e.currentTarget.style.color = '#f1f5f9'
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.06)'
+                    e.currentTarget.style.color = '#94a3b8'
+                  }}
+                >
                   {(() => {
                     const platform = getPlatformIcon(item.link)
-                    return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3}} /> : null
+                    return platform ? <img src={platform.icon} alt={platform.label} style={{width:16, height:16, borderRadius:3, display:'block'}} /> : null
                   })()}
-                  元リンクを開く(実際の画像を確認)
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
                 </a>
-              )}
-              <a className="link-text" href={activePreviewUrl} target="_blank" rel="noreferrer" style={{display:'inline-flex', alignItems:'center', gap:6}}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                この画像を新しいタブで開く
-              </a>
-            </div>
+              </div>
+            )}
           </div>
         )
       })()}
 
       <div style={{...SECTION.wrap, background:'#0f172a'}}>
-        <label style={SECTION.label}>取得した本文(確認用) <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— ハッシュタグが正しく取れているか確認できます</span></label>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6}}>
+          <label style={{...SECTION.label, marginBottom:0}}>
+            取得した本文(確認用) <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— ハッシュタグが正しく取れているか確認できます</span>
+          </label>
+          {item.description && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(item.description)
+                } else {
+                  const ta = document.createElement('textarea')
+                  ta.value = item.description
+                  document.body.appendChild(ta)
+                  ta.select()
+                  document.execCommand('copy')
+                  document.body.removeChild(ta)
+                }
+                setCopiedDesc(true)
+                setTimeout(() => setCopiedDesc(false), 1500)
+              }}
+              title="本文全体をクリップボードにコピー"
+              style={{
+                padding: '2px 8px',
+                fontSize: 11,
+                background: 'rgba(255, 255, 255, 0.08)',
+                color: copiedDesc ? '#4ade80' : '#94a3b8',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: 4,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer',
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{display:'block'}}>
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><rect x="2" y="2" width="13" height="13" rx="2" ry="2" />
+              </svg>
+              {copiedDesc ? 'コピー完了' : 'コピー'}
+            </button>
+          )}
+        </div>
         {item.description ? (
-          <div style={{fontSize:13, color:'#cbd5e1', whiteSpace:'pre-wrap', wordBreak:'break-word'}}>
+          <div
+            style={{
+              fontSize: 13,
+              color: '#cbd5e1',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              userSelect: 'text',
+              WebkitUserSelect: 'text',
+              MozUserSelect: 'text',
+              cursor: 'text',
+            }}
+          >
             <HighlightedText text={item.description} />
           </div>
         ) : (
@@ -987,10 +1086,10 @@ export function ItemQueuePanel({
       const regionChars = [...new Set(currentRegions.flatMap(r => r.characters || []))]
         .map(c => (c || '').trim()).filter(Boolean)
 
-      // Ensure region characters are merged into payload.characters so characters are never empty
-      // when regions already specify characters
-      if (regionChars.length > 0) {
-        payload.characters = [...new Set([...(payload.characters || []), ...regionChars])]
+      // When regions are actively being specified with labeled characters,
+      // characters omitted from the regions should NOT be registered.
+      if (showRegionSection && regionChars.length > 0) {
+        payload.characters = regionChars
       }
 
       const j = await saveItemFields(item.id, payload)

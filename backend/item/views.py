@@ -4832,17 +4832,18 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         item.character_regions = cleaned
 
-        existing_chars = list(item.characters or [])
-        introduced_chars = []
-        for r in cleaned:
-            for name in r['characters']:
-                if name not in existing_chars:
-                    existing_chars.append(name)
-                    introduced_chars.append(name)
-        item.characters = existing_chars
+        region_chars = sorted({c for r in cleaned for c in r.get('characters', []) if c and c.strip()})
+        update_fields_list = ['character_regions']
+        if region_chars:
+            introduced_chars = [c for c in region_chars if c not in (item.characters or [])]
+            item.characters = region_chars
+            item.character_regions_ack_signature = ''
+            update_fields_list.extend(['characters', 'character_regions_ack_signature'])
+        else:
+            introduced_chars = []
 
         try:
-            item.save(update_fields=['character_regions', 'characters'])
+            item.save(update_fields=update_fields_list)
         except Exception as e:
             logging.exception('Failed to save character_regions for item %s', item.pk)
             return Response({'detail': 'Failed to save', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

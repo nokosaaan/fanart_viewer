@@ -186,6 +186,18 @@ export default function RegionAnnotator({
 
   const visibleBoxes = boxes.filter(b => b.imageIndex === currentImageIndex)
 
+  // Sort boxes so that smaller boxes appear in front (higher z-index and later DOM order)
+  // and larger background boxes stay behind, allowing smaller inner boxes to be easily
+  // clicked, edited, or deleted without being blocked by outer large boxes.
+  const sortedVisibleBoxes = useMemo(() => {
+    return [...visibleBoxes].sort((a, b) => {
+      const areaA = Math.abs((a.box[2] - a.box[0]) * (a.box[3] - a.box[1]))
+      const areaB = Math.abs((b.box[2] - b.box[0]) * (b.box[3] - b.box[1]))
+      if (areaB !== areaA) return areaB - areaA // Larger first, smaller last (drawn on top)
+      return a.id.localeCompare(b.id)
+    })
+  }, [visibleBoxes])
+
   // Character counts per box on current image
   const currentCharCounts = useMemo(() => {
     const counts = {}
@@ -587,11 +599,12 @@ export default function RegionAnnotator({
           onLoad={e => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
         />
 
-        {naturalSize && visibleBoxes.map((b) => {
+        {naturalSize && sortedVisibleBoxes.map((b, idx) => {
           const s = scale()
           const [x1, y1, x2, y2] = b.box
           const isLabeled = b.characters.length > 0
           const isSelected = selectedBoxIds.has(b.id)
+          const isActive = activeBoxId === b.id
           const firstChar = b.characters[0]
           const charColor = isLabeled ? getCharColor(firstChar) : null
           const totalSameChar = firstChar ? (currentCharCounts[firstChar] || 0) : 0
@@ -619,6 +632,10 @@ export default function RegionAnnotator({
               }).join('、')
             : '?'
 
+          // z-index: Base stacking order puts smaller boxes (higher idx) on top of larger boxes (lower idx).
+          // Selected boxes and active box (with open character popover) get highest priority.
+          const zIndex = isActive ? 100 : (isSelected ? 50 + idx : 1 + idx)
+
           return (
             <div key={b.id}
               onClick={ev => handleBoxClick(b.id, ev)}
@@ -631,6 +648,7 @@ export default function RegionAnnotator({
                 background: bgColor,
                 cursor: stampChar ? 'copy' : 'pointer', boxSizing: 'border-box',
                 transition: 'border-color 0.1s ease, background 0.1s ease',
+                zIndex,
               }}
               title={stampChar ? `クリックして「${stampChar}」を割り当て/解除` : undefined}
             >
@@ -796,7 +814,7 @@ export default function RegionAnnotator({
             <div style={{
               position: 'absolute', left: drawRect.x1 * s, top: drawRect.y1 * s,
               width: (drawRect.x2 - drawRect.x1) * s, height: (drawRect.y2 - drawRect.y1) * s,
-              border: '2px dashed #60a5fa', pointerEvents: 'none',
+              border: '2px dashed #60a5fa', pointerEvents: 'none', zIndex: 200,
             }} />
           )
         })()}
