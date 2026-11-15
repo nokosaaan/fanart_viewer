@@ -53,6 +53,7 @@ export default function RegionAnnotator({
   const [notice, setNotice] = useState('')
   const [activeBoxId, setActiveBoxId] = useState(null)  // box whose character-picker popover is open
   const [selectedBoxIds, setSelectedBoxIds] = useState(new Set())
+  const [hoveredBoxId, setHoveredBoxId] = useState(null)
   const [charQuery, setCharQuery] = useState('')
   const [groups, setGroups] = useState([])
   // Stamp mode: when set, clicking any box directly assigns this character without opening the popover
@@ -420,12 +421,22 @@ export default function RegionAnnotator({
   function removeBox(boxId) {
     setBoxes(prev => prev.filter(b => b.id !== boxId))
     if (activeBoxId === boxId) setActiveBoxId(null)
+    if (hoveredBoxId === boxId) setHoveredBoxId(null)
     setSelectedBoxIds(prev => {
       if (!prev.has(boxId)) return prev
       const next = new Set(prev)
       next.delete(boxId)
       return next
     })
+    if (onDirtyChange) onDirtyChange(true)
+  }
+
+  function removeSelectedBoxes() {
+    if (selectedBoxIds.size === 0) return
+    setBoxes(prev => prev.filter(b => !selectedBoxIds.has(b.id)))
+    if (activeBoxId && selectedBoxIds.has(activeBoxId)) setActiveBoxId(null)
+    if (hoveredBoxId && selectedBoxIds.has(hoveredBoxId)) setHoveredBoxId(null)
+    setSelectedBoxIds(new Set())
     if (onDirtyChange) onDirtyChange(true)
   }
 
@@ -610,8 +621,14 @@ export default function RegionAnnotator({
             <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>
               {selectedBoxIds.size}件の矩形を選択中 — 選んだキャラ名を全てに割り当てます(緑色=割り当て済み、もう一度クリックで取り消せます)
             </span>
+            <button
+              type="button"
+              onClick={removeSelectedBoxes}
+              style={{ marginLeft: 'auto', fontSize: 11, color: '#fecaca', background: '#7f1d1d', border: 'none', borderRadius: 4, padding: '3px 8px', cursor: 'pointer' }}
+              title="選択中の矩形をまとめて削除します"
+            >選択中を削除</button>
             <button onClick={() => setSelectedBoxIds(new Set())}
-              style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
+              style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
             >選択解除</button>
           </div>
 
@@ -694,6 +711,7 @@ export default function RegionAnnotator({
           const isLabeled = b.characters.length > 0
           const isSelected = selectedBoxIds.has(b.id)
           const isActive = activeBoxId === b.id
+          const isHovered = hoveredBoxId === b.id
           const firstChar = b.characters[0]
           const charColor = isLabeled ? getCharColor(firstChar) : null
           const totalSameChar = firstChar ? (currentCharCounts[firstChar] || 0) : 0
@@ -722,8 +740,8 @@ export default function RegionAnnotator({
             : '?'
 
           // z-index: Base stacking order puts smaller boxes (higher idx) on top of larger boxes (lower idx).
-          // Selected boxes and active box (with open character popover) get highest priority.
-          const zIndex = isActive ? 100 : (isSelected ? 50 + idx : 1 + idx)
+          // Selected boxes, hovered box from the list, and active box get higher priority.
+          const zIndex = isActive ? 100 : (isHovered ? 90 : (isSelected ? 50 + idx : 1 + idx))
 
           return (
             <div key={b.id}
@@ -732,9 +750,10 @@ export default function RegionAnnotator({
               style={{
                 position: 'absolute', left: x1 * s, top: y1 * s, width: (x2 - x1) * s, height: (y2 - y1) * s,
                 border: `2px solid ${borderColor}`,
-                outline: isSelected ? '3px solid #3b82f6' : (stampChar ? '1px dashed #60a5fa' : 'none'),
+                outline: isSelected ? '3px solid #3b82f6' : (isHovered ? '3px solid #facc15' : (stampChar ? '1px dashed #60a5fa' : 'none')),
                 outlineOffset: 2,
                 background: bgColor,
+                boxShadow: isHovered ? '0 0 0 2px rgba(250, 204, 21, 0.45)' : undefined,
                 cursor: stampChar ? 'copy' : 'pointer', boxSizing: 'border-box',
                 transition: 'border-color 0.1s ease, background 0.1s ease',
                 zIndex,
@@ -916,6 +935,128 @@ export default function RegionAnnotator({
           sample={hoverColor}
           cursorPos={cursorPos}
         />
+      )}
+
+      {visibleBoxes.length > 0 && (
+        <div style={{
+          marginTop: 12,
+          background: '#0f172a',
+          border: '1px solid #334155',
+          borderRadius: 6,
+          padding: '8px 10px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
+              領域一覧 ({visibleBoxes.length}件)
+              <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>
+                重なって×が押せない領域もここから選択・削除できます（カーソルを合わせると画像上で強調表示）
+              </span>
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+            {visibleBoxes.map((b, idx) => {
+              const [x1, y1, x2, y2] = b.box
+              const w = Math.max(0, Math.round(x2 - x1))
+              const h = Math.max(0, Math.round(y2 - y1))
+              const isLabeled = b.characters.length > 0
+              const isSelected = selectedBoxIds.has(b.id)
+              const isHovered = hoveredBoxId === b.id
+              const isOob = outOfBoundsBoxIds.has(b.id)
+              const firstChar = b.characters[0]
+              const charColor = isLabeled ? getCharColor(firstChar) : null
+              const badgeColor = charColor ? charColor.border : (isLabeled ? '#22c55e' : '#f59e0b')
+              return (
+                <div
+                  key={b.id}
+                  onMouseEnter={() => setHoveredBoxId(b.id)}
+                  onMouseLeave={() => setHoveredBoxId(prev => (prev === b.id ? null : prev))}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '4px 8px',
+                    borderRadius: 4,
+                    background: isSelected ? 'rgba(59, 130, 246, 0.18)' : (isHovered ? '#1e293b' : '#111827'),
+                    border: isSelected ? '1px solid #3b82f6' : (isHovered ? '1px solid #facc15' : '1px solid #1e293b'),
+                    fontSize: 12,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      background: badgeColor,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ color: '#94a3b8', fontVariantNumeric: 'tabular-nums', minWidth: 24 }}>
+                    #{idx + 1}
+                  </span>
+                  <span style={{
+                    color: isLabeled ? '#f1f5f9' : '#fbbf24',
+                    fontWeight: isLabeled ? 500 : 400,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: 1,
+                  }}>
+                    {isLabeled ? b.characters.join('、') : '未割当 (?)'}
+                  </span>
+                  {isOob && (
+                    <span style={{ fontSize: 10, color: '#fca5a5', background: 'rgba(239,68,68,0.2)', padding: '1px 5px', borderRadius: 3 }}>
+                      範囲外
+                    </span>
+                  )}
+                  <span style={{ fontSize: 11, color: '#64748b', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    ({Math.round(x1)}, {Math.round(y1)}) {w}×{h}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedBoxIds(prev => {
+                        const next = new Set(prev)
+                        if (next.has(b.id)) next.delete(b.id)
+                        else next.add(b.id)
+                        return next
+                      })
+                    }}
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 3,
+                      border: '1px solid #475569',
+                      background: isSelected ? '#2563eb' : '#1e293b',
+                      color: '#f1f5f9',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title="この矩形を選択してキャラを割り当て/解除します"
+                  >
+                    {isSelected ? '選択中' : '選択'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeBox(b.id)}
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 3,
+                      border: 'none',
+                      background: '#7f1d1d',
+                      color: '#fff',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title="この矩形を削除"
+                  >
+                    削除
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
       )}
 
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>

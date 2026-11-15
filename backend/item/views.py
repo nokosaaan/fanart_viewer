@@ -1520,7 +1520,7 @@ def _predict_crop_character_scores(crop, tagger_backend):
     return scores
 
 
-def _derive_proposed_regions(results, candidate_characters, tagger_backend, image_indices=None):
+def _derive_proposed_regions(results, candidate_characters, tagger_backend, image_indices=None, is_solo=False):
     """Derive region bounding boxes with candidate character assignments across analysed images.
 
     results: list of (position, tagger_result)
@@ -1578,12 +1578,12 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
 
         box_assignments = [None] * len(box_infos)
 
-        if len(char_names) == 1:
-            # Solo character manga/illustration: every detected person is that same character
+        if len(char_names) == 1 and (is_solo or len(box_infos) == 1):
+            # Only copy a single candidate character to every box when the item
+            # is known SOLO or has only 1 detected person; otherwise let each
+            # crop's own scores decide so extra people aren't mislabeled.
             box_assignments = [char_names[0]] * len(box_infos)
         else:
-            # Multi-character item: allow the same character to appear in multiple boxes
-            # (e.g. manga with multiple panels containing the same character)
             for b_idx, (box, scores) in enumerate(box_infos):
                 best_c = None
                 best_s = 0.0
@@ -1594,16 +1594,19 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
                     if total_s > best_s:
                         best_s = total_s
                         best_c = c_name
-                # If score is confident (> 0.05), assign it regardless of other boxes
-                if best_s > 0.05:
+                # Also consider strong direct recognition from the crop itself
+                top_crop_c, top_crop_s = max(scores.items(), key=lambda kv: kv[1]) if scores else (None, 0.0)
+                if top_crop_c and top_crop_s >= 0.25 and top_crop_s > best_s:
+                    box_assignments[b_idx] = top_crop_c
+                elif best_s > 0.12:
                     box_assignments[b_idx] = best_c
 
-            # Fallback for unassigned boxes: if there are item characters not yet assigned
-            # to any box, assign them to unassigned boxes in candidate order
+            # Only fall back to remaining candidate characters if there are few boxes
+            # and no crop-level scores contradicted them
             assigned_set = {c for c in box_assignments if c is not None}
             remaining = [c for c in char_names if c not in assigned_set]
             for b_idx in range(len(box_infos)):
-                if box_assignments[b_idx] is None and remaining:
+                if box_assignments[b_idx] is None and remaining and not box_infos[b_idx][1]:
                     box_assignments[b_idx] = remaining.pop(0)
 
         for b_idx, (box, _scores) in enumerate(box_infos):
@@ -1760,7 +1763,8 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
     if not want_tags and _remaining():
         _merge_tag_similarity_result(_suggest_from_similar_tags(item.tags or [], item.description, exclude_pk=item.pk))
 
-    needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags
+    want_regions = (item.situation or '').upper() != 'SOLO' and not (item.character_regions or [])
+    needs_tagger = (want_titles and not titles) or (want_characters and not characters) or want_tags or want_regions
     if needs_tagger and HAVE_TAGGER:
         image_bytes, resolved_image_index = _select_image_bytes(item, image_index)
 
@@ -1935,6 +1939,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
     want_characters = not (item.characters or [])
     want_tags = not (item.tags or [])
     want_situation = not item.situation
+    want_regions = (item.situation or '').upper() != 'SOLO' and not (item.character_regions or [])
 
     title_c, char_c, situation_c, tags_out = [], [], [], []
 
@@ -1943,7 +1948,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
     # _MONOCHROME_ENSEMBLE_WEIGHTS and _suggest_from_similar_tags'
     # `monochrome`), not just for the tagger.
     images, monochrome = [], False
-    if want_titles or want_characters or want_tags or want_situation:
+    if want_titles or want_characters or want_tags or want_situation or want_regions:
         images = _select_images(item, image_index, max_images)
         if images:
             # a mostly-black-and-white post (a manga with a colour cover)
@@ -2012,7 +2017,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
     # per-person crops, so a post with a different character on every page
     # still yields every character, with "k of n images" as the evidence.
     results = []
-    if (want_titles or want_characters or want_tags or want_situation) and HAVE_TAGGER:
+    if (want_titles or want_characters or want_tags or want_situation or want_regions) and HAVE_TAGGER:
         needs = dict(zip(('with_embedding', 'with_ccip'), _classifier_needs(tagger_backend)))
         for position, (index, image_bytes) in enumerate(images):
             try:
@@ -2488,11 +2493,13 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
             {'source': 'oc_heuristic', 'confidence': 1.0, 'raw_name': None, 'match_method': None},
         ]}]
 
+    region_cands = characters if characters else (item.characters or [])
     proposed_regions = _derive_proposed_regions(
         collected.get('results', []),
-        characters,
+        region_cands,
         tagger_backend,
         image_indices=collected.get('image_indices'),
+        is_solo=(item.situation or '').upper() == 'SOLO',
     )
 
     return {

@@ -180,7 +180,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   const [bulkSaving, setBulkSaving] = useState(false)
   const [bulkSaveProgress, setBulkSaveProgress] = useState(null) // {done, total, failed}
 
-  const [suggestMode, setSuggestMode] = useState('local')
+  const [suggestMode] = useState('external')
   const [suggestModel, setSuggestModel] = useState('canary')
   const [haveTimm, setHaveTimm] = useState(false)
   useEffect(()=>{
@@ -655,46 +655,6 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                       </div>
                     </div>
 
-                    <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 6, color: '#94a3b8' }}>提案モード</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                          <input type="radio" checked={suggestMode === 'local'} onChange={() => setSuggestMode('local')} disabled={bulkSuggesting} />
-                          ローカルのみ
-                        </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                          <input type="radio" checked={suggestMode === 'external'} onChange={() => setSuggestMode('external')} disabled={bulkSuggesting} />
-                          Danbooru照合あり(外部通信・低速)
-                        </label>
-                        {haveTimm && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                            <span style={{ color: '#94a3b8' }}>画像解析モデル:</span>
-                            <select value={suggestModel} onChange={e => setSuggestModel(e.target.value)} disabled={bulkSuggesting} style={{ fontSize: 12, flex: 1 }}>
-                              <option value="default">標準(軽量・高速)</option>
-                              <option value="canary">2026年学習の最新モデル(重い)</option>
-                            </select>
-                          </div>
-                        )}
-                        <button
-                          type="button"
-                          className="btn"
-                          style={{ fontSize: 12, marginTop: 4 }}
-                          onClick={() => {
-                            if (suggestModel === 'canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
-                            runSuggestFor(items, suggestMode, suggestModel)
-                          }}
-                          disabled={bulkSuggesting || items.length === 0 || items.every(it => suggestions[it.id])}
-                        >
-                          {bulkSuggesting
-                            ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
-                            : '提案を開始'}
-                        </button>
-                        {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
-                          <span style={{ fontSize: 11, color: '#f87171' }}>({bulkProgress.skipped}件失敗/スキップ)</span>
-                        )}
-                      </div>
-                    </div>
-
                     {(tagsOnlyReady.length > 0 || bulkSaving) && (
                       <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10 }}>
                         <button
@@ -722,18 +682,70 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
         </div>
       </div>
 
-      {Array.isArray(allItems) && queuePageCount > 1 && (
-        <div className="cgm-panel-search" style={{ padding: '4px 12px' }}>
-          <Pagination
-            page={queuePageIndex}
-            totalPages={queuePageCount}
-            onGoToPage={(p) => { if (confirmDiscardIfDirty()) setQueuePageIndex(p) }}
-            onPrev={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.max(0, p - 1)) }}
-            onNext={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.min(queuePageCount - 1, p + 1)) }}
-            prevDisabled={queuePageIndex === 0}
-            nextDisabled={queuePageIndex >= queuePageCount - 1}
-            resultsLabel={`全${allItems.length}件`}
-          />
+      {((Array.isArray(allItems) && queuePageCount > 1) || mode === 'attention') && (
+        <div
+          className="cgm-panel-search"
+          style={{
+            padding: '4px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            {Array.isArray(allItems) && queuePageCount > 1 && (
+              <Pagination
+                page={queuePageIndex}
+                totalPages={queuePageCount}
+                onGoToPage={(p) => { if (confirmDiscardIfDirty()) setQueuePageIndex(p) }}
+                onPrev={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.max(0, p - 1)) }}
+                onNext={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.min(queuePageCount - 1, p + 1)) }}
+                prevDisabled={queuePageIndex === 0}
+                nextDisabled={queuePageIndex >= queuePageCount - 1}
+                resultsLabel={`全${allItems.length}件`}
+              />
+            )}
+          </div>
+          {mode === 'attention' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginLeft: 'auto' }}>
+              {haveTimm && (
+                <select
+                  value={suggestModel}
+                  onChange={e => {
+                    setSuggestModel(e.target.value)
+                    suggestionsRef.current = {}
+                    setSuggestions({})
+                    setBulkProgress(null)
+                  }}
+                  disabled={bulkSuggesting}
+                  style={{ fontSize: 12 }}
+                  title="画像解析モデル"
+                >
+                  <option value="default">標準(軽量・高速)</option>
+                  <option value="canary">2026年学習の最新モデル(重い)</option>
+                </select>
+              )}
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: 12, background: '#2563eb', color: '#fff', padding: '4px 10px' }}
+                onClick={() => {
+                  if (suggestModel === 'canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
+                  runSuggestFor(items, suggestMode, suggestModel)
+                }}
+                disabled={bulkSuggesting || items.length === 0 || items.every(it => suggestions[it.id])}
+              >
+                {bulkSuggesting
+                  ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
+                  : '提案を開始'}
+              </button>
+              {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
+                <span style={{ fontSize: 11, color: '#f87171' }}>({bulkProgress.skipped}件失敗/スキップ)</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
