@@ -1103,7 +1103,7 @@ function AppMain({ role, onLogout }){
           type="button" className={`view-mode-btn${viewMode === 'gallery' ? ' active' : ''}`}
           onClick={() => { setGalleryEntryWasFromList(false); setViewMode('gallery') }} title="ギャラリー表示" data-tour="view-mode-gallery"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="10" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/><rect x="14" y="11" width="7" height="10" rx="1"/></svg>
           ギャラリー
         </button>
         {!readOnly && viewMode === 'gallery' && (
