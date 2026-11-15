@@ -11,6 +11,8 @@ import TitleDanbooruLinkManager from './components/TitleDanbooruLinkManager'
 import TitleGroupLinkManager from './components/TitleGroupLinkManager'
 import BackupManager from './components/BackupManager'
 import TrainClassifierManager from './components/TrainClassifierManager'
+import BrokenRegionsModal from './components/BrokenRegionsModal'
+import LabelOutliersModal from './components/LabelOutliersModal'
 import FetchQueueManager from './components/FetchQueueManager'
 import ItemQueueManager from './components/ItemQueueManager'
 import MultiImageManager from './components/MultiImageManager'
@@ -156,6 +158,8 @@ function AppMain({ role, onLogout }){
   const [titleGroupLinkOpen, setTitleGroupLinkOpen] = useState(false)
   const [backupOpen, setBackupOpen] = useState(false)
   const [trainClassifierOpen, setTrainClassifierOpen] = useState(false)
+  const [brokenRegionsOpen, setBrokenRegionsOpen] = useState(false)
+  const [labelOutliersOpen, setLabelOutliersOpen] = useState(false)
   // Onboarding tour (see Tour.jsx / lib/tourSteps.js) — needs the header
   // menu forced open across several steps (most tour targets are menu
   // items), which plain internal HeaderMenu state can't support from out
@@ -1055,6 +1059,8 @@ function AppMain({ role, onLogout }){
               { label: <MenuIconLabel iconNode={<span style={{fontSize:16, lineHeight:1}}>🧅</span>} text="プロキシ・秘匿化 (Tor)" />, onClick: () => setProxySettingsOpen(true), tourId: 'menu-proxy-settings' },
               { label: <MenuIconLabel iconNode={<BackupIcon />} text="バックアップ" />, onClick: () => setBackupOpen(true), tourId: 'menu-backup' },
               { label: <MenuIconLabel iconNode={<BrainGearIcon />} text="分類器の学習" />, onClick: () => setTrainClassifierOpen(true), tourId: 'menu-train-classifier' },
+              { label: <MenuIconLabel iconNode={<span style={{fontSize:16, lineHeight:1}}>🩺</span>} text="領域矩形エラー修正" />, onClick: () => setBrokenRegionsOpen(true) },
+              { label: <MenuIconLabel iconNode={<span style={{fontSize:16, lineHeight:1}}>🔎</span>} text="誤ラベル候補チェック" />, onClick: () => setLabelOutliersOpen(true) },
             ]),
             ...(role !== 'none' ? [
               { divider: true },
@@ -1242,6 +1248,8 @@ function AppMain({ role, onLogout }){
         />
       )}
       {trainClassifierOpen && <TrainClassifierManager onClose={()=>setTrainClassifierOpen(false)} />}
+      {brokenRegionsOpen && <BrokenRegionsModal onClose={() => setBrokenRegionsOpen(false)} />}
+      {labelOutliersOpen && <LabelOutliersModal onClose={() => setLabelOutliersOpen(false)} />}
       {/* Opposite corner from ScrollList/PreviewPane's own per-row .fv-toast
           (bottom-right) so a bulk run finishing at the same moment as some
           row's own fetch never overlaps it. */}

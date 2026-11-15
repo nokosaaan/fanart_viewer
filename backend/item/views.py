@@ -5318,6 +5318,433 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'artists': artists_list,
         })
 
+    @staticmethod
+    def _inspect_item_regions(item):
+        import io
+        from PIL import Image
+        previews = list(
+            PreviewImage.objects.filter(item=item).order_by('order', 'id').only('id', 'order', 'data')
+        )
+        size_cache = {}
+        for idx, p in enumerate(previews):
+            try:
+                with Image.open(io.BytesIO(bytes(p.data))) as im:
+                    size_cache[idx] = im.size
+            except Exception:
+                size_cache[idx] = None
+
+        regions = list(item.character_regions or [])
+        issues = []
+        repaired_regions = []
+        for r_idx, r in enumerate(regions):
+            if not isinstance(r, dict):
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': None,
+                    'box': None,
+                    'characters': [],
+                    'img_size': None,
+                    'reason_code': 'invalid_format',
+                    'reason_label': '矩形データの形式が不正です',
+                })
+                continue
+
+            img_idx = r.get('image_index')
+            resolved_idx = 0 if img_idx is None else int(img_idx)
+            box = r.get('box')
+            chars = r.get('characters') or []
+
+            if not isinstance(box, (list, tuple)) or len(box) != 4:
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': img_idx,
+                    'box': box,
+                    'characters': chars,
+                    'img_size': size_cache.get(resolved_idx),
+                    'reason_code': 'invalid_format',
+                    'reason_label': '座標配列が4要素ではありません',
+                })
+                continue
+
+            try:
+                x1, y1, x2, y2 = [float(v) for v in box]
+            except (TypeError, ValueError):
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': img_idx,
+                    'box': box,
+                    'characters': chars,
+                    'img_size': size_cache.get(resolved_idx),
+                    'reason_code': 'invalid_format',
+                    'reason_label': '座標に数値以外の値が含まれています',
+                })
+                continue
+
+            if resolved_idx < 0 or resolved_idx >= len(previews) or size_cache.get(resolved_idx) is None:
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': img_idx,
+                    'box': [x1, y1, x2, y2],
+                    'characters': chars,
+                    'img_size': None,
+                    'reason_code': 'missing_image',
+                    'reason_label': f'画像 #{resolved_idx + 1} が存在しないか読み込めません',
+                })
+                continue
+
+            w, h = size_cache[resolved_idx]
+            if x2 <= x1 or y2 <= y1 or (x2 - x1) < 4 or (y2 - y1) < 4:
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': img_idx,
+                    'box': [x1, y1, x2, y2],
+                    'characters': chars,
+                    'img_size': [w, h],
+                    'reason_code': 'inverted_or_tiny',
+                    'reason_label': f'座標が逆転または極小です ({int(x1)}, {int(y1)}, {int(x2)}, {int(y2)})',
+                })
+                continue
+
+            if x1 >= w or y1 >= h or x2 <= 0 or y2 <= 0:
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': img_idx,
+                    'box': [x1, y1, x2, y2],
+                    'characters': chars,
+                    'img_size': [w, h],
+                    'reason_code': 'out_of_bounds_completely',
+                    'reason_label': f'画像サイズ({w}x{h})を完全に超過しています ({int(x1)}, {int(y1)}, {int(x2)}, {int(y2)})',
+                })
+                continue
+
+            if x1 < 0 or y1 < 0 or x2 > w or y2 > h:
+                issues.append({
+                    'region_index': r_idx,
+                    'image_index': img_idx,
+                    'box': [x1, y1, x2, y2],
+                    'characters': chars,
+                    'img_size': [w, h],
+                    'reason_code': 'out_of_bounds_partial',
+                    'reason_label': f'画像サイズ({w}x{h})を一部はみ出しています ({int(x1)}, {int(y1)}, {int(x2)}, {int(y2)})',
+                })
+                nx1 = max(0, int(round(x1)))
+                ny1 = max(0, int(round(y1)))
+                nx2 = min(w, int(round(x2)))
+                ny2 = min(h, int(round(y2)))
+                if (nx2 - nx1) >= 4 and (ny2 - ny1) >= 4:
+                    repaired_regions.append({
+                        'image_index': img_idx,
+                        'box': [nx1, ny1, nx2, ny2],
+                        'characters': chars,
+                    })
+                continue
+
+            repaired_regions.append(r)
+
+        return issues, repaired_regions
+
+    @action(detail=False, methods=['get'], url_path='broken_regions')
+    def broken_regions(self, request):
+        """Return items whose character_regions contain out-of-bounds, inverted, or missing-image boxes."""
+        qs = Item.objects.exclude(character_regions=[]).order_by('-id').only(
+            'id', 'artist', 'situation', 'characters', 'character_regions', 'link'
+        )
+        broken_items = []
+        for item in qs.iterator(chunk_size=100):
+            issues, _repaired = self._inspect_item_regions(item)
+            if issues:
+                broken_items.append({
+                    'id': item.id,
+                    'artist': item.artist or '',
+                    'situation': item.situation or '',
+                    'characters': item.characters or [],
+                    'character_regions': item.character_regions or [],
+                    'link': item.link or '',
+                    'issues': issues,
+                })
+        return Response({
+            'count': len(broken_items),
+            'items': broken_items,
+        })
+
+    @action(detail=True, methods=['post'], url_path='fix_broken_regions')
+    def fix_broken_regions(self, request, pk=None):
+        """Remove completely invalid/out-of-bounds boxes and clamp partially out-of-bounds boxes."""
+        item = self.get_object()
+        issues, repaired_regions = self._inspect_item_regions(item)
+        if not issues:
+            return Response({'status': 'unchanged', 'item': ItemSerializer(item, context={'request': request}).data})
+        item.character_regions = repaired_regions
+        item.save(update_fields=['character_regions'])
+        return Response({
+            'status': 'fixed',
+            'removed_or_clamped': len(issues),
+            'item': ItemSerializer(item, context={'request': request}).data,
+        })
+
+    @action(detail=False, methods=['post'], url_path='fix_all_broken_regions')
+    def fix_all_broken_regions(self, request):
+        """Auto-repair all items with broken character_regions (delete invalid/out-of-bounds, clamp partial)."""
+        qs = Item.objects.exclude(character_regions=[]).only('id', 'character_regions')
+        fixed_items = []
+        total_issues = 0
+        for item in qs.iterator(chunk_size=100):
+            issues, repaired_regions = self._inspect_item_regions(item)
+            if issues:
+                item.character_regions = repaired_regions
+                item.save(update_fields=['character_regions'])
+                fixed_items.append(item.id)
+                total_issues += len(issues)
+        return Response({
+            'fixed_item_count': len(fixed_items),
+            'fixed_issue_count': total_issues,
+            'fixed_item_ids': fixed_items,
+        })
+
+    @action(detail=False, methods=['get'], url_path='label_outliers')
+    def label_outliers(self, request):
+        """Analyze trained classifier + feature cache to surface potential mislabeled items/regions."""
+        import glob
+        import joblib
+        import numpy as np
+        from . import tagger
+
+        data_dir = tagger._data_dir()
+        model_files = [
+            p for p in glob.glob(os.path.join(data_dir, 'character_classifier_*.joblib'))
+            if '_cache_' not in os.path.basename(p)
+        ]
+        if not model_files:
+            return Response({
+                'detail': '学習済み分類器が見つかりません。先に「分類器の学習」を実行してください。',
+                'outliers': [],
+            })
+
+        model_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        model_path = model_files[0]
+        try:
+            model_bundle = joblib.load(model_path)
+        except Exception as e:
+            return Response({'detail': f'分類器の読み込みに失敗しました: {e}', 'outliers': []}, status=500)
+
+        clf = model_bundle.get('classifier')
+        classes = list(model_bundle.get('classes') or [])
+        backend_name = model_bundle.get('backend') or 'wd_v3'
+        feature_source = model_bundle.get('feature_source') or 'tags'
+        feature_dim = int(model_bundle.get('feature_dim') or 0)
+
+        if clf is None or not classes:
+            return Response({'detail': '分類器データが不完全です。再学習してください。', 'outliers': []})
+
+        cache_candidates = [
+            os.path.join(data_dir, f'character_classifier_cache_{backend_name}_{feature_source}.joblib'),
+            os.path.join(data_dir, f'character_classifier_cache_{backend_name}.joblib'),
+        ]
+        cache_candidates.extend(
+            sorted(glob.glob(os.path.join(data_dir, 'character_classifier_cache_*.joblib')), key=os.path.getmtime, reverse=True)
+        )
+        cache_path = next((p for p in cache_candidates if os.path.exists(p)), None)
+        if not cache_path:
+            return Response({
+                'detail': '学習時の特徴量キャッシュが見つかりません。先に「分類器の学習」を実行してください。',
+                'outliers': [],
+            })
+
+        try:
+            cache_bundle = joblib.load(cache_path)
+        except Exception as e:
+            return Response({'detail': f'特徴量キャッシュの読み込みに失敗しました: {e}', 'outliers': []}, status=500)
+
+        raw_entries = []
+        for entry in (cache_bundle.get('rows') or []):
+            # (item_id, char, feat, key)
+            if isinstance(entry, (list, tuple)) and len(entry) >= 4:
+                item_id, ch, feat, key = entry[0], entry[1], entry[2], entry[3]
+                if isinstance(key, str) and key.endswith(':gray'):
+                    continue
+                raw_entries.append((int(item_id), str(ch), feat, str(key)))
+
+        for entry in (cache_bundle.get('manual_rows') or []):
+            # (char, feat, key)
+            if isinstance(entry, (list, tuple)) and len(entry) >= 3:
+                ch, feat, key = entry[0], entry[1], entry[2]
+                if isinstance(key, str) and key.endswith(':gray'):
+                    continue
+                try:
+                    item_id = int(str(key).split(':', 2)[1])
+                except Exception:
+                    continue
+                raw_entries.append((item_id, str(ch), feat, str(key)))
+
+        valid_entries = [
+            e for e in raw_entries
+            if e[2] is not None and (feature_dim == 0 or len(e[2]) == feature_dim)
+        ]
+        if not valid_entries:
+            return Response({
+                'detail': '学習モデルと次元が一致するキャッシュデータが見つかりませんでした。',
+                'outliers': [],
+            })
+
+        item_ids = list({e[0] for e in valid_entries})
+        items_map = {
+            it.id: it
+            for it in Item.objects.filter(id__in=item_ids).only(
+                'id', 'artist', 'situation', 'characters', 'character_regions', 'titles', 'link'
+            )
+        }
+        first_preview_map = {}
+        for pi in PreviewImage.objects.filter(item_id__in=item_ids).order_by('item_id', 'order', 'id').values('id', 'item_id'):
+            first_preview_map.setdefault(pi['item_id'], pi['id'])
+
+        # Filter to entries whose assigned label still exists on the item in DB
+        active_entries = []
+        for item_id, ch, feat, key in valid_entries:
+            it = items_map.get(item_id)
+            if it is None:
+                continue
+            if key.startswith('solo:'):
+                if ch not in (it.characters or []):
+                    continue
+            elif key.startswith('reg:'):
+                # Keep if the character still exists in item's regions
+                reg_chars = set()
+                for r in (it.character_regions or []):
+                    for rc in (r.get('characters') or []):
+                        reg_chars.add(rc)
+                if ch not in reg_chars:
+                    continue
+            active_entries.append((item_id, ch, feat, key))
+
+        if not active_entries:
+            return Response({
+                'model_name': os.path.basename(model_path),
+                'total_checked': 0,
+                'outliers': [],
+            })
+
+        X = np.stack([e[2] for e in active_entries]).astype(np.float32)
+        probs = clf.predict_proba(X)
+        class_to_idx = {c: idx for idx, c in enumerate(classes)}
+
+        # Compute L2-normalized class centroids from the feature matrix
+        norms = np.linalg.norm(X, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        X_unit = X / norms
+
+        centroids = {}
+        by_class = {}
+        for idx, e in enumerate(active_entries):
+            by_class.setdefault(e[1], []).append(idx)
+        for ch, idxs in by_class.items():
+            c_vec = X_unit[idxs].mean(axis=0)
+            c_norm = np.linalg.norm(c_vec)
+            if c_norm > 0:
+                c_vec = c_vec / c_norm
+            centroids[ch] = c_vec
+
+        centroid_names = sorted(centroids.keys())
+        centroid_mat = np.stack([centroids[c] for c in centroid_names]) if centroid_names else None
+        centroid_name_to_idx = {c: i for i, c in enumerate(centroid_names)}
+        all_sims = (X_unit @ centroid_mat.T) if centroid_mat is not None else None
+
+        min_prob = float(request.query_params.get('min_prob', 0.35) or 0.35)
+        limit = min(int(request.query_params.get('limit', 200) or 200), 500)
+
+        outliers = []
+        for idx, (item_id, assigned_char, _feat, key) in enumerate(active_entries):
+            row_probs = probs[idx]
+            pred_idx = int(np.argmax(row_probs))
+            pred_char = classes[pred_idx]
+            pred_prob = float(row_probs[pred_idx])
+            assigned_prob = float(row_probs[class_to_idx[assigned_char]]) if assigned_char in class_to_idx else 0.0
+
+            own_sim = 0.0
+            nearest_char = assigned_char
+            nearest_sim = 0.0
+            if all_sims is not None and centroid_names:
+                sims_row = all_sims[idx]
+                if assigned_char in centroid_name_to_idx:
+                    own_sim = float(sims_row[centroid_name_to_idx[assigned_char]])
+                best_c_idx = int(np.argmax(sims_row))
+                nearest_char = centroid_names[best_c_idx]
+                nearest_sim = float(sims_row[best_c_idx])
+
+            prob_gap = pred_prob - assigned_prob
+            sim_gap = max(0.0, nearest_sim - own_sim)
+
+            is_clf_outlier = (pred_char != assigned_char) and (pred_prob >= min_prob) and (prob_gap >= 0.15)
+            is_cluster_outlier = (nearest_char != assigned_char) and (sim_gap >= 0.05)
+            if not (is_clf_outlier or is_cluster_outlier):
+                continue
+
+            it = items_map[item_id]
+            score = round(prob_gap + sim_gap, 4)
+            outliers.append({
+                'item_id': item_id,
+                'key': key,
+                'is_region': key.startswith('reg:'),
+                'assigned_char': assigned_char,
+                'predicted_char': pred_char,
+                'predicted_prob': round(pred_prob, 4),
+                'assigned_prob': round(assigned_prob, 4),
+                'own_cluster_sim': round(own_sim, 4),
+                'nearest_cluster_char': nearest_char,
+                'nearest_cluster_sim': round(nearest_sim, 4),
+                'outlier_score': score,
+                'artist': it.artist or '',
+                'situation': it.situation or '',
+                'titles': it.titles or [],
+                'characters': it.characters or [],
+                'link': it.link or '',
+                'first_preview_id': first_preview_map.get(item_id),
+            })
+
+        outliers.sort(key=lambda o: -o['outlier_score'])
+        return Response({
+            'model_name': os.path.basename(model_path),
+            'feature_source': feature_source,
+            'total_checked': len(active_entries),
+            'outlier_count': len(outliers),
+            'outliers': outliers[:limit],
+        })
+
+    @action(detail=True, methods=['post'], url_path='apply_label_fix')
+    def apply_label_fix(self, request, pk=None):
+        """Replace `old_char` with `new_char` on the item (characters and/or character_regions)."""
+        item = self.get_object()
+        old_char = (request.data.get('old_char') or '').strip()
+        new_char = (request.data.get('new_char') or '').strip()
+        is_region = bool(request.data.get('is_region', False))
+        if not old_char or not new_char:
+            return Response({'detail': 'old_char and new_char are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        changed_fields = []
+        if is_region and isinstance(item.character_regions, list):
+            new_regions = []
+            for r in item.character_regions:
+                if isinstance(r, dict):
+                    chars = [new_char if c == old_char else c for c in (r.get('characters') or [])]
+                    # Deduplicate while preserving order
+                    dedup = list(dict.fromkeys(chars))
+                    new_regions.append({**r, 'characters': dedup})
+                else:
+                    new_regions.append(r)
+            item.character_regions = new_regions
+            changed_fields.append('character_regions')
+
+        if isinstance(item.characters, list) and old_char in item.characters:
+            new_chars = [new_char if c == old_char else c for c in item.characters]
+            item.characters = list(dict.fromkeys(new_chars))
+            changed_fields.append('characters')
+
+        if changed_fields:
+            item.save(update_fields=changed_fields)
+        return Response({
+            'status': 'updated' if changed_fields else 'unchanged',
+            'item': ItemSerializer(item, context={'request': request}).data,
+        })
+
 
 def items_from_db(request):
     """Return all items serialized from the Django DB.
