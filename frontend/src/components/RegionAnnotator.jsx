@@ -356,7 +356,8 @@ export default function RegionAnnotator({
     const initialChars = stampChar ? [stampChar] : []
     setBoxes(prev => [...prev, { id, imageIndex: currentImageIndex, box: [x1, y1, x2, y2], characters: initialChars }])
     if (!stampChar) {
-      setActiveBoxId(id)
+      setActiveBoxId(null)
+      setSelectedBoxIds(new Set([id]))
     }
     setCharQuery('')
     if (onDirtyChange) onDirtyChange(true)
@@ -385,8 +386,8 @@ export default function RegionAnnotator({
   }
 
   function toggleBoxSelection(boxId, ev) {
+    setActiveBoxId(null)
     if (ev.shiftKey || ev.ctrlKey || ev.metaKey) {
-      setActiveBoxId(null)
       setSelectedBoxIds(prev => {
         const next = new Set(prev)
         if (next.has(boxId)) next.delete(boxId)
@@ -394,8 +395,7 @@ export default function RegionAnnotator({
         return next
       })
     } else {
-      setSelectedBoxIds(new Set())
-      setActiveBoxId(boxId)
+      setSelectedBoxIds(new Set([boxId]))
     }
     setCharQuery('')
   }
@@ -618,79 +618,7 @@ export default function RegionAnnotator({
         </div>
       )}
 
-      {selectedBoxIds.size > 0 && (
-        <div style={{ marginBottom: 10, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>
-              {selectedBoxIds.size}件の矩形を選択中 — 選んだキャラ名を全てに割り当てます(緑色=割り当て済み、もう一度クリックで取り消せます)
-            </span>
-            <button
-              type="button"
-              onClick={removeSelectedBoxes}
-              style={{ marginLeft: 'auto', fontSize: 11, color: '#fecaca', background: '#7f1d1d', border: 'none', borderRadius: 4, padding: '3px 8px', cursor: 'pointer' }}
-              title="選択中の矩形をまとめて削除します"
-            >選択中を削除</button>
-            <button onClick={() => setSelectedBoxIds(new Set())}
-              style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
-            >選択解除</button>
-          </div>
-
-          {/* Quick pick for multi-selection */}
-          {quickPickChars.length > 0 && (
-            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>⚡ よく使うキャラ:</span>
-              {quickPickChars.map(c => {
-                const assigned = isAssignedToAllSelected(c)
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => toggleCharacterForSelectedBoxes(c)}
-                    style={{
-                      fontSize: 11, padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
-                      background: assigned ? '#166534' : '#334155', color: assigned ? '#dcfce7' : '#f1f5f9',
-                    }}
-                  >
-                    {assigned ? '✓ ' : '+ '}{c}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
-          <input
-            autoFocus
-            placeholder="キャラ名で検索/新規入力"
-            value={charQuery}
-            onChange={e => setCharQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) toggleCharacterForSelectedBoxes(charQuery) }}
-            style={{
-              width: '100%', boxSizing: 'border-box', background: '#0f172a', color: '#f1f5f9',
-              border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
-            }}
-          />
-          {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
-            {charSuggestions.map(c => {
-              const assigned = isAssignedToAllSelected(c)
-              return (
-                <button key={c} onClick={() => toggleCharacterForSelectedBoxes(c)}
-                  style={{
-                    fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', cursor: 'pointer',
-                    background: assigned ? '#166534' : '#334155', color: assigned ? '#dcfce7' : '#f1f5f9',
-                  }}
-                >{assigned ? '✓ ' : ''}{c}</button>
-              )
-            })}
-            {charQuery.trim() && !charSuggestions.some(c => c.toLowerCase() === charQuery.trim().toLowerCase()) && (
-              <button onClick={() => toggleCharacterForSelectedBoxes(charQuery)}
-                style={{ fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', background: '#1e3a8a', color: '#93c5fd', cursor: 'pointer' }}
-              >＋「{charQuery.trim()}」を新規追加</button>
-            )}
-          </div>
-        </div>
-      )}
-
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
       <div
         ref={containerRef}
         style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', cursor: stampChar ? 'copy' : 'crosshair', userSelect: 'none' }}
@@ -789,137 +717,6 @@ export default function RegionAnnotator({
                 }}
                 title="この矩形を削除"
               >×</button>
-
-              {activeBoxId === b.id && (
-                <div onClick={ev => ev.stopPropagation()} onMouseDown={ev => ev.stopPropagation()} style={{
-                  position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 10,
-                  background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 8,
-                  width: 250, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                }}>
-                  {/* Quick Pick: Already assigned characters */}
-                  {quickPickChars.length > 0 && (
-                    <div style={{ marginBottom: 8, paddingBottom: 6, borderBottom: '1px solid #334155' }}>
-                      <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
-                        <span>⚡ 指定済みのキャラ (ワンクリック割当):</span>
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                        {quickPickChars.map(c => {
-                          const selected = b.characters.includes(c)
-                          const count = allAssignedCharCounts[c] || 0
-                          const color = getCharColor(c)
-                          return (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => toggleCharacter(b.id, c)}
-                              style={{
-                                fontSize: 11, padding: '3px 7px', borderRadius: 4, border: 'none', cursor: 'pointer',
-                                background: selected ? (color ? color.tag : '#166534') : '#334155',
-                                color: selected ? '#fff' : '#f1f5f9',
-                                display: 'inline-flex', alignItems: 'center', gap: 3,
-                              }}
-                              title={`${c} (${count}箇所で割り当て中。クリックでこの矩形に割当/解除)`}
-                            >
-                              <span>{selected ? '✓' : '+'}</span>
-                              <span>{c}</span>
-                              {count > 1 && (
-                                <span style={{ fontSize: 9, opacity: 0.8, background: 'rgba(0,0,0,0.25)', padding: '0 3px', borderRadius: 2 }}>
-                                  {count}
-                                </span>
-                              )}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {activeBox && activeBox.characters.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
-                      {activeBox.characters.map(c => (
-                        <span key={c} style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 4, background: '#166534',
-                          color: '#dcfce7', borderRadius: 4, padding: '2px 6px', fontSize: 12,
-                        }}>
-                          {c}
-                          <button onClick={() => toggleCharacter(b.id, c)}
-                            style={{ border: 'none', background: 'none', color: '#dcfce7', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1 }}
-                            title="このキャラを解除"
-                          >×</button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  <input
-                    autoFocus
-                    placeholder="キャラ名で検索/新規入力"
-                    value={charQuery}
-                    onChange={e => setCharQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) toggleCharacter(b.id, charQuery) }}
-                    style={{
-                      width: '100%', boxSizing: 'border-box', background: '#0f172a', color: '#f1f5f9',
-                      border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
-                    }}
-                  />
-                  {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
-                  <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-                    {charSuggestions.map(c => {
-                      const selected = b.characters.includes(c)
-                      return (
-                        <div key={c} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 4, background: selected ? '#334155' : 'transparent' }}>
-                          <button onClick={() => toggleCharacter(b.id, c)}
-                            style={{
-                              display: 'flex', alignItems: 'center', gap: 6, flex: 1, textAlign: 'left',
-                              background: 'none', border: 'none',
-                              color: '#f1f5f9', padding: '5px 6px', fontSize: 13, cursor: 'pointer',
-                            }}
-                          >
-                            <span style={{ width: 14 }}>{selected ? '✓' : ''}</span>
-                            <span>{c}</span>
-                            {allAssignedCharCounts[c] > 0 && (
-                              <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 'auto', marginRight: 4 }}>
-                                ({allAssignedCharCounts[c]}箇所)
-                              </span>
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setStampChar(c); setActiveBoxId(null) }}
-                            style={{ border: 'none', background: 'transparent', color: '#60a5fa', cursor: 'pointer', padding: '4px 6px', fontSize: 11 }}
-                            title={`「${c}」の連続割り当てスタンプモードにする`}
-                          >
-                            📌
-                          </button>
-                        </div>
-                      )
-                    })}
-                    {charQuery.trim() && !charSuggestions.some(c => c.toLowerCase() === charQuery.trim().toLowerCase()) && (
-                      <button onClick={() => toggleCharacter(b.id, charQuery)}
-                        style={{
-                          display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
-                          color: '#93c5fd', padding: '5px 6px', fontSize: 13, cursor: 'pointer',
-                        }}
-                      >＋「{charQuery.trim()}」を新規追加</button>
-                    )}
-                  </div>
-                  <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <button onClick={() => setActiveBoxId(null)}
-                      style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
-                    >閉じる</button>
-                    {b.characters.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => { setStampChar(b.characters[0]); setActiveBoxId(null) }}
-                        style={{ fontSize: 11, color: '#60a5fa', background: 'none', border: 'none', cursor: 'pointer' }}
-                        title="このキャラで別の矩形も次々指定する"
-                      >
-                        📌 連続スタンプ
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           )
         })}
@@ -934,6 +731,122 @@ export default function RegionAnnotator({
             }} />
           )
         })()}
+      </div>
+
+      {/* Fixed right-side character assignment panel */}
+      <div
+        onClick={ev => ev.stopPropagation()}
+        onMouseDown={ev => ev.stopPropagation()}
+        style={{
+          flex: '1 1 280px',
+          minWidth: 260,
+          maxWidth: 420,
+          background: '#1e293b',
+          border: '1px solid #334155',
+          borderRadius: 6,
+          padding: 10,
+        }}
+      >
+        {selectedBoxIds.size > 0 ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: '#f1f5f9', fontWeight: 600 }}>
+                {selectedBoxIds.size}件の矩形を選択中
+              </span>
+              <button
+                type="button"
+                onClick={removeSelectedBoxes}
+                style={{ marginLeft: 'auto', fontSize: 11, color: '#fecaca', background: '#7f1d1d', border: 'none', borderRadius: 4, padding: '3px 8px', cursor: 'pointer' }}
+                title="選択中の矩形をまとめて削除します"
+              >選択中を削除</button>
+              <button
+                type="button"
+                onClick={() => setSelectedBoxIds(new Set())}
+                style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}
+              >選択解除</button>
+            </div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+              選んだキャラ名を全てに割り当てます（緑色=割り当て済み、もう一度クリックで解除）
+            </div>
+
+            {quickPickChars.length > 0 && (
+              <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>⚡ よく使うキャラ:</span>
+                {quickPickChars.map(c => {
+                  const assigned = isAssignedToAllSelected(c)
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => toggleCharacterForSelectedBoxes(c)}
+                      style={{
+                        fontSize: 11, padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                        background: assigned ? '#166534' : '#334155', color: assigned ? '#dcfce7' : '#f1f5f9',
+                      }}
+                    >
+                      {assigned ? '✓ ' : '+ '}{c}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            <input
+              placeholder="キャラ名で検索/新規入力"
+              value={charQuery}
+              onChange={e => setCharQuery(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && charQuery.trim()) toggleCharacterForSelectedBoxes(charQuery) }}
+              style={{
+                width: '100%', boxSizing: 'border-box', background: '#0f172a', color: '#f1f5f9',
+                border: '1px solid #334155', borderRadius: 4, padding: '6px 8px', fontSize: 13, marginBottom: 6,
+              }}
+            />
+            {scopeHint && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>{scopeHint}</div>}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+              {charSuggestions.map(c => {
+                const assigned = isAssignedToAllSelected(c)
+                return (
+                  <div key={c} style={{ display: 'inline-flex', alignItems: 'center', borderRadius: 4, background: assigned ? '#166534' : '#334155' }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleCharacterForSelectedBoxes(c)}
+                      style={{
+                        fontSize: 12, padding: '5px 8px', borderRadius: '4px 0 0 4px', border: 'none', cursor: 'pointer',
+                        background: 'transparent', color: assigned ? '#dcfce7' : '#f1f5f9',
+                      }}
+                    >
+                      {assigned ? '✓ ' : ''}{c}
+                      {allAssignedCharCounts[c] > 0 && (
+                        <span style={{ fontSize: 10, opacity: 0.75, marginLeft: 4 }}>({allAssignedCharCounts[c]})</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStampChar(c)}
+                      style={{ border: 'none', background: 'transparent', color: '#93c5fd', cursor: 'pointer', padding: '5px 6px 5px 2px', fontSize: 11 }}
+                      title={`「${c}」の連続割り当てスタンプモードにする`}
+                    >
+                      📌
+                    </button>
+                  </div>
+                )
+              })}
+              {charQuery.trim() && !charSuggestions.some(c => c.toLowerCase() === charQuery.trim().toLowerCase()) && (
+                <button
+                  type="button"
+                  onClick={() => toggleCharacterForSelectedBoxes(charQuery)}
+                  style={{ fontSize: 12, padding: '5px 10px', borderRadius: 4, border: 'none', background: '#1e3a8a', color: '#93c5fd', cursor: 'pointer' }}
+                >＋「{charQuery.trim()}」を新規追加</button>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.6 }}>
+            <div style={{ fontWeight: 600, color: '#cbd5e1', marginBottom: 4 }}>キャラ割り当て</div>
+            画像上の矩形、または下の領域一覧から矩形を選択するとここでキャラを割り当てられます（Shift/Ctrl+クリックで複数選択）。
+          </div>
+        )}
+      </div>
       </div>
 
       {loupeEnabled && !drawRect && (

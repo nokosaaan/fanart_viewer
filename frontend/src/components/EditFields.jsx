@@ -660,92 +660,128 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
           </div>
         </div>
 
-        {/* 2行目: TITLE | ARTIST | SITUATION | TAGS を横1列でコンパクト配置 */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 0.8fr 1fr 1.3fr', gap: 8, marginBottom: 8, alignItems: 'start', flexShrink: 0 }}>
-          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
-            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>TITLE ★</label>
-            <TagField
-              label=""
-              hint=""
-              list={titleList} setList={setTitleList}
-              allOptions={allTitles} setAllOptions={setAllTitles}
-              selectPlaceholder="タイトル検索/入力"
-            />
-            {(titleSuggestions.length > 0 || titleCandidates.length > 0) && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 4 }}>
-                {titleSuggestions.slice(0, 4).map(t => {
-                  const isAdded = titleList.includes(t.name)
-                  return (
-                    <button key={t.name} type="button" onClick={() => toggleTitleCandidate(t.name)}
-                      style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', cursor: 'pointer', background: isAdded ? '#166534' : '#334155', color: '#f1f5f9' }}
-                      title={`score ${t.score}`}
-                    >
-                      {isAdded ? '✓ ' : '＋ '}{t.name}
-                    </button>
-                  )
-                })}
-                {titleSuggestions.length === 0 && titleCandidates.slice(0, 4).map(t => {
-                  const isAdded = titleList.includes(t)
-                  return (
-                    <button key={t} type="button" onClick={() => toggleTitleCandidate(t)}
-                      style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', cursor: 'pointer', background: isAdded ? '#166534' : '#78350f', color: '#fef3c7' }}
-                    >
-                      {isAdded ? '✓ ' : '＋ '}{t}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
-            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>ARTIST</label>
-            <input
-              style={{ width: '100%', background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '5px 8px', fontSize: 12, boxSizing: 'border-box' }}
-              value={artist} onChange={e => setArtist(e.target.value)}
-              placeholder="作者名 / ID"
-            />
-          </div>
-
-          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
-            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>SITUATION</label>
-            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
-              {situationsList.map(s => (
-                <button key={s.value} type="button" onClick={() => setSituation(prev => prev === s.value ? '' : s.value)}
-                  style={{
-                    padding: '3px 7px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 500,
-                    background: situation === s.value ? '#3b82f6' : '#1e293b',
-                    color: situation === s.value ? '#fff' : '#94a3b8',
-                    outline: situation === s.value ? '1px solid #60a5fa' : '1px solid #334155',
-                  }}
-                >{s.label || '—'}</button>
-              ))}
-              {!showAddSituation && (
-                <button type="button" onClick={() => setShowAddSituation(true)}
-                  style={{ padding: '2px 6px', borderRadius: 4, border: '1px dashed #475569', cursor: 'pointer', fontSize: 10, background: 'transparent', color: '#94a3b8' }}
-                >＋</button>
-              )}
+        {/* 2行目: 左=TITLE + 大きめの候補TITLE | 右=ARTIST / SITUATION / TAGS を縦3等分 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 8, marginBottom: 8, alignItems: 'stretch', flexShrink: 0 }}>
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '8px 10px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div>
+              <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>TITLE ★</label>
+              <TagField
+                label=""
+                hint=""
+                list={titleList} setList={setTitleList}
+                allOptions={allTitles} setAllOptions={setAllTitles}
+                selectPlaceholder="タイトル検索/入力"
+              />
             </div>
-            {showAddSituation && (
-              <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                <input type="text" placeholder="新規" value={newSituationInput} onChange={e => setNewSituationInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') handleAddSituation() }}
-                  style={{ background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '3px 6px', fontSize: 11, width: 90 }}
-                  autoFocus
-                />
-                <button type="button" className="btn" onClick={handleAddSituation} style={{ fontSize: 10, padding: '2px 6px' }}>追加</button>
-                <button type="button" className="btn" onClick={() => { setShowAddSituation(false); setNewSituationInput('') }} style={{ fontSize: 10, padding: '2px 6px' }}>×</button>
+            {(titleSuggestions.length > 0 || titleCandidates.length > 0) && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, letterSpacing: '0.04em' }}>
+                  候補TITLE（クリックで選択/解除）
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignContent: 'flex-start' }}>
+                  {(showAllTitles ? titleSuggestions : titleSuggestions.slice(0, 6)).map(t => {
+                    const isAdded = titleList.includes(t.name)
+                    return (
+                      <button key={t.name} type="button" onClick={() => toggleTitleCandidate(t.name)}
+                        style={{
+                          fontSize: 12,
+                          fontWeight: isAdded ? 700 : 500,
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: isAdded ? '1px solid #22c55e' : '1px solid #475569',
+                          cursor: 'pointer',
+                          background: isAdded ? '#166534' : '#1e293b',
+                          color: '#f1f5f9',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                        title={`score ${t.score}`}
+                      >
+                        <span>{isAdded ? '✓' : '＋'} {t.name}</span>
+                        <span style={{ fontSize: 10, opacity: 0.75 }}>{t.score}</span>
+                      </button>
+                    )
+                  })}
+                  {titleSuggestions.length > 6 && (
+                    <button type="button" className="btn" onClick={() => setShowAllTitles(v => !v)} style={{ fontSize: 11, padding: '4px 8px' }}>
+                      {showAllTitles ? '▲ 閉じる' : `+${titleSuggestions.length - 6}件`}
+                    </button>
+                  )}
+                  {titleSuggestions.length === 0 && titleCandidates.slice(0, 6).map(t => {
+                    const isAdded = titleList.includes(t)
+                    return (
+                      <button key={t} type="button" onClick={() => toggleTitleCandidate(t)}
+                        style={{
+                          fontSize: 12,
+                          fontWeight: isAdded ? 700 : 500,
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: isAdded ? '1px solid #22c55e' : '1px solid #92400e',
+                          cursor: 'pointer',
+                          background: isAdded ? '#166534' : '#78350f',
+                          color: '#fef3c7',
+                        }}
+                      >
+                        {isAdded ? '✓ ' : '＋ '}{t}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </div>
 
-          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
-            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>TAGS</label>
-            <input
-              style={{ width: '100%', background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '5px 8px', fontSize: 12, boxSizing: 'border-box' }}
-              value={tags} onChange={e => setTags(e.target.value)}
-              placeholder="tag1, tag2, tag3"
-            />
+          <div style={{ display: 'grid', gridTemplateRows: 'repeat(3, minmax(0, 1fr))', gap: 6, minWidth: 0 }}>
+            <div style={{ background: '#0f172a', borderRadius: 6, padding: '5px 8px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', width: 64, flexShrink: 0 }}>ARTIST</label>
+              <input
+                style={{ flex: 1, minWidth: 0, background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '4px 8px', fontSize: 12, boxSizing: 'border-box' }}
+                value={artist} onChange={e => setArtist(e.target.value)}
+                placeholder="作者名 / ID"
+              />
+            </div>
+
+            <div style={{ background: '#0f172a', borderRadius: 6, padding: '5px 8px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', width: 64, flexShrink: 0 }}>SITUATION</label>
+              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                {situationsList.map(s => (
+                  <button key={s.value} type="button" onClick={() => setSituation(prev => prev === s.value ? '' : s.value)}
+                    style={{
+                      padding: '3px 7px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 500,
+                      background: situation === s.value ? '#3b82f6' : '#1e293b',
+                      color: situation === s.value ? '#fff' : '#94a3b8',
+                      outline: situation === s.value ? '1px solid #60a5fa' : '1px solid #334155',
+                    }}
+                  >{s.label || '—'}</button>
+                ))}
+                {!showAddSituation && (
+                  <button type="button" onClick={() => setShowAddSituation(true)}
+                    style={{ padding: '2px 6px', borderRadius: 4, border: '1px dashed #475569', cursor: 'pointer', fontSize: 10, background: 'transparent', color: '#94a3b8' }}
+                  >＋</button>
+                )}
+                {showAddSituation && (
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <input type="text" placeholder="新規" value={newSituationInput} onChange={e => setNewSituationInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAddSituation() }}
+                      style={{ background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '3px 6px', fontSize: 11, width: 80 }}
+                      autoFocus
+                    />
+                    <button type="button" className="btn" onClick={handleAddSituation} style={{ fontSize: 10, padding: '2px 6px' }}>追加</button>
+                    <button type="button" className="btn" onClick={() => { setShowAddSituation(false); setNewSituationInput('') }} style={{ fontSize: 10, padding: '2px 6px' }}>×</button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ background: '#0f172a', borderRadius: 6, padding: '5px 8px', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', width: 64, flexShrink: 0 }}>TAGS</label>
+              <input
+                style={{ flex: 1, minWidth: 0, background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '4px 8px', fontSize: 12, boxSizing: 'border-box' }}
+                value={tags} onChange={e => setTags(e.target.value)}
+                placeholder="tag1, tag2, tag3"
+              />
+            </div>
           </div>
         </div>
 
