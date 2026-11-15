@@ -308,7 +308,21 @@ def ccip_available():
     return _ccip_importable
 
 
-def ccip_feature(image_bytes):
+def _decode_rgb_pil(image_bytes):
+    """Decode raw image bytes into an RGB PIL.Image once, flattening alpha onto white only when needed."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes))
+    has_alpha = image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info)
+    if has_alpha:
+        rgba = image.convert('RGBA')
+        canvas = Image.new('RGBA', rgba.size, (255, 255, 255))
+        canvas.alpha_composite(rgba)
+        return canvas.convert('RGB')
+    return image.convert('RGB')
+
+
+def ccip_feature(image_bytes, pil_image=None):
     """CCIP (deepghs' Character Contrastive Image Pretraining, via imgutils)
     embedding of an image -- a 768-d vector trained so that two pictures of
     the SAME anime character land close together regardless of outfit, pose
@@ -318,12 +332,9 @@ def ccip_feature(image_bytes):
         raise RuntimeError('ccip_feature needs dghs-imgutils with its CCIP module importable (see requirements.txt)')
     os.environ.setdefault('HF_HOME', os.path.join(_data_dir(), 'hf_cache'))
     from imgutils.metrics import ccip_extract_feature
-    from PIL import Image
 
-    image = Image.open(io.BytesIO(image_bytes))
-    canvas = Image.new('RGBA', image.size, (255, 255, 255))
-    canvas.alpha_composite(image.convert('RGBA'))
-    return np.asarray(ccip_extract_feature(canvas.convert('RGB')), dtype=np.float32)
+    rgb = pil_image if pil_image is not None else _decode_rgb_pil(image_bytes)
+    return np.asarray(ccip_extract_feature(rgb), dtype=np.float32)
 
 
 def to_grayscale_bytes(image_bytes):
@@ -457,10 +468,12 @@ def _load_timm(repo):
         os.environ.setdefault('HF_HOME', os.path.join(_data_dir(), 'hf_cache'))
 
         import timm
+        import torch
         from huggingface_hub import hf_hub_download
         from timm.data import create_transform, resolve_data_config
 
-        model = timm.create_model(f"hf-hub:{repo}", pretrained=True).eval()
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = timm.create_model(f"hf-hub:{repo}", pretrained=True).eval().to(device)
 
         labels_path = hf_hub_download(repo_id=repo, filename=LABELS_FILENAME)
         tag_names = []
@@ -481,6 +494,7 @@ def _load_timm(repo):
 
         state = {
             'model': model,
+            'device': device,
             'transform': transform,
             'tag_names': tag_names,
             'rating_idx': rating_idx,
@@ -491,7 +505,7 @@ def _load_timm(repo):
         return state
 
 
-def _prepare_image_timm(image_bytes, transform):
+def _prepare_image_timm(image_bytes, transform, pil_image=None):
     """Mirrors https://github.com/neggles/wdv3-timm (the reference
     inference code this model's own README links to) — verified against
     that script rather than guessed: pad-to-square with a white background,
@@ -502,10 +516,7 @@ def _prepare_image_timm(image_bytes, transform):
     """
     from PIL import Image
 
-    image = Image.open(io.BytesIO(image_bytes))
-    canvas = Image.new('RGBA', image.size, (255, 255, 255))
-    canvas.alpha_composite(image.convert('RGBA'))
-    image = canvas.convert('RGB')
+    image = pil_image if pil_image is not None else _decode_rgb_pil(image_bytes)
 
     max_dim = max(image.size)
     padded = Image.new('RGB', (max_dim, max_dim), (255, 255, 255))
@@ -525,18 +536,50 @@ def _timm_forward(image_bytes, model_repo, with_embedding=False):
     repo = model_repo or TIMM_MODEL_REPO
     state = _load_timm(repo)  # sets HF_HOME and imports torch/timm as a side effect, before this next import
     import torch
+    device = state.get('device')
     tensor = _prepare_image_timm(image_bytes, state['transform'])
+    if device is not None:
+        tensor = tensor.to(device)
 
     with torch.inference_mode():
         embedding = None
         if with_embedding:
             features = state['model'].forward_features(tensor)
-            embedding = state['model'].forward_head(features, pre_logits=True).squeeze(0).numpy().astype(np.float32)
+            embedding = state['model'].forward_head(features, pre_logits=True).squeeze(0).cpu().numpy().astype(np.float32)
             logits = state['model'].forward_head(features)
         else:
             logits = state['model'](tensor)
-        preds = torch.sigmoid(logits).squeeze(0).numpy()
+        preds = torch.sigmoid(logits).squeeze(0).cpu().numpy()
     return preds, state, embedding
+
+
+def extract_embeddings_batch(image_bytes_list, model_repo=None, pil_images=None):
+    """Batched pre-logit embeddings for the canary (timm/EVA02) backend, skipping the classification head."""
+    if not HAVE_TIMM:
+        raise RuntimeError(
+            "extract_embeddings_batch needs the 'timm' backend (torch/timm installed)."
+        )
+    repo = model_repo or TIMM_MODEL_REPO
+    state = _load_timm(repo)
+    import torch
+
+    items = pil_images if pil_images is not None else image_bytes_list
+    if not items:
+        return np.empty((0, 0), dtype=np.float32)
+
+    tensors = [
+        _prepare_image_timm(None if pil_images is not None else item, state['transform'], pil_image=item if pil_images is not None else None)
+        for item in items
+    ]
+    batch = torch.cat(tensors, dim=0)
+    device = state.get('device')
+    if device is not None:
+        batch = batch.to(device)
+
+    with torch.inference_mode():
+        features = state['model'].forward_features(batch)
+        embs = state['model'].forward_head(features, pre_logits=True)
+        return embs.cpu().numpy().astype(np.float32)
 
 
 def _raw_predict_timm(image_bytes, model_repo):

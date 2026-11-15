@@ -974,7 +974,7 @@ function AppMain({ role, onLogout }){
             // データを更新した等)後に最新の状態を確実に反映させるため。
             { label: <MenuIconLabel iconNode={<ReloadIcon />} text="再読み込み" />, onClick: () => window.location.reload() },
             { label: <MenuIconLabel iconNode="🌓" text="表示設定" />, onClick: () => setThemeOpen(true) },
-            { label: <MenuIconLabel iconNode="📊" text="作者別統計" />, onClick: () => setArtistStatsOpen(true), tourId: 'menu-artist-stats' },
+            { label: <MenuIconLabel iconNode="📊" text="統計" />, onClick: () => setArtistStatsOpen(true), tourId: 'menu-artist-stats' },
             ...(readOnly ? [] : [
               { divider: true },
               {

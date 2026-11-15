@@ -2,26 +2,33 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import EditFields from './EditFields'
 import { notify } from '../lib/crossWindowSync'
 
-const DISMISSED_KEY = 'fv_label_outlier_dismissed_v1'
+const RESOLVED_KEY = 'fv_label_outlier_resolved_v2'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*([^;]+)')
   return m ? m.pop() : ''
 }
 
-function loadDismissed() {
+function loadResolved(modelVersion = '') {
   try {
-    const raw = localStorage.getItem(DISMISSED_KEY)
-    const arr = raw ? JSON.parse(raw) : []
-    return new Set(Array.isArray(arr) ? arr : [])
+    const raw = localStorage.getItem(RESOLVED_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    if (!parsed || typeof parsed !== 'object') return new Set()
+    if (modelVersion && parsed.modelVersion && parsed.modelVersion !== modelVersion) {
+      return new Set()
+    }
+    return new Set(Array.isArray(parsed.keys) ? parsed.keys : [])
   } catch (_) {
     return new Set()
   }
 }
 
-function saveDismissed(setObj) {
+function saveResolved(modelVersion, setObj) {
   try {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...setObj]))
+    localStorage.setItem(RESOLVED_KEY, JSON.stringify({
+      modelVersion: modelVersion || '',
+      keys: [...setObj],
+    }))
   } catch (_) {}
 }
 
@@ -33,7 +40,7 @@ export default function LabelOutliersModal({ onClose }) {
   const [outliers, setOutliers] = useState([])
   const [filterText, setFilterText] = useState('')
   const [minProb, setMinProb] = useState(0.35)
-  const [dismissed, setDismissed] = useState(() => loadDismissed())
+  const [resolved, setResolved] = useState(() => loadResolved())
   const [busyKey, setBusyKey] = useState(null)
   const [editingItem, setEditingItem] = useState(null)
 
@@ -49,12 +56,17 @@ export default function LabelOutliersModal({ onClose }) {
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(j.detail || `取得に失敗しました (${r.status})`)
       if (j.detail) setInfoMsg(j.detail)
+      const modelVersion = j.model_name ? `${j.model_name}:${j.model_mtime || 0}` : ''
       setMeta({
         modelName: j.model_name,
+        modelVersion,
         featureSource: j.feature_source,
         totalChecked: j.total_checked || 0,
         outlierCount: j.outlier_count || 0,
       })
+      if (modelVersion) {
+        setResolved(loadResolved(modelVersion))
+      }
       setOutliers(Array.isArray(j.outliers) ? j.outliers : [])
     } catch (e) {
       setError(e.message || '読み込みに失敗しました')
@@ -68,7 +80,7 @@ export default function LabelOutliersModal({ onClose }) {
   const visibleOutliers = useMemo(() => {
     const q = filterText.trim().toLowerCase()
     return outliers.filter(o => {
-      if (dismissed.has(`${o.key}:${o.assigned_char}`)) return false
+      if (resolved.has(`${o.key}:${o.assigned_char}`)) return false
       if (!q) return true
       return (
         String(o.item_id).includes(q) ||
@@ -78,7 +90,7 @@ export default function LabelOutliersModal({ onClose }) {
         (o.artist || '').toLowerCase().includes(q)
       )
     })
-  }, [outliers, dismissed, filterText])
+  }, [outliers, resolved, filterText])
 
   async function applyFix(o, newChar) {
     if (!newChar) return
@@ -106,12 +118,12 @@ export default function LabelOutliersModal({ onClose }) {
     }
   }
 
-  function dismissOne(o) {
+  function resolveOne(o) {
     const k = `${o.key}:${o.assigned_char}`
-    setDismissed(prev => {
+    setResolved(prev => {
       const next = new Set(prev)
       next.add(k)
-      saveDismissed(next)
+      saveResolved(meta?.modelVersion || '', next)
       return next
     })
   }
@@ -163,13 +175,13 @@ export default function LabelOutliersModal({ onClose }) {
               <option value={0.7}>70%以上（厳格）</option>
             </select>
           </label>
-          {dismissed.size > 0 && (
+          {resolved.size > 0 && (
             <button
               className="btn"
               style={{ fontSize: 11 }}
-              onClick={() => { setDismissed(new Set()); saveDismissed(new Set()) }}
+              onClick={() => { setResolved(new Set()); saveResolved(meta?.modelVersion || '', new Set()) }}
             >
-              スキップ解除 ({dismissed.size}件)
+              解決済みを再表示 ({resolved.size}件)
             </button>
           )}
         </div>
@@ -290,11 +302,12 @@ export default function LabelOutliersModal({ onClose }) {
                         </button>
                         <button
                           className="btn"
-                          style={{ fontSize: 12, color: 'var(--muted)' }}
-                          onClick={() => dismissOne(o)}
+                          style={{ fontSize: 12, background: '#334155', color: '#e2e8f0' }}
+                          onClick={() => resolveOne(o)}
                           disabled={isBusy}
+                          title="現在の学習モデルでは解決済みとして一覧から除外します（再学習後に再び外れ値になった場合は再表示されます）"
                         >
-                          問題なし（スキップ）
+                          ✓ 解決済み
                         </button>
                       </div>
                     </div>

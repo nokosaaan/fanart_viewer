@@ -184,7 +184,9 @@ def start(options: dict):
             pass
 
         try:
-            proc = subprocess.Popen([sys.executable, '--train-classifier', *argv])
+            env = dict(os.environ)
+            env['PYTHONUNBUFFERED'] = '1'
+            proc = subprocess.Popen([sys.executable, '--train-classifier', *argv], env=env)
         except Exception as e:
             logger.exception('Failed to start train_character_classifier subprocess')
             raise RuntimeError(f'学習プロセスの起動に失敗しました: {e}')

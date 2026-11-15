@@ -1,9 +1,17 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 
-export default function ArtistStatsModal({ onClose, onSelectArtist }) {
+const TABS = [
+  { id: 'artists', label: '作者', unit: '名', placeholder: '作者名で絞り込み…', unassignedLabel: '作者未設定' },
+  { id: 'characters', label: 'キャラクター', unit: '人', placeholder: 'キャラ名で絞り込み…', unassignedLabel: 'キャラ未設定' },
+  { id: 'situations', label: 'シチュエーション', unit: '種', placeholder: 'シチュエーションで絞り込み…', unassignedLabel: 'シチュエーション未設定' },
+  { id: 'titles', label: 'タイトル', unit: '件', placeholder: 'タイトルで絞り込み…', unassignedLabel: 'タイトル未設定' },
+]
+
+export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilter = null }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [activeTab, setActiveTab] = useState('artists')
   const [filterText, setFilterText] = useState('')
   const [sortBy, setSortBy] = useState('items') // 'items' | 'images' | 'name'
 
@@ -11,7 +19,7 @@ export default function ArtistStatsModal({ onClose, onSelectArtist }) {
     setLoading(true)
     setError('')
     try {
-      const resp = await fetch('/api/items/artist_stats/', { cache: 'no-store' })
+      const resp = await fetch('/api/items/stats/', { cache: 'no-store' })
       const j = await resp.json().catch(() => ({}))
       if (!resp.ok) throw new Error(j.detail || `統計の取得に失敗しました (${resp.status})`)
       setData(j)
@@ -26,46 +34,51 @@ export default function ArtistStatsModal({ onClose, onSelectArtist }) {
     loadStats()
   }, [loadStats])
 
-  const displayedArtists = useMemo(() => {
-    const list = (data && Array.isArray(data.artists)) ? data.artists : []
+  const tabMeta = TABS.find(t => t.id === activeTab) || TABS[0]
+  const currentBucket = data && data[activeTab] ? data[activeTab] : null
+
+  const displayedRows = useMemo(() => {
+    const list = (currentBucket && Array.isArray(currentBucket.rows)) ? currentBucket.rows : []
     const q = filterText.trim().toLowerCase()
     const filtered = q
-      ? list.filter(a => a.artist.toLowerCase().includes(q))
+      ? list.filter(row => row.name.toLowerCase().includes(q))
       : list
     const sorted = [...filtered]
     if (sortBy === 'images') {
-      sorted.sort((a, b) => (b.image_count - a.image_count) || (b.item_count - a.item_count) || a.artist.localeCompare(b.artist))
+      sorted.sort((a, b) => (b.image_count - a.image_count) || (b.item_count - a.item_count) || a.name.localeCompare(b.name))
     } else if (sortBy === 'name') {
-      sorted.sort((a, b) => a.artist.localeCompare(b.artist))
+      sorted.sort((a, b) => a.name.localeCompare(b.name))
     } else {
-      sorted.sort((a, b) => (b.item_count - a.item_count) || (b.image_count - a.image_count) || a.artist.localeCompare(b.artist))
+      sorted.sort((a, b) => (b.item_count - a.item_count) || (b.image_count - a.image_count) || a.name.localeCompare(b.name))
     }
     return sorted
-  }, [data, filterText, sortBy])
+  }, [currentBucket, filterText, sortBy])
 
   const maxCount = useMemo(() => {
-    if (displayedArtists.length === 0) return 1
+    if (displayedRows.length === 0) return 1
     if (sortBy === 'images') {
-      return Math.max(1, ...displayedArtists.map(a => a.image_count))
+      return Math.max(1, ...displayedRows.map(r => r.image_count))
     }
-    return Math.max(1, ...displayedArtists.map(a => a.item_count))
-  }, [displayedArtists, sortBy])
+    return Math.max(1, ...displayedRows.map(r => r.item_count))
+  }, [displayedRows, sortBy])
+
+  const handleSelect = onSelectFilter || onSelectArtist
 
   return (
     <div className="cgm-panel-backdrop" onClick={onClose} onWheel={e => e.stopPropagation()}>
       <div
         className="cgm-panel"
-        style={{ width: 720, maxWidth: '96vw', height: '84vh', maxHeight: '88vh' }}
+        style={{ width: 740, maxWidth: '96vw', height: '84vh', maxHeight: '88vh' }}
         onClick={e => e.stopPropagation()}
       >
         <div className="cgm-panel-header">
           <div>
-            <strong>作者別アイテム統計</strong>
-            {data && (
+            <strong>統計</strong>
+            {data && currentBucket && (
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-                作者 {data.total_artists}名 · 全{data.total_items}件
-                {data.unassigned_items > 0 ? `（作者未設定 ${data.unassigned_items}件）` : ''}
-                {' '}— 作者をクリックすると検索窓で絞り込みます
+                {tabMeta.label} {currentBucket.total_unique}{tabMeta.unit} · 全{data.total_items}件
+                {currentBucket.unassigned_items > 0 ? `（${tabMeta.unassignedLabel} ${currentBucket.unassigned_items}件）` : ''}
+                {' '}— 項目をクリックすると検索窓で絞り込みます
               </div>
             )}
           </div>
@@ -77,12 +90,39 @@ export default function ArtistStatsModal({ onClose, onSelectArtist }) {
           </div>
         </div>
 
+        <div style={{ display: 'flex', gap: 4, padding: '8px 16px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          {TABS.map(tab => {
+            const active = activeTab === tab.id
+            const count = data && data[tab.id] ? data[tab.id].total_unique : null
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => { setActiveTab(tab.id); setFilterText('') }}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 13,
+                  fontWeight: active ? 700 : 500,
+                  background: active ? 'var(--active-bg)' : 'transparent',
+                  color: active ? 'var(--active-text)' : 'var(--muted)',
+                  border: 'none',
+                  borderBottom: active ? '2px solid #3b82f6' : '2px solid transparent',
+                  borderRadius: '6px 6px 0 0',
+                  cursor: 'pointer',
+                }}
+              >
+                {tab.label}{count != null ? ` (${count})` : ''}
+              </button>
+            )
+          })}
+        </div>
+
         <div className="cgm-panel-search" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
             className="cgm-search-input"
             style={{ flex: '1 1 200px' }}
-            placeholder="作者名で絞り込み…"
+            placeholder={tabMeta.placeholder}
             value={filterText}
             onChange={e => setFilterText(e.target.value)}
           />
@@ -115,10 +155,10 @@ export default function ArtistStatsModal({ onClose, onSelectArtist }) {
           {error && <div style={{ color: '#ef4444', fontSize: 13 }}>{error}</div>}
           {loading ? (
             <div className="cgm-empty-hint" style={{ padding: 20 }}>統計を集計しています…</div>
-          ) : displayedArtists.length === 0 ? (
-            <div className="cgm-empty-hint" style={{ padding: 20 }}>該当する作者がいません</div>
+          ) : displayedRows.length === 0 ? (
+            <div className="cgm-empty-hint" style={{ padding: 20 }}>該当する{tabMeta.label}がありません</div>
           ) : (
-            displayedArtists.map((row, idx) => {
+            displayedRows.map((row, idx) => {
               const value = sortBy === 'images' ? row.image_count : row.item_count
               const pct = Math.max(2, Math.round((value / maxCount) * 100))
               const share = data && data.total_items > 0
@@ -126,13 +166,13 @@ export default function ArtistStatsModal({ onClose, onSelectArtist }) {
                 : '0.0'
               return (
                 <button
-                  key={row.artist}
+                  key={row.name}
                   type="button"
                   onClick={() => {
-                    if (onSelectArtist) onSelectArtist(row.artist)
+                    if (handleSelect) handleSelect(row.name)
                     onClose()
                   }}
-                  title={`「${row.artist}」で検索して絞り込む`}
+                  title={`「${row.name}」で検索して絞り込む`}
                   style={{
                     width: '100%',
                     textAlign: 'left',
@@ -153,7 +193,7 @@ export default function ArtistStatsModal({ onClose, onSelectArtist }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                       <span style={{ fontSize: 11, color: 'var(--muted)', minWidth: 28 }}>#{idx + 1}</span>
                       <span style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {row.artist}
+                        {row.name}
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, fontSize: 12 }}>

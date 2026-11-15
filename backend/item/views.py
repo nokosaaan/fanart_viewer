@@ -5348,6 +5348,90 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'artists': artists_list,
         })
 
+    @action(detail=False, methods=['get'], url_path='stats')
+    def stats(self, request):
+        """Return item and preview-image counts broken down by artist, character, situation, and title."""
+        img_counts = dict(
+            PreviewImage.objects.values('item_id').annotate(c=Count('id')).values_list('item_id', 'c')
+        )
+
+        buckets = {
+            'artists': {},
+            'characters': {},
+            'situations': {},
+            'titles': {},
+        }
+        unassigned = {
+            'artists': 0,
+            'characters': 0,
+            'situations': 0,
+            'titles': 0,
+        }
+        total_items = 0
+
+        def add_entry(bucket_key, name, img_c):
+            entry = buckets[bucket_key].setdefault(name, {'name': name, 'item_count': 0, 'image_count': 0})
+            entry['item_count'] += 1
+            entry['image_count'] += img_c
+
+        for item_id, artist, chars, situation, titles in Item.objects.values_list(
+            'id', 'artist', 'characters', 'situation', 'titles'
+        ):
+            total_items += 1
+            img_c = int(img_counts.get(item_id, 0))
+
+            artist_name = (artist or '').strip()
+            if not artist_name:
+                unassigned['artists'] += 1
+            else:
+                add_entry('artists', artist_name, img_c)
+
+            unique_chars = []
+            seen_chars = set()
+            for c in (chars or []):
+                cn = (c or '').strip() if isinstance(c, str) else ''
+                if cn and cn not in seen_chars:
+                    seen_chars.add(cn)
+                    unique_chars.append(cn)
+            if not unique_chars:
+                unassigned['characters'] += 1
+            else:
+                for cn in unique_chars:
+                    add_entry('characters', cn, img_c)
+
+            sit_name = (situation or '').strip()
+            if not sit_name:
+                unassigned['situations'] += 1
+            else:
+                add_entry('situations', sit_name, img_c)
+
+            unique_titles = []
+            seen_titles = set()
+            for t in (titles or []):
+                tn = (t or '').strip() if isinstance(t, str) else ''
+                if tn and tn not in seen_titles:
+                    seen_titles.add(tn)
+                    unique_titles.append(tn)
+            if not unique_titles:
+                unassigned['titles'] += 1
+            else:
+                for tn in unique_titles:
+                    add_entry('titles', tn, img_c)
+
+        result = {'total_items': total_items}
+        for key in ('artists', 'characters', 'situations', 'titles'):
+            sorted_rows = sorted(
+                buckets[key].values(),
+                key=lambda e: (-e['item_count'], -e['image_count'], e['name'].lower()),
+            )
+            result[key] = {
+                'total_unique': len(sorted_rows),
+                'unassigned_items': unassigned[key],
+                'rows': sorted_rows,
+            }
+
+        return Response(result)
+
     @staticmethod
     def _inspect_item_regions(item):
         import io
@@ -5564,6 +5648,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         model_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
         model_path = model_files[0]
+        model_mtime = int(os.path.getmtime(model_path) * 1000)
         try:
             model_bundle = joblib.load(model_path)
         except Exception as e:
@@ -5670,6 +5755,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if not active_entries:
             return Response({
                 'model_name': os.path.basename(model_path),
+                'model_mtime': model_mtime,
                 'total_checked': 0,
                 'outliers': [],
             })
@@ -5754,6 +5840,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         outliers.sort(key=lambda o: -o['outlier_score'])
         return Response({
             'model_name': os.path.basename(model_path),
+            'model_mtime': model_mtime,
             'feature_source': feature_source,
             'total_checked': len(active_entries),
             'outlier_count': len(outliers),

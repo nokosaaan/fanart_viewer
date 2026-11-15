@@ -728,33 +728,121 @@ class Command(BaseCommand):
             + '...'
         )
         n_new, t0, last, done = 0, time.time(), {}, 0
-        for cand in todo:
-            done += 1
-            try:
-                image_bytes = self._image_bytes_for(cand, last)
-                if image_bytes is None:
-                    self.stderr.write(f'item {cand["item_id"]}: no image available for {cand["key"]}, skipping')
-                    continue
-                image_bytes = bytes(image_bytes)
-                if cand['key'] not in cached:
-                    feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
-                    if general_tag_names is None:
-                        general_tag_names = names
-                    elif names != general_tag_names:
-                        self.stderr.write(f'item {cand["item_id"]}: feature ordering mismatch, skipping')
+        parts = tagger.feature_parts(feature_source)
+        can_batch_emb = (
+            tagger_backend == 'timm'
+            and 'embedding' in parts
+            and 'tags' not in parts
+            and not gray
+            and hasattr(tagger, 'extract_embeddings_batch')
+        )
+        BATCH_SIZE = 16
+        last_checkpoint_n = 0
+
+        for start in range(0, len(todo), BATCH_SIZE):
+            batch = todo[start:start + BATCH_SIZE]
+            # Bulk-fetch PreviewImage blobs for solo 'pi:<id>' rows in this batch
+            pi_ids = [
+                int(c['key'][3:]) for c in batch
+                if c['kind'] == _SOLO and c['key'].startswith('pi:')
+            ]
+            pi_map = (
+                dict(PreviewImage.objects.filter(id__in=pi_ids).values_list('id', 'data'))
+                if pi_ids else {}
+            )
+
+            if can_batch_emb:
+                batch_items = []
+                for cand in batch:
+                    done += 1
+                    try:
+                        if cand['kind'] == _SOLO and cand['key'].startswith('pi:'):
+                            raw_bytes = pi_map.get(int(cand['key'][3:]))
+                        else:
+                            raw_bytes = self._image_bytes_for(cand, last)
+                        if raw_bytes is None:
+                            self.stderr.write(f'item {cand["item_id"]}: no image available for {cand["key"]}, skipping')
+                            continue
+                        pil_img = tagger._decode_rgb_pil(bytes(raw_bytes))
+                        batch_items.append((cand, pil_img))
+                    except Exception as e:
+                        self.stderr.write(f'item {cand["item_id"]}: image decode failed ({e}), skipping {cand["key"]}')
+                if batch_items:
+                    try:
+                        embs = tagger.extract_embeddings_batch(None, pil_images=[im for _, im in batch_items])
+                        for i, (cand, pil_img) in enumerate(batch_items):
+                            try:
+                                emb = embs[i]
+                                vectors, names = [], []
+                                for part in parts:
+                                    if part == 'embedding':
+                                        vectors.append(emb)
+                                        names += [f'embedding_{j}' for j in range(len(emb))]
+                                    elif part == 'ccip':
+                                        vec = tagger.ccip_feature(None, pil_image=pil_img)
+                                        vectors.append(vec)
+                                        names += [f'ccip_{j}' for j in range(len(vec))]
+                                feature = np.concatenate(vectors) if len(vectors) > 1 else vectors[0]
+                                if general_tag_names is None:
+                                    general_tag_names = names
+                                elif names != general_tag_names:
+                                    self.stderr.write(f'item {cand["item_id"]}: feature ordering mismatch, skipping')
+                                    continue
+                                cached[cand['key']] = feature
+                                n_new += 1
+                            except Exception as e:
+                                self.stderr.write(f'item {cand["item_id"]}: feature extraction failed ({e}), skipping {cand["key"]}')
+                    except Exception as e:
+                        self.stderr.write(f'Batch embedding extraction failed ({e}), falling back to per-image')
+                        for cand, pil_img in batch_items:
+                            try:
+                                raw_bytes = pi_map.get(int(cand['key'][3:])) if (cand['kind'] == _SOLO and cand['key'].startswith('pi:')) else self._image_bytes_for(cand, last)
+                                feature, names = self._compute_feature(bytes(raw_bytes), tagger_backend, feature_source)
+                                if general_tag_names is None:
+                                    general_tag_names = names
+                                elif names != general_tag_names:
+                                    continue
+                                cached[cand['key']] = feature
+                                n_new += 1
+                            except Exception as e2:
+                                self.stderr.write(f'item {cand["item_id"]}: feature extraction failed ({e2}), skipping {cand["key"]}')
+            else:
+                for cand in batch:
+                    done += 1
+                    try:
+                        if cand['kind'] == _SOLO and cand['key'].startswith('pi:'):
+                            image_bytes = pi_map.get(int(cand['key'][3:]))
+                        else:
+                            image_bytes = self._image_bytes_for(cand, last)
+                        if image_bytes is None:
+                            self.stderr.write(f'item {cand["item_id"]}: no image available for {cand["key"]}, skipping')
+                            continue
+                        image_bytes = bytes(image_bytes)
+                        if cand['key'] not in cached:
+                            feature, names = self._compute_feature(image_bytes, tagger_backend, feature_source)
+                            if general_tag_names is None:
+                                general_tag_names = names
+                            elif names != general_tag_names:
+                                self.stderr.write(f'item {cand["item_id"]}: feature ordering mismatch, skipping')
+                                continue
+                            cached[cand['key']] = feature
+                        if gray and cand['key'] + _GRAY_SUFFIX not in cached:
+                            gfeature, _n = self._compute_feature(image_bytes, tagger_backend, feature_source, gray=True)
+                            cached[cand['key'] + _GRAY_SUFFIX] = gfeature
+                        n_new += 1
+                    except Exception as e:
+                        self.stderr.write(f'item {cand["item_id"]}: feature extraction failed ({e}), skipping {cand["key"]}')
                         continue
-                    cached[cand['key']] = feature
-                if gray and cand['key'] + _GRAY_SUFFIX not in cached:
-                    gfeature, _n = self._compute_feature(image_bytes, tagger_backend, feature_source, gray=True)
-                    cached[cand['key'] + _GRAY_SUFFIX] = gfeature
-                n_new += 1
-            except Exception as e:
-                self.stderr.write(f'item {cand["item_id"]}: feature extraction failed ({e}), skipping {cand["key"]}')
-                continue
-            if done % 50 == 0 or done == len(todo):
+
+            if done % 20 < BATCH_SIZE or done >= len(todo):
                 self.stdout.write(f'  {done}/{len(todo)} newly extracted ({time.time() - t0:.0f}s elapsed)')
-            if n_new and n_new % 300 == 0:
+                try:
+                    self.stdout.flush()
+                except Exception:
+                    pass
+            if n_new - last_checkpoint_n >= 500:
                 checkpoint()
+                last_checkpoint_n = n_new
         rows = []
         for c in selected:
             if c['key'] in cached:
@@ -766,6 +854,11 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------
 
     def handle(self, *args, **options):
+        try:
+            if hasattr(sys.stdout, 'reconfigure'):
+                sys.stdout.reconfigure(line_buffering=True)
+        except Exception:
+            pass
         try:
             import joblib
             from sklearn.linear_model import LogisticRegression
