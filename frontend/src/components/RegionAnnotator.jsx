@@ -3,6 +3,7 @@ import { groupsForTitles } from '../lib/groupScope'
 import { handleGroupingResponse } from '../lib/groupChoice'
 import { saveCharacterRegions } from '../lib/itemFieldsApi'
 import { createImagePixelSampler } from '../lib/colorInspect'
+import ColorInspectLoupe from './ColorInspectLoupe'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*([^;]+)')
@@ -108,6 +109,8 @@ export default function RegionAnnotator({
   const colorSamplerRef = useRef(null)
   if (!colorSamplerRef.current) colorSamplerRef.current = createImagePixelSampler()
   const [hoverColor, setHoverColor] = useState(null)
+  const [cursorPos, setCursorPos] = useState(null)
+  const [loupeEnabled, setLoupeEnabled] = useState(true)
 
   useEffect(() => {
     loadItemPreviews(item.id)
@@ -299,7 +302,12 @@ export default function RegionAnnotator({
       const { x, y } = toNaturalCoords(e.clientX, e.clientY)
       if (x >= 0 && y >= 0 && x < naturalSize.width && y < naturalSize.height) {
         const info = colorSamplerRef.current.sampleAt(imgRef.current, x, y)
-        if (info) setHoverColor(info)
+        if (info) {
+          setHoverColor(info)
+          setCursorPos({ x: e.clientX, y: e.clientY })
+        }
+      } else {
+        setCursorPos(null)
       }
     }
     if (!drawStartRef.current) return
@@ -476,6 +484,19 @@ export default function RegionAnnotator({
         <button className="btn" onClick={runDetect} disabled={detecting}>
           {detecting ? '検出中…' : '🔍 自動検出'}
         </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setLoupeEnabled(v => !v)}
+          style={{
+            fontSize: 12,
+            background: loupeEnabled ? '#1e3a8a' : undefined,
+            color: loupeEnabled ? '#bfdbfe' : undefined,
+          }}
+          title="画像上にカーソルを合わせた時に隣へ拡大ルーペと色名を表示します"
+        >
+          🎨 色ルーペ: {loupeEnabled ? 'ON' : 'OFF'}
+        </button>
         {visibleBoxes.length > 0 && (
           <div style={{ display: 'flex', gap: 4 }}>
             <button
@@ -601,7 +622,7 @@ export default function RegionAnnotator({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={() => setHoverColor(null)}
+        onMouseLeave={() => { setHoverColor(null); setCursorPos(null) }}
       >
         <img
           ref={imgRef}
@@ -833,37 +854,14 @@ export default function RegionAnnotator({
         })()}
       </div>
 
-      <div style={{
-        marginTop: 8,
-        padding: '6px 10px',
-        background: '#0f172a',
-        border: '1px solid #1e293b',
-        borderRadius: 6,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        fontSize: 12,
-        color: '#cbd5e1',
-        minHeight: 30,
-      }}>
-        {hoverColor ? (
-          <>
-            <span style={{
-              width: 16, height: 16, borderRadius: 4,
-              background: hoverColor.hex,
-              border: '1px solid rgba(255,255,255,0.7)',
-              flexShrink: 0,
-            }} />
-            <strong style={{ color: '#f8fafc', fontSize: 13 }}>{hoverColor.label}</strong>
-            <span style={{ fontFamily: 'ui-monospace, monospace', color: '#93c5fd' }}>{hoverColor.hex}</span>
-            <span style={{ fontFamily: 'ui-monospace, monospace', color: '#64748b' }}>
-              {hoverColor.rgb} / ({hoverColor.x}, {hoverColor.y})
-            </span>
-          </>
-        ) : (
-          <span style={{ color: '#64748b' }}>画像上にカーソルを合わせるとカーソル位置のカラーコードと色名を表示します</span>
-        )}
-      </div>
+      {loupeEnabled && !drawRect && (
+        <ColorInspectLoupe
+          imgRef={imgRef}
+          sampler={colorSamplerRef.current}
+          sample={hoverColor}
+          cursorPos={cursorPos}
+        />
+      )}
 
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {showOwnActions && (

@@ -12,11 +12,11 @@ function getCookie(name){
 }
 
 const MISSING_FIELDS = [
-  { key: 'titles', label: 'タイトル' },
-  { key: 'characters', label: 'キャラクター' },
-  { key: 'tags', label: 'タグ' },
-  { key: 'situation', label: 'シチュエーション' },
-  { key: 'artist', label: '作者' },
+  { key: 'titles', label: 'タイトル', icon: '📖' },
+  { key: 'characters', label: 'キャラクター', icon: '👤' },
+  { key: 'tags', label: 'タグ', icon: '🏷' },
+  { key: 'situation', label: 'シチュエーション', icon: '🎭' },
+  { key: 'artist', label: '作者', icon: '🎨' },
 ]
 
 function isFieldMissing(it, field){
@@ -139,6 +139,19 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // Whether the mismatch tab is showing RegionAnnotator instead of the
   // diff/adopt panel for the selected item.
   const [annotating, setAnnotating] = useState(false)
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const settingsMenuRef = useRef(null)
+
+  useEffect(() => {
+    if (!settingsMenuOpen) return
+    function onDocMouseDown(e) {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target)) {
+        setSettingsMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [settingsMenuOpen])
 
   // itemId -> suggestion result (attention tab only). Populated by
   // runSuggestFor so opening an item later applies it instantly instead of
@@ -530,20 +543,187 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
 
   const content = (
     <>
-      <div className="cgm-panel-header">
-        <strong>編集キュー ({count}件)</strong>
-        <div style={{display:'flex', alignItems:'center', gap:8}}>
+      <div className="cgm-panel-header" style={{ position: 'relative' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <strong>編集キュー ({count}件)</strong>
+          <span style={{
+            fontSize: 11,
+            padding: '2px 7px',
+            borderRadius: 999,
+            background: mode === 'mismatch' ? 'rgba(239,68,68,0.18)' : 'var(--active-bg)',
+            color: mode === 'mismatch' ? '#fca5a5' : 'var(--active-text)',
+            fontWeight: 600,
+          }}>
+            {mode === 'mismatch' ? '不整合あり' : '要対応'}
+          </span>
+          {bulkSuggesting && (
+            <span style={{ fontSize: 11, color: '#93c5fd' }}>
+              提案中 ({bulkProgress ? bulkProgress.done : 0}/{bulkProgress ? bulkProgress.total : 0})
+            </span>
+          )}
+          {bulkSaving && (
+            <span style={{ fontSize: 11, color: '#93c5fd' }}>
+              一括保存中 ({bulkSaveProgress ? bulkSaveProgress.done : 0}/{bulkSaveProgress ? bulkSaveProgress.total : 0})
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {onPopOut && (
-            <button className="btn" style={{fontSize:12}} onClick={() => { if (confirmDiscardIfDirty()) onPopOut() }} title="今表示中のページのキューを保ったまま、別ウィンドウで開きます">
+            <button className="btn" style={{ fontSize: 12 }} onClick={() => { if (confirmDiscardIfDirty()) onPopOut() }} title="今表示中のページのキューを保ったまま、別ウィンドウで開きます">
               別ウィンドウで開く
             </button>
           )}
+          <div ref={settingsMenuRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setSettingsMenuOpen(v => !v)}
+              aria-expanded={settingsMenuOpen}
+              title="モード・対象項目・提案設定"
+              style={{
+                fontSize: 15,
+                lineHeight: 1,
+                padding: '5px 9px',
+                background: settingsMenuOpen ? 'var(--active-bg)' : undefined,
+              }}
+            >
+              ☰
+            </button>
+            {settingsMenuOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 6px)',
+                right: 0,
+                zIndex: 60,
+                width: 360,
+                maxWidth: 'calc(100vw - 32px)',
+                maxHeight: '75vh',
+                overflowY: 'auto',
+                background: '#0f172a',
+                border: '1px solid #334155',
+                borderRadius: 8,
+                padding: 12,
+                boxShadow: '0 12px 32px rgba(0,0,0,0.6)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12,
+                fontSize: 12,
+                color: '#e2e8f0',
+              }}>
+                <div>
+                  <div style={{ fontWeight: 700, marginBottom: 6, color: '#94a3b8' }}>キューモード</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        flex: 1, fontSize: 12,
+                        fontWeight: mode === 'attention' ? 700 : 400,
+                        background: mode === 'attention' ? 'var(--active-bg)' : undefined,
+                      }}
+                      onClick={() => { changeMode('attention'); setSettingsMenuOpen(false) }}
+                    >要対応</button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        flex: 1, fontSize: 12,
+                        fontWeight: mode === 'mismatch' ? 700 : 400,
+                        background: mode === 'mismatch' ? 'rgba(239,68,68,0.2)' : undefined,
+                      }}
+                      onClick={() => { changeMode('mismatch'); setSettingsMenuOpen(false) }}
+                    >不整合あり</button>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.45 }}>
+                    {mode === 'mismatch'
+                      ? '領域ラベルと編集キューのキャラ一覧が一致していないアイテムです。'
+                      : '対象項目が未設定、または(SOLO以外で)領域ラベル未保存のアイテムです。'}
+                  </div>
+                </div>
+
+                {mode === 'attention' && (
+                  <>
+                    <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6, color: '#94a3b8' }}>未設定とみなす項目</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                        {MISSING_FIELDS.map(f => (
+                          <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                            <input type="checkbox" checked={activeFields.has(f.key)} onChange={() => toggleField(f.key)} />
+                            <span>{f.icon} {f.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6, color: '#94a3b8' }}>提案モード</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                          <input type="radio" checked={suggestMode === 'local'} onChange={() => setSuggestMode('local')} disabled={bulkSuggesting} />
+                          ローカルのみ
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                          <input type="radio" checked={suggestMode === 'external'} onChange={() => setSuggestMode('external')} disabled={bulkSuggesting} />
+                          Danbooru照合あり(外部通信・低速)
+                        </label>
+                        {haveTimm && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                            <span style={{ color: '#94a3b8' }}>画像解析モデル:</span>
+                            <select value={suggestModel} onChange={e => setSuggestModel(e.target.value)} disabled={bulkSuggesting} style={{ fontSize: 12, flex: 1 }}>
+                              <option value="default">標準(軽量・高速)</option>
+                              <option value="canary">2026年学習の最新モデル(重い)</option>
+                            </select>
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ fontSize: 12, marginTop: 4 }}
+                          onClick={() => {
+                            if (suggestModel === 'canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
+                            runSuggestFor(items, suggestMode, suggestModel)
+                          }}
+                          disabled={bulkSuggesting || items.length === 0 || items.every(it => suggestions[it.id])}
+                        >
+                          {bulkSuggesting
+                            ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
+                            : '提案を開始'}
+                        </button>
+                        {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
+                          <span style={{ fontSize: 11, color: '#f87171' }}>({bulkProgress.skipped}件失敗/スキップ)</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {(tagsOnlyReady.length > 0 || bulkSaving) && (
+                      <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10 }}>
+                        <button
+                          type="button"
+                          className="btn"
+                          style={{ width: '100%', fontSize: 12 }}
+                          onClick={bulkSaveTagsOnly}
+                          disabled={bulkSaving || tagsOnlyReady.length === 0}
+                        >
+                          {bulkSaving
+                            ? `💾 タグを一括保存中… (${bulkSaveProgress ? bulkSaveProgress.done : 0}/${bulkSaveProgress ? bulkSaveProgress.total : 0})`
+                            : `タグのみ不足の${tagsOnlyReady.length}件を一括保存`}
+                        </button>
+                        {!bulkSaving && bulkSaveProgress && bulkSaveProgress.failed > 0 && (
+                          <div style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>({bulkSaveProgress.failed}件失敗)</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           <button className="cgm-panel-close" onClick={handleClose}>{standalone ? 'ウィンドウを閉じる' : '✕'}</button>
         </div>
       </div>
 
       {Array.isArray(allItems) && queuePageCount > 1 && (
-        <div className="cgm-panel-search">
+        <div className="cgm-panel-search" style={{ padding: '4px 12px' }}>
           <Pagination
             page={queuePageIndex}
             totalPages={queuePageCount}
@@ -552,102 +732,16 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
             onNext={() => { if (confirmDiscardIfDirty()) setQueuePageIndex(p => Math.min(queuePageCount - 1, p + 1)) }}
             prevDisabled={queuePageIndex === 0}
             nextDisabled={queuePageIndex >= queuePageCount - 1}
-            resultsLabel={`対象ページ ${queuePageIndex + 1}/${queuePageCount}(一覧側の全${allItems.length}件のうち、このページの対象分のみ表示中)`}
+            resultsLabel={`全${allItems.length}件`}
           />
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 6, padding: '8px 12px 0' }}>
-        <button
-          className="btn"
-          style={{ fontSize: 12, fontWeight: mode === 'attention' ? 700 : 400, background: mode === 'attention' ? 'var(--active-bg)' : undefined }}
-          onClick={() => changeMode('attention')}
-        >要対応</button>
-        <button
-          className="btn"
-          style={{ fontSize: 12, fontWeight: mode === 'mismatch' ? 700 : 400, background: mode === 'mismatch' ? 'rgba(239,68,68,0.15)' : undefined }}
-          onClick={() => changeMode('mismatch')}
-        >不整合あり</button>
-      </div>
-
-      <div className="cgm-panel-search" style={{ fontSize: 12, color: 'var(--muted)' }}>
-        {mode === 'mismatch'
-          ? '一度は領域ラベルを保存したものの、編集キューのキャラ一覧と完全には一致していないアイテムです。両方の一覧を見比べて、どちらを採用するか・そのままでよいか・ここで矩形を追加して解決するかを選んでください。'
-          : 'タイトル・キャラ・タグ・シチュエーション・作者のいずれかが未設定、または(SOLO以外で)まだ領域ラベルを一度も保存していないアイテムが対象です。フィールドの編集と領域ラベル付けを1つの保存ボタンでまとめて行えます。'}
-      </div>
-
-      {mode === 'attention' && (
-        <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:14}}>
-          <span style={{fontSize:12, color:'var(--muted)'}}>未設定とみなす項目:</span>
-          {MISSING_FIELDS.map(f => (
-            <label key={f.key} style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
-              <input type="checkbox" checked={activeFields.has(f.key)} onChange={()=>toggleField(f.key)} />
-              {f.label}
-            </label>
-          ))}
-        </div>
-      )}
-
-      {mode === 'attention' && (
-        <div className="cgm-panel-search" style={{display:'flex', flexWrap:'wrap', alignItems:'center', gap:10}}>
-          <span style={{fontSize:12, color:'var(--muted)'}}>提案モード:</span>
-          <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
-            <input type="radio" checked={suggestMode==='local'} onChange={()=>setSuggestMode('local')} disabled={bulkSuggesting} />
-            ローカルのみ
-          </label>
-          <label style={{display:'flex', alignItems:'center', gap:4, fontSize:12, cursor:'pointer'}}>
-            <input type="radio" checked={suggestMode==='external'} onChange={()=>setSuggestMode('external')} disabled={bulkSuggesting} />
-            Danbooru照合あり(外部通信・低速)
-          </label>
-          {haveTimm && (
-            <>
-              <span style={{fontSize:12, color:'var(--muted)', marginLeft:8}}>画像解析モデル:</span>
-              <select value={suggestModel} onChange={e=>setSuggestModel(e.target.value)} disabled={bulkSuggesting} style={{fontSize:12}}>
-                <option value="default">標準(軽量・高速)</option>
-                <option value="canary">2026年学習の最新モデル(重い・初回は大きいダウンロード)</option>
-              </select>
-            </>
-          )}
-          <button className="btn" style={{fontSize:12}} onClick={()=>{
-              if(suggestModel==='canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
-              runSuggestFor(items, suggestMode, suggestModel)
-            }} disabled={bulkSuggesting || items.length===0 || items.every(it => suggestions[it.id])}>
-            {bulkSuggesting
-              ? `提案中… (${bulkProgress ? bulkProgress.done : 0}/${bulkProgress ? bulkProgress.total : 0})`
-              : '提案を開始'}
-          </button>
-          {!bulkSuggesting && bulkProgress && bulkProgress.skipped > 0 && (
-            <span style={{fontSize:11, color:'#dc2626'}}>({bulkProgress.skipped}件失敗/スキップ)</span>
-          )}
-        </div>
-      )}
-      {mode === 'attention' && !bulkSuggesting && !bulkProgress && (
-        <div className="cgm-panel-search" style={{fontSize:11, color:'var(--muted)'}}>
-          モードを選んで「提案を開始」を押すまで、AI提案(DBの傾向・必要なら画像解析)は実行されません。
-        </div>
-      )}
-
-      {mode === 'attention' && (tagsOnlyReady.length > 0 || bulkSaving) && (
-        <div className="cgm-panel-search" style={{display:'flex', alignItems:'center', gap:10}}>
-          <span style={{fontSize:12, color: bulkSaving ? '#2563eb' : 'var(--muted)'}}>
-            {bulkSaving
-              ? `💾 タグを一括保存中… (${bulkSaveProgress ? bulkSaveProgress.done : 0}/${bulkSaveProgress ? bulkSaveProgress.total : 0})`
-              : `タグ以外は入力済み・タグ提案ありの項目が${tagsOnlyReady.length}件あります`}
-          </span>
-          <button className="btn" style={{fontSize:12}} onClick={bulkSaveTagsOnly} disabled={bulkSaving || tagsOnlyReady.length === 0}>
-            タグのみ不足の{tagsOnlyReady.length}件を一括保存
-          </button>
-          {!bulkSaving && bulkSaveProgress && bulkSaveProgress.failed > 0 && (
-            <span style={{fontSize:11, color:'#dc2626'}}>({bulkSaveProgress.failed}件失敗)</span>
-          )}
-        </div>
-      )}
-
       <div style={{ display: 'flex', minHeight: 0, flex: '1 1 auto' }}>
-        <div style={{ width: 260, borderRight: '1px solid var(--divider)', overflowY: 'auto', flexShrink: 0 }}>
-          {loading && <div className="cgm-empty-hint" style={{ padding: 12 }}>読み込み中…</div>}
+        <div style={{ width: 72, borderRight: '1px solid var(--divider)', overflowY: 'auto', flexShrink: 0 }}>
+          {loading && <div className="cgm-empty-hint" style={{ padding: 8, fontSize: 11 }}>読込中…</div>}
           {!loading && items.length === 0 && (
-            <div className="cgm-empty-hint" style={{ padding: 12 }}>該当するアイテムはありません 🎉</div>
+            <div className="cgm-empty-hint" style={{ padding: 8, fontSize: 11 }}>なし 🎉</div>
           )}
           {items.map(it => {
             if(mode === 'mismatch'){
@@ -658,76 +752,69 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                 <div
                   key={it.id}
                   onClick={() => selectItem(it.id)}
+                  title={`#${it.id} (${it.situation || '—'})`}
                   style={{
-                    padding: '10px 12px', cursor: 'pointer',
+                    padding: '6px 4px', cursor: 'pointer',
                     background: it.id === selectedId ? 'var(--active-bg)' : 'transparent',
                     borderBottom: '1px solid var(--divider)',
                   }}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>#{it.id}</div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    situation: {it.situation || '—'} · キャラ{(it.characters || []).length}件
+                  <div style={{ fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>#{it.id}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, marginTop: 2, fontSize: 11, lineHeight: 1.2 }}>
+                    {diff.regionOnly.length > 0 && (
+                      <span title={`領域のみ: ${diff.regionOnly.join(', ')}`}>🟥</span>
+                    )}
+                    {diff.itemOnly.length > 0 && (
+                      <span title={`編集キューのみ: ${diff.itemOnly.join(', ')}`}>🟨</span>
+                    )}
                   </div>
-                  {diff.regionOnly.length > 0 && (
-                    <div style={{ fontSize: 11, color: '#dc2626', marginTop: 2 }}>
-                      領域のみ: {diff.regionOnly.join(', ')}
-                    </div>
-                  )}
-                  {diff.itemOnly.length > 0 && (
-                    <div style={{ fontSize: 11, color: '#d97706', marginTop: 2 }}>
-                      編集キューのみ: {diff.itemOnly.join(', ')}
-                    </div>
-                  )}
                 </div>
               )
             }
 
             const { missingFields, needsRegion } = attentionReasons(it, activeFields)
-            const missingLabels = MISSING_FIELDS.filter(f => missingFields.includes(f.key)).map(f => f.label)
+            const missingMeta = MISSING_FIELDS.filter(f => missingFields.includes(f.key))
             return (
               <div
                 key={it.id}
                 onClick={()=>selectItem(it.id)}
+                title={`#${it.id}`}
                 style={{
-                  padding:'10px 12px', cursor:'pointer',
+                  padding:'6px 4px', cursor:'pointer',
                   background: it.id===selectedId ? 'var(--active-bg)' : 'transparent',
                   borderBottom:'1px solid var(--divider)',
                 }}
               >
-                <div style={{fontSize:13, fontWeight:600}}>
+                <div style={{fontSize:11, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                   #{it.id}
-                  {suggestions[it.id] && (
-                    suggestions[it.id].source && suggestions[it.id].source !== 'none' ? (
-                      <span
-                        title={
-                          (suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
-                          : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
-                          : '提案あり（既存データ＋画像解析）')
-                          + (suggestions[it.id].source.includes('danbooru') ? '・Danbooru照合で新規タイトル推論' : '')
-                        }
-                        style={{marginLeft:6}}
-                      >
-                        {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
-                        {suggestions[it.id].source.includes('danbooru') && '🌐'}
-                      </span>
-                    ) : (
-                      <span title="確認済み・提案なし" style={{marginLeft:6, color:'var(--text-faint)', fontWeight:400}}>·</span>
-                    )
+                </div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:2, marginTop:2, fontSize:11, lineHeight:1.2 }}>
+                  {missingMeta.map(f => (
+                    <span key={f.key} title={`${f.label}不足`}>{f.icon}</span>
+                  ))}
+                  {needsRegion && (
+                    <span title="領域未設定">🔲</span>
+                  )}
+                  {suggestions[it.id] && suggestions[it.id].source && suggestions[it.id].source !== 'none' && (
+                    <span
+                      title={
+                        (suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
+                        : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
+                        : '提案あり（既存データ＋画像解析）')
+                        + (suggestions[it.id].source.includes('danbooru') ? '・Danbooru照合で新規タイトル推論' : '')
+                      }
+                    >
+                      {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
+                      {suggestions[it.id].source.includes('danbooru') && '🌐'}
+                    </span>
                   )}
                 </div>
-                <div style={{fontSize:12, color:'var(--muted)'}}>
-                  {missingLabels.length > 0 && <>不足: {missingLabels.join('・')}</>}
-                  {missingLabels.length === 0 && !needsRegion && '—'}
-                </div>
-                {needsRegion && (
-                  <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 2 }}>領域未設定</div>
-                )}
               </div>
             )
           })}
           {hasMore && (
-            <button className="btn" style={{ width: '100%', margin: '8px 0', fontSize: 12 }} onClick={loadMore} disabled={loadingMore}>
-              {loadingMore ? '読み込み中…' : 'もっと読み込む'}
+            <button className="btn" style={{ width: '100%', margin: '6px 0', fontSize: 10, padding: '4px 2px' }} onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? '…' : 'もっと'}
             </button>
           )}
         </div>

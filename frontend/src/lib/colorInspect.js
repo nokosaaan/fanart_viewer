@@ -40,17 +40,17 @@ export function describePerceivedColor(r, g, b) {
   // 1. Very dark / achromatic colors
   if (v < 13) {
     label = '黒'
-  } else if (s < 11) {
+  } else if (s < 16 || (s < 22 && v < 52)) {
     if (v >= 90) label = '白'
     else if (v >= 68) label = '明るいグレー（銀系）'
     else if (v >= 38) label = 'グレー'
     else label = '暗いグレー（チャコール）'
-  } else if (s < 20 && v >= 85 && (h < 50 || h >= 330)) {
+  } else if (s < 22 && v >= 85 && (h < 50 || h >= 330)) {
     // Faintly tinted off-white / silver-pink / ivory
     if (h >= 25 && h < 55) label = 'アイボリー / クリーム白'
     else if (h >= 330 || h < 25) label = 'ごく薄いピンク / オフホワイト'
     else label = '白っぽいグレー'
-  } else if (s < 22 && v < 40) {
+  } else if (s < 26 && v < 40) {
     label = '暗いグレー'
   } else if (h >= 12 && h < 45 && v >= 68 && s < 48) {
     // Skin tones / beige / light brown

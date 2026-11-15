@@ -1,12 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { createImagePixelSampler } from '../lib/colorInspect'
-
-const LOUPE_SIZE = 108
-const LOUPE_SAMPLE_RADIUS = 9 // 19x19 source pixels zoomed into 108x108
+import ColorInspectLoupe from './ColorInspectLoupe'
 
 export default function ImageColorViewer({ src }) {
   const imgRef = useRef(null)
-  const loupeCanvasRef = useRef(null)
   const samplerRef = useRef(null)
   if (!samplerRef.current) samplerRef.current = createImagePixelSampler()
 
@@ -43,42 +40,6 @@ export default function ImageColorViewer({ src }) {
     const ny = ((clientY - rect.top) / rect.height) * img.naturalHeight
     return samplerRef.current.sampleAt(img, nx, ny)
   }
-
-  function drawLoupe(info) {
-    const loupe = loupeCanvasRef.current
-    const img = imgRef.current
-    if (!loupe || !img || !info) return
-    const srcCanvas = samplerRef.current.getCanvas(img)
-    if (!srcCanvas) return
-    const ctx = loupe.getContext('2d')
-    if (!ctx) return
-
-    const span = LOUPE_SAMPLE_RADIUS * 2 + 1
-    ctx.imageSmoothingEnabled = false
-    ctx.fillStyle = '#0f172a'
-    ctx.fillRect(0, 0, LOUPE_SIZE, LOUPE_SIZE)
-
-    const sx = info.x - LOUPE_SAMPLE_RADIUS
-    const sy = info.y - LOUPE_SAMPLE_RADIUS
-    ctx.drawImage(srcCanvas, sx, sy, span, span, 0, 0, LOUPE_SIZE, LOUPE_SIZE)
-
-    // Center pixel highlight
-    const cell = LOUPE_SIZE / span
-    const cx = LOUPE_SAMPLE_RADIUS * cell
-    const cy = LOUPE_SAMPLE_RADIUS * cell
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)'
-    ctx.lineWidth = 1.5
-    ctx.strokeRect(cx, cy, cell, cell)
-    ctx.strokeStyle = 'rgba(0,0,0,0.8)'
-    ctx.lineWidth = 1
-    ctx.strokeRect(cx - 1, cy - 1, cell + 2, cell + 2)
-  }
-
-  useEffect(() => {
-    if (loupeEnabled && cursorPos && sample) {
-      drawLoupe(sample)
-    }
-  }, [loupeEnabled, cursorPos, sample])
 
   function handleMouseMove(e) {
     if (locked) return
@@ -121,13 +82,6 @@ export default function ImageColorViewer({ src }) {
       setTimeout(() => setCopiedHex(false), 1200)
     } catch (_) {}
   }
-
-  const loupeLeft = cursorPos
-    ? (cursorPos.x + 20 + LOUPE_SIZE > window.innerWidth ? cursorPos.x - LOUPE_SIZE - 16 : cursorPos.x + 20)
-    : 0
-  const loupeTop = cursorPos
-    ? (cursorPos.y + 20 + LOUPE_SIZE > window.innerHeight ? cursorPos.y - LOUPE_SIZE - 16 : cursorPos.y + 20)
-    : 0
 
   return (
     <div style={{
@@ -277,46 +231,13 @@ export default function ImageColorViewer({ src }) {
         )}
       </div>
 
-      {loupeEnabled && !locked && cursorPos && sample && (
-        <div style={{
-          position: 'fixed',
-          left: loupeLeft,
-          top: loupeTop,
-          pointerEvents: 'none',
-          zIndex: 30,
-          borderRadius: 8,
-          overflow: 'hidden',
-          border: '2px solid rgba(255,255,255,0.85)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
-          background: '#0f172a',
-        }}>
-          <canvas
-            ref={loupeCanvasRef}
-            width={LOUPE_SIZE}
-            height={LOUPE_SIZE}
-            style={{ display: 'block' }}
-          />
-          <div style={{
-            padding: '3px 6px',
-            fontSize: 11,
-            background: 'rgba(15, 23, 42, 0.92)',
-            color: '#f8fafc',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            whiteSpace: 'nowrap',
-          }}>
-            <span style={{
-              width: 10,
-              height: 10,
-              borderRadius: 2,
-              background: sample.hex,
-              border: '1px solid #fff',
-              flexShrink: 0,
-            }} />
-            <span>{sample.label}</span>
-          </div>
-        </div>
+      {loupeEnabled && !locked && (
+        <ColorInspectLoupe
+          imgRef={imgRef}
+          sampler={samplerRef.current}
+          sample={sample}
+          cursorPos={cursorPos}
+        />
       )}
     </div>
   )
