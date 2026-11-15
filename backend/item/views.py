@@ -5730,8 +5730,16 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             )
         }
         first_preview_map = {}
+        item_previews_map = {}
+        preview_pos_map = {}
         for pi in PreviewImage.objects.filter(item_id__in=item_ids).order_by('item_id', 'order', 'id').values('id', 'item_id'):
-            first_preview_map.setdefault(pi['item_id'], pi['id'])
+            iid = pi['item_id']
+            pid = pi['id']
+            first_preview_map.setdefault(iid, pid)
+            lst = item_previews_map.setdefault(iid, [])
+            idx_0 = len(lst)
+            lst.append(pid)
+            preview_pos_map[pid] = (iid, idx_0)
 
         # Filter to entries whose assigned label still exists on the item in DB
         active_entries = []
@@ -5816,11 +5824,41 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 continue
 
             it = items_map[item_id]
+            previews = item_previews_map.get(item_id, [])
+            preview_count = len(previews)
+            target_preview_id = first_preview_map.get(item_id)
+            image_index = 0 if preview_count > 0 else None
+            is_region = key.startswith('reg:') or (
+                not key.startswith('pi:')
+                and not key.startswith('item:')
+                and not key.startswith('solo:')
+                and ':' in key
+            )
+
+            if key.startswith('pi:'):
+                try:
+                    pid = int(key[3:])
+                    if pid in preview_pos_map:
+                        target_preview_id = pid
+                        image_index = preview_pos_map[pid][1]
+                except (TypeError, ValueError):
+                    pass
+            elif is_region:
+                kparts = key.split(':')
+                raw_idx = kparts[1] if (kparts[0].isdigit() and len(kparts) >= 2) else (kparts[2] if len(kparts) >= 3 else '')
+                try:
+                    idx_0 = int(raw_idx)
+                    image_index = idx_0
+                    if 0 <= idx_0 < preview_count:
+                        target_preview_id = previews[idx_0]
+                except (TypeError, ValueError):
+                    pass
+
             score = round(prob_gap + sim_gap, 4)
             outliers.append({
                 'item_id': item_id,
                 'key': key,
-                'is_region': key.startswith('reg:'),
+                'is_region': is_region,
                 'assigned_char': assigned_char,
                 'predicted_char': pred_char,
                 'predicted_prob': round(pred_prob, 4),
@@ -5835,6 +5873,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 'characters': it.characters or [],
                 'link': it.link or '',
                 'first_preview_id': first_preview_map.get(item_id),
+                'target_preview_id': target_preview_id,
+                'image_index': image_index,
+                'preview_count': preview_count,
             })
 
         outliers.sort(key=lambda o: -o['outlier_score'])

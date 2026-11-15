@@ -205,11 +205,15 @@ export default function LabelOutliersModal({ onClose }) {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {visibleOutliers.map(o => {
-                const previewUrl = o.first_preview_id != null
-                  ? `/api/items/${o.item_id}/preview/?id=${o.first_preview_id}`
-                  : `/api/items/${o.item_id}/preview/?index=0`
+                const targetPid = o.target_preview_id ?? o.first_preview_id
+                const previewUrl = targetPid != null
+                  ? `/api/items/${o.item_id}/preview/?id=${targetPid}`
+                  : `/api/items/${o.item_id}/preview/?index=${o.image_index ?? 0}`
                 const viewerHref = `/?image_viewer=1&src=${encodeURIComponent(previewUrl)}`
                 const isBusy = busyKey === o.key
+                const pageLabel = o.image_index != null
+                  ? (o.preview_count > 1 ? `${o.image_index + 1}枚目 / 全${o.preview_count}枚` : '1枚目')
+                  : null
                 return (
                   <div
                     key={`${o.key}:${o.assigned_char}`}
@@ -242,6 +246,18 @@ export default function LabelOutliersModal({ onClose }) {
                     <div style={{ flex: 1, minWidth: 260 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
                         <strong>Item #{o.item_id}</strong>
+                        {pageLabel && (
+                          <span style={{
+                            fontSize: 11,
+                            padding: '1px 6px',
+                            borderRadius: 4,
+                            background: o.preview_count > 1 ? '#1e3a8a' : '#1e293b',
+                            color: o.preview_count > 1 ? '#bfdbfe' : '#94a3b8',
+                            fontWeight: o.preview_count > 1 ? 600 : 400,
+                          }}>
+                            {pageLabel}
+                          </span>
+                        )}
                         <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#1e293b', color: '#cbd5e1' }}>
                           {o.is_region ? '領域ラベル' : 'SOLO画像'}
                         </span>

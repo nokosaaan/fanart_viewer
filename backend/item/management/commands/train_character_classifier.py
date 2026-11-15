@@ -428,6 +428,8 @@ class Command(BaseCommand):
                                   "'centroid' (keeps images closest to the character's typical/average look), "
                                   "'diverse' (maximizes visual variation across expressions and compositions), or "
                                   "'hash' (legacy deterministic hash order).")
+        parser.add_argument('--exclude-situation', type=str, default='',
+                             help='Comma-separated Item.situation values (case-insensitive) to exclude from training.')
 
     # ------------------------------------------------------------------
     # Candidate survey: what COULD be trained on, before any extraction.
@@ -449,7 +451,7 @@ class Command(BaseCommand):
         group = linked_groups.get(tuple(sorted(set(names))))
         return group[0] if group is not None else None
 
-    def _survey(self, include_regions):
+    def _survey(self, include_regions, exclude_situations=None):
         """[{'kind','char','item_id','key', ...}, ...] for every solo image
         and (include_regions) region crop in the DB, WITHOUT reading any
         image bytes — so a character's TOTAL support (solo + regions) is
@@ -457,13 +459,16 @@ class Command(BaseCommand):
         cands = []
         annotated_ids = set()
         n_invalid = n_ambiguous = 0
+        excl_sits = {s.strip().upper() for s in (exclude_situations or []) if s and s.strip()}
 
         if include_regions:
             linked_groups = {
                 tuple(sorted(set(g.characters))): sorted(set(g.characters))
                 for g in CharacterAliasGroup.objects.filter(linked=True)
             }
-            for item in Item.objects.exclude(character_regions=[]).only('id', 'character_regions'):
+            for item in Item.objects.exclude(character_regions=[]).only('id', 'character_regions', 'situation'):
+                if excl_sits and (item.situation or '').strip().upper() in excl_sits:
+                    continue
                 annotated_ids.add(item.id)
                 for region in (item.character_regions or []):
                     box, names = region.get('box'), region.get('characters') or []
@@ -491,8 +496,10 @@ class Command(BaseCommand):
         for item_id, pid in PreviewImage.objects.order_by('item_id', 'order').values_list('item_id', 'id'):
             preview_ids[item_id].append(pid)
         legacy_preview = set(Item.objects.filter(preview_data__isnull=False).values_list('id', flat=True))
-        for item_id, characters in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).values_list(
-                'id', 'characters'):
+        for item_id, characters, situation in Item.objects.exclude(characters=[]).exclude(characters__isnull=True).values_list(
+                'id', 'characters', 'situation'):
+            if excl_sits and (situation or '').strip().upper() in excl_sits:
+                continue
             chars = [c for c in (characters or []) if c]
             if len(chars) != 1:
                 continue  # solo = single-character items only
@@ -879,6 +886,7 @@ class Command(BaseCommand):
         cap = options['max_images_per_character']
         region_weight, gray_weight = options['region_weight'], options['gray_weight']
         exclude = {c.strip() for c in options['exclude'].split(',') if c.strip()}
+        exclude_situations = {s.strip().upper() for s in options['exclude_situation'].split(',') if s.strip()}
         backend_choice = options['backend']
         feature_source = options['feature_source']
         gray = options['grayscale_augment']
@@ -979,9 +987,17 @@ class Command(BaseCommand):
         # ---- survey, select, extract --------------------------------------
         if use_cache_path:
             cands = self._cands_from_cache(base_cache)
+            if exclude_situations:
+                excl_item_ids = {
+                    iid for iid, sit in Item.objects.filter(
+                        id__in={c['item_id'] for c in cands}
+                    ).values_list('id', 'situation')
+                    if (sit or '').strip().upper() in exclude_situations
+                }
+                cands = [c for c in cands if c['item_id'] not in excl_item_ids]
             self.stdout.write(f'Loaded {len(cands)} cached feature row(s) (no DB scan).\n')
         else:
-            cands = self._survey(include_regions)
+            cands = self._survey(include_regions, exclude_situations=exclude_situations)
         selected, per_char = self._select(
             cands, exclude, min_images, cap, set(cached), options['max_images_per_item'],
             prune_strategy=options['prune_strategy'],

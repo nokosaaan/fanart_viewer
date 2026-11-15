@@ -121,6 +121,14 @@ def _build_argv(options: dict) -> list:
     elif isinstance(exclude, str) and exclude.strip():
         argv += ['--exclude', exclude.strip()]
 
+    exclude_situations = options.get('exclude_situations')
+    if isinstance(exclude_situations, list):
+        sits = [str(s).strip().upper() for s in exclude_situations if str(s).strip()]
+        if sits:
+            argv += ['--exclude-situation', ','.join(sits)]
+    elif isinstance(exclude_situations, str) and exclude_situations.strip():
+        argv += ['--exclude-situation', exclude_situations.strip()]
+
     if options.get('include_multi_character'):
         argv += ['--include-multi-character']
 

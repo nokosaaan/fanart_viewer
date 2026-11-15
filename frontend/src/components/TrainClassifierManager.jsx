@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { getAllSituations } from '../lib/situations'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')
@@ -29,6 +30,8 @@ export default function TrainClassifierManager({ onClose }) {
 
   const [minImages, setMinImages] = useState('15')
   const [exclude, setExclude] = useState('')
+  const [availableSituations, setAvailableSituations] = useState(() => getAllSituations())
+  const [excludeSituations, setExcludeSituations] = useState([])
   const [includeMulti, setIncludeMulti] = useState(false)
   const [backend, setBackend] = useState('canary')
   const [pruneStrategy, setPruneStrategy] = useState('balanced')
@@ -57,6 +60,24 @@ export default function TrainClassifierManager({ onClose }) {
 
   useEffect(() => { poll() }, [poll])
 
+  useEffect(() => {
+    fetch('/api/items/stats/', { credentials: 'same-origin' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const rows = d?.situations?.rows
+        if (!Array.isArray(rows)) return
+        setAvailableSituations(prev => {
+          const merged = new Set(prev)
+          for (const row of rows) {
+            const s = (row?.name || '').trim().toUpperCase()
+            if (s) merged.add(s)
+          }
+          return Array.from(merged)
+        })
+      })
+      .catch(() => {})
+  }, [])
+
   // Poll every 2s only while this panel is open — a run itself keeps
   // going in the background regardless (see classifier_training.py), so
   // closing/reopening the panel just resumes watching it, never loses it.
@@ -83,6 +104,7 @@ export default function TrainClassifierManager({ onClose }) {
         backend,
         min_images: minImages.trim() ? parseInt(minImages, 10) : undefined,
         exclude: exclude.trim(),
+        exclude_situations: excludeSituations,
         include_multi_character: includeMulti,
         prune_strategy: pruneStrategy,
         update_cache: useCache,
@@ -203,6 +225,44 @@ export default function TrainClassifierManager({ onClose }) {
                     style={{ width: '100%', background: '#0f172a', color: '#f1f5f9', border: '1px solid #334155',
                       borderRadius: 6, padding: '8px 10px', fontSize: 13, boxSizing: 'border-box', marginBottom: 10 }}
                   />
+
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>
+                      除外するシチュエーション(任意 — チェックしたシチュエーションの画像は学習対象外にします)
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {availableSituations.map(sit => {
+                        const checked = excludeSituations.includes(sit)
+                        return (
+                          <label
+                            key={sit}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontSize: 12,
+                              padding: '4px 10px',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              background: checked ? '#7f1d1d' : '#0f172a',
+                              color: checked ? '#fecaca' : '#cbd5e1',
+                              border: checked ? '1px solid #dc2626' : '1px solid #334155',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => setExcludeSituations(prev => (
+                                prev.includes(sit) ? prev.filter(x => x !== sit) : [...prev, sit]
+                              ))}
+                              style={{ margin: 0 }}
+                            />
+                            {sit}
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
 
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#cbd5e1', marginBottom: 10, cursor: 'pointer' }}>
                     <input type="checkbox" checked={includeMulti} onChange={e => setIncludeMulti(e.target.checked)} />
