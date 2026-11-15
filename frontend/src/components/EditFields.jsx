@@ -1082,7 +1082,19 @@ export function ItemQueuePanel({
       const payload = fieldsRef.current.getPayload()
 
       // Current labeled regions from RegionAnnotator
-      const currentRegions = (showRegionSection && boxesRef.current) ? (boxesRef.current.getPayload() || []) : []
+      let currentRegions = (showRegionSection && boxesRef.current) ? (boxesRef.current.getPayload() || []) : []
+      const formCharSet = new Set((payload.characters || []).map(c => (c || '').trim()).filter(Boolean))
+
+      // Remove any character that the user explicitly removed in EditFields from regions too
+      if (showRegionSection && currentRegions.length > 0) {
+        currentRegions = currentRegions
+          .map(r => ({
+            ...r,
+            characters: (r.characters || []).map(c => (c || '').trim()).filter(c => c && formCharSet.has(c)),
+          }))
+          .filter(r => r.characters.length > 0)
+      }
+
       const regionChars = [...new Set(currentRegions.flatMap(r => r.characters || []))]
         .map(c => (c || '').trim()).filter(Boolean)
 

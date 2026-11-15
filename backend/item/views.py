@@ -4446,8 +4446,31 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             chars = data.get('characters')
             if not isinstance(chars, list):
                 return Response({'detail': 'characters must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+            chars = list(dict.fromkeys(c.strip() for c in chars if isinstance(c, str) and c.strip()))
             item.characters = chars
             updates['characters'] = chars
+
+            removed_chars = {c for c in orig_characters if c not in chars}
+            if removed_chars and isinstance(item.character_regions, list) and item.character_regions:
+                new_regions = []
+                regions_changed = False
+                for r in item.character_regions:
+                    if not isinstance(r, dict):
+                        new_regions.append(r)
+                        continue
+                    r_chars = r.get('characters') or []
+                    filtered_r_chars = [c for c in r_chars if c not in removed_chars]
+                    if len(filtered_r_chars) != len(r_chars):
+                        regions_changed = True
+                        if filtered_r_chars:
+                            new_regions.append({**r, 'characters': filtered_r_chars})
+                    else:
+                        new_regions.append(r)
+                if regions_changed:
+                    item.character_regions = new_regions
+                    item.character_regions_ack_signature = ''
+                    updates['character_regions'] = new_regions
+                    updates['character_regions_ack_signature'] = ''
 
         if 'tags' in data:
             tags = data.get('tags')
@@ -5467,6 +5490,20 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'items': broken_items,
         })
 
+    @staticmethod
+    def _apply_repaired_regions(item, repaired_regions):
+        item.character_regions = repaired_regions
+        region_chars = sorted({
+            c.strip() for r in repaired_regions
+            for c in (r.get('characters') or []) if isinstance(c, str) and c.strip()
+        })
+        update_fields = ['character_regions']
+        if region_chars or (item.situation or '').upper() != 'SOLO':
+            item.characters = region_chars
+            item.character_regions_ack_signature = ''
+            update_fields.extend(['characters', 'character_regions_ack_signature'])
+        item.save(update_fields=update_fields)
+
     @action(detail=True, methods=['post'], url_path='fix_broken_regions')
     def fix_broken_regions(self, request, pk=None):
         """Remove completely invalid/out-of-bounds boxes and clamp partially out-of-bounds boxes."""
@@ -5474,8 +5511,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         issues, repaired_regions = self._inspect_item_regions(item)
         if not issues:
             return Response({'status': 'unchanged', 'item': ItemSerializer(item, context={'request': request}).data})
-        item.character_regions = repaired_regions
-        item.save(update_fields=['character_regions'])
+        self._apply_repaired_regions(item, repaired_regions)
         return Response({
             'status': 'fixed',
             'removed_or_clamped': len(issues),
@@ -5485,14 +5521,13 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=['post'], url_path='fix_all_broken_regions')
     def fix_all_broken_regions(self, request):
         """Auto-repair all items with broken character_regions (delete invalid/out-of-bounds, clamp partial)."""
-        qs = Item.objects.exclude(character_regions=[]).only('id', 'character_regions')
+        qs = Item.objects.exclude(character_regions=[]).only('id', 'situation', 'characters', 'character_regions')
         fixed_items = []
         total_issues = 0
         for item in qs.iterator(chunk_size=100):
             issues, repaired_regions = self._inspect_item_regions(item)
             if issues:
-                item.character_regions = repaired_regions
-                item.save(update_fields=['character_regions'])
+                self._apply_repaired_regions(item, repaired_regions)
                 fixed_items.append(item.id)
                 total_issues += len(issues)
         return Response({

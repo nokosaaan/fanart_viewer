@@ -74,7 +74,7 @@ export default function BrokenRegionsModal({ onClose }) {
   }
 
   return (
-    <div className="cgm-backdrop" onClick={onClose}>
+    <div className="cgm-panel-backdrop" onClick={onClose}>
       <div className="cgm-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: 960, width: '94vw', maxHeight: '90vh' }}>
         <div className="cgm-panel-header">
           <div>

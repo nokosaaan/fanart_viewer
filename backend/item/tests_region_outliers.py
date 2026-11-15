@@ -34,7 +34,6 @@ class BrokenRegionsAndOutliersTests(TestCase):
             character_regions=[
                 {"image_index": 0, "box": [300, 10, 500, 150], "characters": ["CharA"]},  # completely out of bounds
                 {"image_index": 0, "box": [10, 10, 250, 150], "characters": ["CharB"]},   # partial out of bounds
-                {"image_index": 0, "box": [20, 20, 100, 100], "characters": ["CharA"]},   # valid
             ],
         )
         PreviewImage.objects.create(item=item, order=0, data=_make_png(200, 200), content_type="image/png")
@@ -50,8 +49,9 @@ class BrokenRegionsAndOutliersTests(TestCase):
         r_fix = self.client.post(f"/api/items/{item.id}/fix_broken_regions/")
         self.assertEqual(r_fix.status_code, 200)
         item.refresh_from_db()
-        self.assertEqual(len(item.character_regions), 2)
+        self.assertEqual(len(item.character_regions), 1)
         self.assertEqual(item.character_regions[0]["box"], [10, 10, 200, 150])
+        self.assertEqual(item.characters, ["CharB"])
 
         r_after = self.client.get("/api/items/broken_regions/")
         self.assertEqual(r_after.json()["count"], 0)
@@ -119,3 +119,32 @@ class BrokenRegionsAndOutliersTests(TestCase):
                 self.assertEqual(mislabeled.characters, ["CharB"])
             finally:
                 tagger._data_dir = orig_data_dir
+
+    def test_update_fields_removes_excluded_character_from_regions(self):
+        item = Item.objects.create(
+            external_id=501,
+            source="pixiv_bookmark",
+            artist="ArtistX",
+            situation="CP",
+            characters=["CharA", "CharB"],
+            character_regions=[
+                {"image_index": 0, "box": [10, 10, 100, 100], "characters": ["CharA"]},
+                {"image_index": 0, "box": [110, 10, 200, 100], "characters": ["CharB"]},
+            ],
+        )
+
+        # User removes CharB in EditFields and saves via update_fields
+        r = self.client.post(f"/api/items/{item.id}/update_fields/", {
+            "characters": ["CharA"],
+        }, format="json")
+        self.assertEqual(r.status_code, 200)
+        item.refresh_from_db()
+        self.assertEqual(item.characters, ["CharA"])
+        self.assertEqual(len(item.character_regions), 1)
+        self.assertEqual(item.character_regions[0]["characters"], ["CharA"])
+
+        # Subsequent sync_characters_to_regions must NOT resurrect CharB
+        r_sync = self.client.post(f"/api/items/{item.id}/sync_characters_to_regions/")
+        self.assertEqual(r_sync.status_code, 200)
+        item.refresh_from_db()
+        self.assertEqual(item.characters, ["CharA"])

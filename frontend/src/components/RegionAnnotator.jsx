@@ -206,6 +206,34 @@ export default function RegionAnnotator({
     })
   }, [visibleBoxes])
 
+  // Detect boxes that lie completely outside the visible image (e.g. after image resize)
+  const outOfBoundsBoxIds = useMemo(() => {
+    if (!naturalSize) return new Set()
+    const ids = new Set()
+    for (const b of visibleBoxes) {
+      const [x1, y1, x2, y2] = b.box
+      if (
+        x1 >= naturalSize.width || y1 >= naturalSize.height ||
+        x2 <= 0 || y2 <= 0 || x2 <= x1 || y2 <= y1
+      ) {
+        ids.add(b.id)
+      }
+    }
+    return ids
+  }, [visibleBoxes, naturalSize])
+
+  function removeOutOfBoundsBoxes() {
+    if (outOfBoundsBoxIds.size === 0) return
+    setBoxes(prev => prev.filter(b => !outOfBoundsBoxIds.has(b.id)))
+    setSelectedBoxIds(prev => {
+      const next = new Set(prev)
+      for (const id of outOfBoundsBoxIds) next.delete(id)
+      return next
+    })
+    if (activeBoxId && outOfBoundsBoxIds.has(activeBoxId)) setActiveBoxId(null)
+    if (onDirtyChange) onDirtyChange(true)
+  }
+
   // Character counts per box on current image
   const currentCharCounts = useMemo(() => {
     const counts = {}
@@ -454,6 +482,33 @@ export default function RegionAnnotator({
               {labeledCountFor(img.index) > 0 && ` ✓${labeledCountFor(img.index)}`}
             </button>
           ))}
+        </div>
+      )}
+
+      {outOfBoundsBoxIds.size > 0 && (
+        <div style={{
+          marginBottom: 10,
+          background: 'rgba(239, 68, 68, 0.14)',
+          border: '1px solid rgba(239, 68, 68, 0.5)',
+          borderRadius: 6,
+          padding: '8px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: 12, color: '#fca5a5' }}>
+            ⚠ 画像の範囲外（見えていない領域）に {outOfBoundsBoxIds.size} 件の矩形があります。キャラ登録と同期するため削除してください。
+          </span>
+          <button
+            type="button"
+            className="btn"
+            style={{ fontSize: 12, background: '#dc2626', color: '#fff', padding: '4px 10px' }}
+            onClick={removeOutOfBoundsBoxes}
+          >
+            範囲外の矩形を削除
+          </button>
         </div>
       )}
 
