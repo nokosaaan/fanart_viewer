@@ -5571,17 +5571,26 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if clf is None or not classes:
             return Response({'detail': '分類器データが不完全です。再学習してください。', 'outliers': []})
 
-        cache_candidates = [
-            os.path.join(data_dir, f'character_classifier_cache_{backend_name}_{feature_source}.joblib'),
+        fs_slug = str(feature_source).replace('+', '_')
+        cache_candidates = []
+        if feature_source == 'tags':
+            cache_candidates.append(os.path.join(data_dir, f'character_features_{backend_name}.joblib'))
+        cache_candidates.extend([
+            os.path.join(data_dir, f'character_features_{backend_name}_{fs_slug}.joblib'),
+            os.path.join(data_dir, f'character_features_{backend_name}.joblib'),
+            os.path.join(data_dir, f'character_classifier_cache_{backend_name}_{fs_slug}.joblib'),
             os.path.join(data_dir, f'character_classifier_cache_{backend_name}.joblib'),
-        ]
+        ])
+        cache_candidates.extend(
+            sorted(glob.glob(os.path.join(data_dir, 'character_features_*.joblib')), key=os.path.getmtime, reverse=True)
+        )
         cache_candidates.extend(
             sorted(glob.glob(os.path.join(data_dir, 'character_classifier_cache_*.joblib')), key=os.path.getmtime, reverse=True)
         )
         cache_path = next((p for p in cache_candidates if os.path.exists(p)), None)
         if not cache_path:
             return Response({
-                'detail': '学習時の特徴量キャッシュが見つかりません。先に「分類器の学習」を実行してください。',
+                'detail': f'学習時の特徴量キャッシュが見つかりません ({data_dir})。先に「分類器の学習」を実行してください。',
                 'outliers': [],
             })
 

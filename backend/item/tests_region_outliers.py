@@ -99,7 +99,7 @@ class BrokenRegionsAndOutliersTests(TestCase):
                 joblib.dump({
                     "rows": rows,
                     "manual_rows": [],
-                }, os.path.join(tmpdir, "character_classifier_cache_wd_v3_tags.joblib"))
+                }, os.path.join(tmpdir, "character_features_wd_v3.joblib"))
 
                 r = self.client.get("/api/items/label_outliers/?min_prob=0.35")
                 self.assertEqual(r.status_code, 200)
