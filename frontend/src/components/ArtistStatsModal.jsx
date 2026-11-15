@@ -14,6 +14,7 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
   const [activeTab, setActiveTab] = useState('artists')
   const [filterText, setFilterText] = useState('')
   const [sortBy, setSortBy] = useState('items') // 'items' | 'images' | 'name'
+  const [sortOrder, setSortOrder] = useState('desc') // 'desc' | 'asc'
 
   const loadStats = useCallback(async () => {
     setLoading(true)
@@ -44,15 +45,16 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
       ? list.filter(row => row.name.toLowerCase().includes(q))
       : list
     const sorted = [...filtered]
+    const dir = sortOrder === 'asc' ? 1 : -1
     if (sortBy === 'images') {
-      sorted.sort((a, b) => (b.image_count - a.image_count) || (b.item_count - a.item_count) || a.name.localeCompare(b.name))
+      sorted.sort((a, b) => dir * ((a.image_count - b.image_count) || (a.item_count - b.item_count)) || a.name.localeCompare(b.name))
     } else if (sortBy === 'name') {
-      sorted.sort((a, b) => a.name.localeCompare(b.name))
+      sorted.sort((a, b) => dir * a.name.localeCompare(b.name))
     } else {
-      sorted.sort((a, b) => (b.item_count - a.item_count) || (b.image_count - a.image_count) || a.name.localeCompare(b.name))
+      sorted.sort((a, b) => dir * ((a.item_count - b.item_count) || (a.image_count - b.image_count)) || a.name.localeCompare(b.name))
     }
     return sorted
-  }, [currentBucket, filterText, sortBy])
+  }, [currentBucket, filterText, sortBy, sortOrder])
 
   const maxCount = useMemo(() => {
     if (displayedRows.length === 0) return 1
@@ -126,7 +128,7 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
             value={filterText}
             onChange={e => setFilterText(e.target.value)}
           />
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {[
               { id: 'items', label: 'アイテム数順' },
               { id: 'images', label: '画像数順' },
@@ -136,7 +138,14 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
                 key={opt.id}
                 type="button"
                 className="btn"
-                onClick={() => setSortBy(opt.id)}
+                onClick={() => {
+                  if (sortBy === opt.id) {
+                    setSortOrder(prev => (prev === 'desc' ? 'asc' : 'desc'))
+                  } else {
+                    setSortBy(opt.id)
+                    setSortOrder(opt.id === 'name' ? 'asc' : 'desc')
+                  }
+                }}
                 style={{
                   fontSize: 12,
                   padding: '5px 10px',
@@ -148,6 +157,17 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
                 {opt.label}
               </button>
             ))}
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setSortOrder(prev => (prev === 'desc' ? 'asc' : 'desc'))}
+              style={{ fontSize: 12, padding: '5px 10px' }}
+              title="並び順（多い順 / 少ない順）を切り替えます"
+            >
+              {sortBy === 'name'
+                ? (sortOrder === 'asc' ? '↑ 昇順' : '↓ 降順')
+                : (sortOrder === 'asc' ? '↑ 少ない順' : '↓ 多い順')}
+            </button>
           </div>
         </div>
 
