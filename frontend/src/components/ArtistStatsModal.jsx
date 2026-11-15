@@ -13,6 +13,10 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState('artists')
   const [filterText, setFilterText] = useState('')
+  const [minItems, setMinItems] = useState('')
+  const [maxItems, setMaxItems] = useState('')
+  const [minImages, setMinImages] = useState('')
+  const [maxImages, setMaxImages] = useState('')
   const [sortBy, setSortBy] = useState('items') // 'items' | 'images' | 'name'
   const [sortOrder, setSortOrder] = useState('desc') // 'desc' | 'asc'
 
@@ -41,9 +45,18 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
   const displayedRows = useMemo(() => {
     const list = (currentBucket && Array.isArray(currentBucket.rows)) ? currentBucket.rows : []
     const q = filterText.trim().toLowerCase()
-    const filtered = q
-      ? list.filter(row => row.name.toLowerCase().includes(q))
-      : list
+    const minIt = minItems.trim() !== '' ? Number(minItems) : null
+    const maxIt = maxItems.trim() !== '' ? Number(maxItems) : null
+    const minIm = minImages.trim() !== '' ? Number(minImages) : null
+    const maxIm = maxImages.trim() !== '' ? Number(maxImages) : null
+    const filtered = list.filter(row => {
+      if (q && !row.name.toLowerCase().includes(q)) return false
+      if (minIt !== null && !Number.isNaN(minIt) && row.item_count < minIt) return false
+      if (maxIt !== null && !Number.isNaN(maxIt) && row.item_count > maxIt) return false
+      if (minIm !== null && !Number.isNaN(minIm) && row.image_count < minIm) return false
+      if (maxIm !== null && !Number.isNaN(maxIm) && row.image_count > maxIm) return false
+      return true
+    })
     const sorted = [...filtered]
     const dir = sortOrder === 'asc' ? 1 : -1
     if (sortBy === 'images') {
@@ -54,7 +67,7 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
       sorted.sort((a, b) => dir * ((a.item_count - b.item_count) || (a.image_count - b.image_count)) || a.name.localeCompare(b.name))
     }
     return sorted
-  }, [currentBucket, filterText, sortBy, sortOrder])
+  }, [currentBucket, filterText, minItems, maxItems, minImages, maxImages, sortBy, sortOrder])
 
   const maxCount = useMemo(() => {
     if (displayedRows.length === 0) return 1
@@ -168,6 +181,63 @@ export default function ArtistStatsModal({ onClose, onSelectArtist, onSelectFilt
                 ? (sortOrder === 'asc' ? '↑ 昇順' : '↓ 降順')
                 : (sortOrder === 'asc' ? '↑ 少ない順' : '↓ 多い順')}
             </button>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', width: '100%', fontSize: 12, color: 'var(--muted)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              アイテム数:
+              <input
+                type="number"
+                min={0}
+                placeholder="以上"
+                value={minItems}
+                onChange={e => setMinItems(e.target.value)}
+                style={{ width: 64, padding: '3px 6px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+              />
+              〜
+              <input
+                type="number"
+                min={0}
+                placeholder="以下"
+                value={maxItems}
+                onChange={e => setMaxItems(e.target.value)}
+                style={{ width: 64, padding: '3px 6px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+              />
+              件
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              画像数:
+              <input
+                type="number"
+                min={0}
+                placeholder="以上"
+                value={minImages}
+                onChange={e => setMinImages(e.target.value)}
+                style={{ width: 64, padding: '3px 6px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+              />
+              〜
+              <input
+                type="number"
+                min={0}
+                placeholder="以下"
+                value={maxImages}
+                onChange={e => setMaxImages(e.target.value)}
+                style={{ width: 64, padding: '3px 6px', fontSize: 12, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)' }}
+              />
+              枚
+            </span>
+            {(minItems || maxItems || minImages || maxImages) && (
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: 11, padding: '2px 8px' }}
+                onClick={() => { setMinItems(''); setMaxItems(''); setMinImages(''); setMaxImages('') }}
+              >
+                数値フィルタ解除
+              </button>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 11 }}>
+              該当 {displayedRows.length}{tabMeta.unit}
+            </span>
           </div>
         </div>
 
