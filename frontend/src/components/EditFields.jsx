@@ -536,10 +536,10 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         return (
           <div style={{...SECTION.wrap, background:'#0f172a', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap'}}>
             <a
-              href={activePreviewUrl}
+              href={`/?image_viewer=1&src=${encodeURIComponent(activePreviewUrl)}`}
               target="_blank"
               rel="noreferrer"
-              title="新しいタブで画像を開く"
+              title="新しいタブで画像を開く（カラー検出付き）"
               style={{
                 display: 'block',
                 flexShrink: 0,

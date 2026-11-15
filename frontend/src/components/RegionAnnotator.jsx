@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { groupsForTitles } from '../lib/groupScope'
 import { handleGroupingResponse } from '../lib/groupChoice'
 import { saveCharacterRegions } from '../lib/itemFieldsApi'
+import { createImagePixelSampler } from '../lib/colorInspect'
 
 function getCookie(name) {
   const m = document.cookie.match('(^|;)\\s*' + name + '\\s*([^;]+)')
@@ -103,6 +104,10 @@ export default function RegionAnnotator({
         setCurrentImageIndex(prev => (prev != null && d.some(img => img.index === prev)) ? prev : (d[0] ? d[0].index : null))
       }).catch(() => {})
   }, [])
+
+  const colorSamplerRef = useRef(null)
+  if (!colorSamplerRef.current) colorSamplerRef.current = createImagePixelSampler()
+  const [hoverColor, setHoverColor] = useState(null)
 
   useEffect(() => {
     loadItemPreviews(item.id)
@@ -290,6 +295,13 @@ export default function RegionAnnotator({
   }
 
   function handleMouseMove(e) {
+    if (imgRef.current && naturalSize) {
+      const { x, y } = toNaturalCoords(e.clientX, e.clientY)
+      if (x >= 0 && y >= 0 && x < naturalSize.width && y < naturalSize.height) {
+        const info = colorSamplerRef.current.sampleAt(imgRef.current, x, y)
+        if (info) setHoverColor(info)
+      }
+    }
     if (!drawStartRef.current) return
     const { x, y } = toNaturalCoords(e.clientX, e.clientY)
     const start = drawStartRef.current
@@ -589,6 +601,7 @@ export default function RegionAnnotator({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={() => setHoverColor(null)}
       >
         <img
           ref={imgRef}
@@ -818,6 +831,38 @@ export default function RegionAnnotator({
             }} />
           )
         })()}
+      </div>
+
+      <div style={{
+        marginTop: 8,
+        padding: '6px 10px',
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderRadius: 6,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 12,
+        color: '#cbd5e1',
+        minHeight: 30,
+      }}>
+        {hoverColor ? (
+          <>
+            <span style={{
+              width: 16, height: 16, borderRadius: 4,
+              background: hoverColor.hex,
+              border: '1px solid rgba(255,255,255,0.7)',
+              flexShrink: 0,
+            }} />
+            <strong style={{ color: '#f8fafc', fontSize: 13 }}>{hoverColor.label}</strong>
+            <span style={{ fontFamily: 'ui-monospace, monospace', color: '#93c5fd' }}>{hoverColor.hex}</span>
+            <span style={{ fontFamily: 'ui-monospace, monospace', color: '#64748b' }}>
+              {hoverColor.rgb} / ({hoverColor.x}, {hoverColor.y})
+            </span>
+          </>
+        ) : (
+          <span style={{ color: '#64748b' }}>画像上にカーソルを合わせるとカーソル位置のカラーコードと色名を表示します</span>
+        )}
       </div>
 
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>

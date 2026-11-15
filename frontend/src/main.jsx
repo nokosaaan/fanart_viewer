@@ -1,6 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import ImageColorViewer from './components/ImageColorViewer'
 import './styles.css'
 import { onSync } from './lib/crossWindowSync'
 
@@ -31,8 +32,12 @@ window.fetch = function (url, options = {}) {
   return _originalFetch(url, options)
 }
 
+const searchParams = new URLSearchParams(window.location.search)
+const viewerSrc = searchParams.get('image_viewer') === '1' ? searchParams.get('src') : null
+const safeViewerSrc = viewerSrc && viewerSrc.startsWith('/') && !viewerSrc.startsWith('//') ? viewerSrc : null
+
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <App />
+    {safeViewerSrc ? <ImageColorViewer src={safeViewerSrc} /> : <App />}
   </React.StrictMode>
 )
