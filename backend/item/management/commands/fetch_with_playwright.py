@@ -12,6 +12,7 @@ import threading
 
 from item.models import Item, PreviewImage
 from item.playwright_helper import fetch_images_with_playwright
+from item.image_optimizer import optimize_image_data
 
 
 class Command(BaseCommand):
@@ -96,6 +97,7 @@ class Command(BaseCommand):
                     # pick the best (largest-bytes) image and save only that as order=0
                     best = max(collected, key=lambda t: len(t[1]) if t and t[1] else 0)
                     _, body, content_type, url_f = best
+                    body, content_type = optimize_image_data(body, content_type)
                     PreviewImage.objects.create(item=it, order=0, data=body, content_type=content_type)
                 t = threading.Thread(target=_write)
                 t.start()

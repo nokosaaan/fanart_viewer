@@ -4,7 +4,10 @@ Downscales oversized images and recompresses them to lean WebP format,
 dramatically reducing SQLite database file size and memory footprint.
 """
 
+import json
+import os
 import sys
+from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 from item.models import Item, PreviewImage
@@ -55,6 +58,43 @@ class Command(BaseCommand):
             action="store_true",
             help="Run SQLite VACUUM after compression to reclaim disk space",
         )
+        parser.add_argument(
+            "--no-cache",
+            action="store_true",
+            help="Ignore processed-ID cache and re-examine all images",
+        )
+
+    def _cache_file_path(self, db_target):
+        if db_target and db_target != ":memory:":
+            p = Path(db_target)
+            if p.parent.exists():
+                return p.parent / ".compress_previews_cache.json"
+        return None
+
+    def _load_cache(self, cache_path, cache_key):
+        if not cache_path or not cache_path.exists():
+            return {}, set()
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return {}, set()
+            ids = data.get(cache_key, [])
+            return data, set(int(x) for x in ids if isinstance(x, int))
+        except Exception:
+            return {}, set()
+
+    def _save_cache(self, cache_path, cache_data, cache_key, id_set):
+        if not cache_path:
+            return
+        try:
+            cache_data[cache_key] = sorted(id_set)
+            tmp_path = Path(str(cache_path) + ".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f)
+            os.replace(tmp_path, cache_path)
+        except Exception:
+            pass
 
     def handle(self, *args, **options):
         max_dim = options["max_dim"]
@@ -64,12 +104,14 @@ class Command(BaseCommand):
         batch_size = options["batch_size"]
         dry_run = options["dry_run"]
         do_vacuum = options["vacuum"]
+        no_cache = options["no_cache"]
 
         qs = PreviewImage.objects.all().order_by("id")
         if item_id is not None:
             qs = qs.filter(item_id=item_id)
 
-        total_count = qs.count()
+        all_ids = list(qs.values_list("id", flat=True))
+        total_count = len(all_ids)
         if total_count == 0:
             self.stdout.write(self.style.WARNING("No PreviewImage records found."))
             return
@@ -78,51 +120,70 @@ class Command(BaseCommand):
         db_settings = connection.settings_dict
         engine_short = db_settings.get("ENGINE", "").rsplit(".", 1)[-1]
         db_target = db_settings.get("NAME", "")
+        cache_path = None if no_cache else self._cache_file_path(db_target)
+        cache_key = f"{max_dim}_{quality}"
+        cache_data, cached_ids = self._load_cache(cache_path, cache_key) if cache_path else ({}, set())
+
+        target_ids = [pid for pid in all_ids if pid not in cached_ids]
+        cache_skipped = total_count - len(target_ids)
+
         self.stdout.write(f"Database target: {engine_short} ({db_target})")
         self.stdout.write(
             f"Starting PreviewImage compression [{mode_str}] (Total: {total_count} images, "
+            f"cached-skip: {cache_skipped}, to-check: {len(target_ids)}, "
             f"max_dim={max_dim}px, quality={quality}, min_size={options['min_size_kb']}KB)..."
         )
 
         total_orig_bytes = 0
         total_opt_bytes = 0
         compressed_count = 0
-        skipped_count = 0
+        skipped_count = cache_skipped
 
-        # Process in batches using .only() to stream image binary data
-        for p in qs.only("id", "item_id", "order", "data", "content_type").iterator(chunk_size=batch_size):
-            raw_data = bytes(p.data) if p.data else b""
-            orig_len = len(raw_data)
-            total_orig_bytes += orig_len
+        # Process uncached IDs in batches so image binary data is only loaded for unchecked rows
+        for i in range(0, len(target_ids), batch_size):
+            chunk_ids = target_ids[i:i + batch_size]
+            batch_checked_ids = []
+            for p in PreviewImage.objects.filter(id__in=chunk_ids).order_by("id").only("id", "item_id", "order", "data", "content_type"):
+                raw_data = bytes(p.data) if p.data else b""
+                orig_len = len(raw_data)
+                total_orig_bytes += orig_len
 
-            if orig_len == 0 or orig_len < min_size_bytes:
-                total_opt_bytes += orig_len
-                skipped_count += 1
-                continue
+                if orig_len == 0 or orig_len < min_size_bytes:
+                    total_opt_bytes += orig_len
+                    skipped_count += 1
+                    if orig_len == 0:
+                        batch_checked_ids.append(p.id)
+                    continue
 
-            opt_data, opt_ctype = optimize_image_data(
-                raw_data,
-                content_type=p.content_type,
-                max_dim=max_dim,
-                quality=quality,
-            )
-            opt_len = len(opt_data)
+                opt_data, opt_ctype = optimize_image_data(
+                    raw_data,
+                    content_type=p.content_type,
+                    max_dim=max_dim,
+                    quality=quality,
+                )
+                opt_len = len(opt_data)
 
-            if opt_len < orig_len:
-                total_opt_bytes += opt_len
-                compressed_count += 1
-                saved_kb = (orig_len - opt_len) / 1024
-                if not dry_run:
-                    PreviewImage.objects.filter(pk=p.id).update(data=opt_data, content_type=opt_ctype)
+                if opt_len < orig_len:
+                    total_opt_bytes += opt_len
+                    compressed_count += 1
+                    saved_kb = (orig_len - opt_len) / 1024
+                    if not dry_run:
+                        PreviewImage.objects.filter(pk=p.id).update(data=opt_data, content_type=opt_ctype)
 
-                if compressed_count % 25 == 0 or compressed_count == 1:
-                    self.stdout.write(
-                        f"  Processed {compressed_count} images (item #{p.item_id} p#{p.order}: "
-                        f"{orig_len // 1024}KB -> {opt_len // 1024}KB, -{saved_kb:.1f}KB)"
-                    )
-            else:
-                total_opt_bytes += orig_len
-                skipped_count += 1
+                    if compressed_count % 25 == 0 or compressed_count == 1:
+                        self.stdout.write(
+                            f"  Processed {compressed_count} images (item #{p.item_id} p#{p.order}: "
+                            f"{orig_len // 1024}KB -> {opt_len // 1024}KB, -{saved_kb:.1f}KB)"
+                        )
+                else:
+                    total_opt_bytes += orig_len
+                    skipped_count += 1
+
+                batch_checked_ids.append(p.id)
+
+            if not dry_run and cache_path and batch_checked_ids:
+                cached_ids.update(batch_checked_ids)
+                self._save_cache(cache_path, cache_data, cache_key, cached_ids)
 
         # Also compress legacy Item.preview_data if any
         legacy_qs = Item.objects.filter(preview_data__isnull=False)
