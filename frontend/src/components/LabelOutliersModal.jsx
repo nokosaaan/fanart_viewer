@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import RegionAnnotator from './RegionAnnotator'
+import EditFields from './EditFields'
 import { notify } from '../lib/crossWindowSync'
 
 const DISMISSED_KEY = 'fv_label_outlier_dismissed_v1'
@@ -128,7 +128,8 @@ export default function LabelOutliersModal({ onClose }) {
   }
 
   return (
-    <div className="cgm-panel-backdrop" onClick={onClose}>
+    <>
+      <div className="cgm-panel-backdrop" onClick={onClose}>
       <div className="cgm-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: 1040, width: '95vw', maxHeight: '90vh' }}>
         <div className="cgm-panel-header">
           <div>
@@ -185,22 +186,7 @@ export default function LabelOutliersModal({ onClose }) {
         )}
 
         <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-          {editingItem ? (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <strong style={{ fontSize: 15 }}>Item #{editingItem.id} の領域・キャラ確認</strong>
-                <button className="btn" onClick={() => setEditingItem(null)}>一覧に戻る</button>
-              </div>
-              <RegionAnnotator
-                item={editingItem}
-                onSaved={async (updatedItem) => {
-                  notify('item-updated', { id: editingItem.id, item: updatedItem })
-                  setEditingItem(null)
-                  await load()
-                }}
-              />
-            </div>
-          ) : loading ? (
+          {loading ? (
             <div className="cgm-empty-hint">学習済みモデルとクラスタ重心を比較しています…</div>
           ) : visibleOutliers.length === 0 ? (
             <div className="cgm-empty-hint">外れ値と判定された誤ラベル候補はありません 🎉</div>
@@ -300,7 +286,7 @@ export default function LabelOutliersModal({ onClose }) {
                           onClick={() => openManualRegionEdit(o.item_id)}
                           disabled={isBusy}
                         >
-                          領域を手動確認
+                          手動で編集
                         </button>
                         <button
                           className="btn"
@@ -319,6 +305,18 @@ export default function LabelOutliersModal({ onClose }) {
           )}
         </div>
       </div>
-    </div>
+      </div>
+      {editingItem && (
+        <EditFields
+          item={editingItem}
+          onClose={() => setEditingItem(null)}
+          onSaved={async (updatedItem) => {
+            if (updatedItem) notify('item-updated', { id: editingItem.id, item: updatedItem })
+            setEditingItem(null)
+            await load()
+          }}
+        />
+      )}
+    </>
   )
 }
