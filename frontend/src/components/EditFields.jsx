@@ -126,7 +126,7 @@ function TagField({ label, hint, list, setList, allOptions, setAllOptions, selec
 // onDirtyChange/showOwnActions below, all added for that embedding).
 export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャンセル', initialSuggestion = null,
   fieldsRef = null, onSituationChange = null, onTitlesChange = null, onDirtyChange = null, onSuggestionApplied = null,
-  showOwnActions = true, regionSlot = null }){
+  showOwnActions = true, regionSlot = null, compactQueueLayout = false }){
   const [titleList, setTitleList] = useState(item.titles||[])
   const [charList,  setCharList]  = useState(item.characters||[])
   const [situation, setSituation] = useState((item.situation||'').toUpperCase())
@@ -190,6 +190,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   const [showAllChars, setShowAllChars] = useState(false)
   const [showAllTitles, setShowAllTitles] = useState(false)
   const [expandedTitleCandidate, setExpandedTitleCandidate] = useState(null)
+  const [showManualCharsInRegion, setShowManualCharsInRegion] = useState(false)
   // Only offered once tagger_capabilities/ confirms the heavier 'timm'
   // backend is actually installed on this server (see requirements-timm.txt
   // — not every deployment opts into torch).
@@ -319,7 +320,10 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     if(Array.isArray(j.titles)){
       setTitleSuggestions(j.titles)
       setExpandedTitleCandidate(null)
-      if(j.titles.length > 0) added = true
+      if(j.titles.length > 0){
+        added = true
+        setTitleList(prev => prev.length > 0 ? prev : [j.titles[0].name])
+      }
     } else {
       setTitleSuggestions([])
       setTitleList(prev => {
@@ -364,7 +368,12 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
       return j.situation_hint
     })
 
-    setTitleCandidates(j.title_candidates || [])
+    const lowTitleCands = j.title_candidates || []
+    setTitleCandidates(lowTitleCands)
+    if((!Array.isArray(j.titles) || j.titles.length === 0) && (!Array.isArray(j.suggested_titles) || j.suggested_titles.length === 0) && lowTitleCands.length > 0){
+      setTitleList(prev => prev.length > 0 ? prev : [lowTitleCands[0]])
+      added = true
+    }
 
     // j.image_index: which PreviewImage the tagger actually ran on (null
     // when there was no image to infer from, e.g. tags-only result from
@@ -510,6 +519,291 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     { value:'', label:'— 未設定 —' },
     ...customSits.map(s => ({ value: s, label: s }))
   ]
+
+  if (compactQueueLayout) {
+    const selectedImgObj = selectedImageIndex !== null
+      ? images.find(img => img.index === selectedImageIndex)
+      : images[0]
+    const activePreviewUrl = selectedImgObj && selectedImgObj.id != null
+      ? `/api/items/${item.id}/preview/?id=${selectedImgObj.id}`
+      : (selectedImageIndex !== null
+        ? `/api/items/${item.id}/preview/?index=${selectedImageIndex}`
+        : (item.first_preview_id != null
+          ? `/api/items/${item.id}/preview/?id=${item.first_preview_id}`
+          : `/api/items/${item.id}/preview/`))
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0 }}>
+        {/* 1行目: 画像(推論用画像一覧埋め込み + 別ページリンク) | 本文 | 個別提案開始 */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 8, marginBottom: 8, alignItems: 'stretch', flexShrink: 0 }}>
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: 6, display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 260 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+              <a
+                href={`/?image_viewer=1&src=${encodeURIComponent(activePreviewUrl)}`}
+                target="_blank"
+                rel="noreferrer"
+                title="新しいタブで画像を開く（カラー検出付き）"
+                style={{ display: 'block', flexShrink: 0, borderRadius: 4, overflow: 'hidden', lineHeight: 0 }}
+              >
+                <img
+                  src={activePreviewUrl}
+                  alt=""
+                  style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 4, background: '#1e293b', display: 'block', cursor: 'pointer' }}
+                />
+              </a>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 12 }}>#{item.id}</span>
+                {item.link && (
+                  <a
+                    className="link-text"
+                    href={item.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="元リンクを開く(実際の画像を確認)"
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 6px',
+                      borderRadius: 4, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
+                      color: '#94a3b8', fontSize: 11, textDecoration: 'none',
+                    }}
+                  >
+                    {(() => {
+                      const platform = getPlatformIcon(item.link)
+                      return platform ? <img src={platform.icon} alt={platform.label} style={{ width: 13, height: 13, borderRadius: 2 }} /> : null
+                    })()}
+                    <span>↗</span>
+                  </a>
+                )}
+              </div>
+            </div>
+            {images.length > 1 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, maxWidth: 248, maxHeight: 62, overflowY: 'auto' }} title="推論に使う画像を選択">
+                <button
+                  type="button"
+                  onClick={() => setSelectedImageIndex(null)}
+                  title="自動選択(最大サイズの画像)"
+                  style={{
+                    height: 28, padding: '0 5px', borderRadius: 4, cursor: 'pointer', fontSize: 10,
+                    background: '#1e293b', color: '#cbd5e1',
+                    border: selectedImageIndex === null ? '2px solid #3b82f6' : '1px solid #334155',
+                  }}
+                >自動</button>
+                {images.map(img => (
+                  <button
+                    key={img.id ?? img.index}
+                    type="button"
+                    onClick={() => setSelectedImageIndex(img.index)}
+                    title={`${img.index + 1}枚目で推論する`}
+                    style={{
+                      width: 28, height: 28, borderRadius: 4, padding: 0, cursor: 'pointer', overflow: 'hidden', position: 'relative',
+                      border: selectedImageIndex === img.index ? '2px solid #3b82f6' : '1px solid #334155',
+                    }}
+                  >
+                    <img src={img.id != null ? `/api/items/${item.id}/preview/?id=${img.id}` : `/api/items/${item.id}/preview/?index=${img.index}`} alt={`${img.index + 1}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                    <span style={{ position: 'absolute', right: 1, bottom: 0, fontSize: 9, color: '#fff', background: 'rgba(0,0,0,0.65)', padding: '0 2px', borderRadius: 2 }}>{img.index + 1}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', maxHeight: 112, overflowY: 'auto', minWidth: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+              <span style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em' }}>本文</span>
+              {item.description && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      navigator.clipboard.writeText(item.description)
+                    }
+                    setCopiedDesc(true)
+                    setTimeout(() => setCopiedDesc(false), 1500)
+                  }}
+                  style={{ padding: '1px 6px', fontSize: 10, background: 'rgba(255,255,255,0.08)', color: copiedDesc ? '#4ade80' : '#94a3b8' }}
+                >
+                  {copiedDesc ? 'コピー完了' : 'コピー'}
+                </button>
+              )}
+            </div>
+            {item.description ? (
+              <div style={{ fontSize: 12, color: '#cbd5e1', whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', lineHeight: 1.4 }}>
+                <HighlightedText text={item.description} />
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>本文情報なし</div>
+            )}
+          </div>
+
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center', minWidth: 165, maxWidth: 220 }}>
+            <button type="button" className="btn" onClick={runSuggest} disabled={suggesting}
+              style={{ fontSize: 12, background: '#2563eb', color: '#fff', padding: '5px 10px', fontWeight: 600 }}>
+              {suggesting ? '解析中…' : '🏷 個別提案開始'}
+            </button>
+            <label style={{ fontSize: 10, color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input type="checkbox" checked={suggestExternal} onChange={e => setSuggestExternal(e.target.checked)} disabled={suggesting} style={{ margin: 0 }} />
+              Danbooru照合
+            </label>
+            {haveTimm && (
+              <select value={suggestModel} onChange={e => setSuggestModel(e.target.value)} disabled={suggesting} style={{ fontSize: 11 }}>
+                <option value="default">標準モデル</option>
+                <option value="canary">最新モデル(重い)</option>
+              </select>
+            )}
+            {suggestError && <div style={{ fontSize: 10, color: '#f87171' }}>{suggestError}</div>}
+            {!suggestError && suggestionResult && (
+              <div style={{ fontSize: 10, color: suggestionResult.added ? '#86efac' : '#f59e0b' }}>
+                {suggestionResult.added ? '提案を反映済み' : '提案候補なし'}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 2行目: TITLE | ARTIST | SITUATION | TAGS を横1列でコンパクト配置 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 0.8fr 1fr 1.3fr', gap: 8, marginBottom: 8, alignItems: 'start', flexShrink: 0 }}>
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
+            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>TITLE ★</label>
+            <TagField
+              label=""
+              hint=""
+              list={titleList} setList={setTitleList}
+              allOptions={allTitles} setAllOptions={setAllTitles}
+              selectPlaceholder="タイトル検索/入力"
+            />
+            {(titleSuggestions.length > 0 || titleCandidates.length > 0) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 4 }}>
+                {titleSuggestions.slice(0, 4).map(t => {
+                  const isAdded = titleList.includes(t.name)
+                  return (
+                    <button key={t.name} type="button" onClick={() => toggleTitleCandidate(t.name)}
+                      style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', cursor: 'pointer', background: isAdded ? '#166534' : '#334155', color: '#f1f5f9' }}
+                      title={`score ${t.score}`}
+                    >
+                      {isAdded ? '✓ ' : '＋ '}{t.name}
+                    </button>
+                  )
+                })}
+                {titleSuggestions.length === 0 && titleCandidates.slice(0, 4).map(t => {
+                  const isAdded = titleList.includes(t)
+                  return (
+                    <button key={t} type="button" onClick={() => toggleTitleCandidate(t)}
+                      style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, border: 'none', cursor: 'pointer', background: isAdded ? '#166534' : '#78350f', color: '#fef3c7' }}
+                    >
+                      {isAdded ? '✓ ' : '＋ '}{t}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
+            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>ARTIST</label>
+            <input
+              style={{ width: '100%', background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '5px 8px', fontSize: 12, boxSizing: 'border-box' }}
+              value={artist} onChange={e => setArtist(e.target.value)}
+              placeholder="作者名 / ID"
+            />
+          </div>
+
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
+            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>SITUATION</label>
+            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
+              {situationsList.map(s => (
+                <button key={s.value} type="button" onClick={() => setSituation(prev => prev === s.value ? '' : s.value)}
+                  style={{
+                    padding: '3px 7px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 500,
+                    background: situation === s.value ? '#3b82f6' : '#1e293b',
+                    color: situation === s.value ? '#fff' : '#94a3b8',
+                    outline: situation === s.value ? '1px solid #60a5fa' : '1px solid #334155',
+                  }}
+                >{s.label || '—'}</button>
+              ))}
+              {!showAddSituation && (
+                <button type="button" onClick={() => setShowAddSituation(true)}
+                  style={{ padding: '2px 6px', borderRadius: 4, border: '1px dashed #475569', cursor: 'pointer', fontSize: 10, background: 'transparent', color: '#94a3b8' }}
+                >＋</button>
+              )}
+            </div>
+            {showAddSituation && (
+              <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                <input type="text" placeholder="新規" value={newSituationInput} onChange={e => setNewSituationInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleAddSituation() }}
+                  style={{ background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '3px 6px', fontSize: 11, width: 90 }}
+                  autoFocus
+                />
+                <button type="button" className="btn" onClick={handleAddSituation} style={{ fontSize: 10, padding: '2px 6px' }}>追加</button>
+                <button type="button" className="btn" onClick={() => { setShowAddSituation(false); setNewSituationInput('') }} style={{ fontSize: 10, padding: '2px 6px' }}>×</button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: '#0f172a', borderRadius: 6, padding: '6px 8px', minWidth: 0 }}>
+            <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>TAGS</label>
+            <input
+              style={{ width: '100%', background: '#1e293b', color: '#f1f5f9', border: '1px solid #334155', borderRadius: 4, padding: '5px 8px', fontSize: 12, boxSizing: 'border-box' }}
+              value={tags} onChange={e => setTags(e.target.value)}
+              placeholder="tag1, tag2, tag3"
+            />
+          </div>
+        </div>
+
+        {/* 3行目: 領域 (SOLO以外) または キャラ (SOLOのみ) — 残り高さを埋めてスクロール可能 */}
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', paddingRight: 2 }}>
+          {regionSlot}
+
+          {!isSolo ? (
+            <div style={{ marginTop: 6 }}>
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: 11, padding: '3px 8px' }}
+                onClick={() => setShowManualCharsInRegion(v => !v)}
+              >
+                {showManualCharsInRegion ? '▼ キャラ手動選択・グループ一覧を隠す' : `▶ キャラ手動選択・グループ一覧を表示 (${charList.length}名選択中)`}
+              </button>
+              {showManualCharsInRegion && (
+                <div style={{ marginTop: 6, background: '#0f172a', borderRadius: 6, padding: 8 }}>
+                  <CharacterPicker charList={charList} setCharList={setCharList} allChars={allChars} titles={titleList} defaultGroupsVisible={false} />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ background: '#0f172a', borderRadius: 6, padding: '8px 10px' }}>
+              <label style={{ color: '#94a3b8', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>
+                キャラ (SOLOのみ)
+              </label>
+              {charCandidates.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                  {(showAllChars ? charCandidates : charCandidates.slice(0, COLLAPSED_CANDIDATES)).map(c => {
+                    const isAdded = charList.includes(c.name)
+                    return (
+                      <button key={c.name} type="button" onClick={() => toggleCharCandidate(c.name)}
+                        style={{
+                          fontSize: 12, padding: '4px 10px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                          background: isAdded ? '#166534' : '#334155', color: '#f1f5f9',
+                        }}
+                        title={`score ${c.score}`}
+                      >
+                        {isAdded ? '✓ ' : '＋ '}{c.name} <span style={{ fontSize: 10, opacity: 0.75 }}>({c.score})</span>
+                      </button>
+                    )
+                  })}
+                  {charCandidates.length > COLLAPSED_CANDIDATES && (
+                    <button type="button" className="btn" onClick={() => setShowAllChars(v => !v)} style={{ fontSize: 11, padding: '3px 8px' }}>
+                      {showAllChars ? '▲' : `+${charCandidates.length - COLLAPSED_CANDIDATES}件`}
+                    </button>
+                  )}
+                </div>
+              )}
+              <CharacterPicker charList={charList} setCharList={setCharList} allChars={allChars} titles={titleList} defaultGroupsVisible={false} />
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -1017,6 +1311,7 @@ export function ItemQueuePanel({
   onDirtyChange,
   closeLabel = 'スキップ（後で対応）',
   initialSuggestion = null,
+  compactQueueLayout = false,
 }){
   const [situationDraft, setSituationDraft] = useState((item.situation || '').toUpperCase())
   const [titlesDraft, setTitlesDraft] = useState(item.titles || [])
@@ -1160,6 +1455,7 @@ export function ItemQueuePanel({
             boxesRef={boxesRef}
             onDirtyChange={setRegionDirty}
             onCharactersChange={handleRegionCharactersChange}
+            compact={compactQueueLayout}
           />
         </div>
       ) : (
@@ -1181,7 +1477,7 @@ export function ItemQueuePanel({
   )
 
   return (
-    <div>
+    <div style={compactQueueLayout ? { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 } : undefined}>
       <ItemEditForm
         item={item}
         onClose={onClose}
@@ -1194,16 +1490,20 @@ export function ItemQueuePanel({
         onDirtyChange={setFieldsDirty}
         onSuggestionApplied={setSuggestion}
         regionSlot={regionSection}
+        compactQueueLayout={compactQueueLayout}
       />
 
-      {error && <div style={{marginTop:10, fontSize:12, color:'#f87171'}}>{error}</div>}
+      {error && <div style={{marginTop:6, fontSize:12, color:'#f87171', flexShrink: 0}}>{error}</div>}
 
-      <div style={{display:'flex', gap:8, marginTop:16}}>
-        <button className="btn" style={{background:'#3b82f6', color:'#fff', padding:'10px 24px', fontSize:14, fontWeight:600}}
+      <div style={compactQueueLayout
+        ? { display:'flex', gap:8, marginTop:8, paddingTop:8, borderTop:'1px solid #334155', flexShrink: 0 }
+        : { display:'flex', gap:8, marginTop:16 }
+      }>
+        <button className="btn" style={{background:'#3b82f6', color:'#fff', padding:'8px 24px', fontSize:14, fontWeight:600}}
           onClick={handleSave} disabled={saving}>
           {saving ? '保存中…' : '保存'}
         </button>
-        <button className="btn" style={{padding:'10px 16px'}} onClick={onClose}>{closeLabel}</button>
+        <button className="btn" style={{padding:'8px 16px'}} onClick={onClose}>{closeLabel}</button>
       </div>
     </div>
   )

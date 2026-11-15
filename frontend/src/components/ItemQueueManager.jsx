@@ -831,16 +831,20 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
           )}
         </div>
 
-        <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
+        <div style={mode === 'attention'
+          ? { flex: 1, padding: 10, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }
+          : { flex: 1, padding: 16, overflowY: 'auto' }
+        }>
           {!selected ? (
             <div className="cgm-empty-hint">左のリストから項目を選んでください</div>
           ) : mode === 'attention' ? (
-            <div style={{background:'#1e293b', borderRadius:8, padding:'16px 20px'}}>
+            <div style={{background:'#1e293b', borderRadius:8, padding:'10px 14px', flex:'1 1 auto', minHeight:0, display:'flex', flexDirection:'column'}}>
               <ItemQueuePanel
                 key={selected.id}
                 item={selected}
                 closeLabel="スキップ（後で対応）"
                 initialSuggestion={suggestions[selected.id] || null}
+                compactQueueLayout={true}
                 onDirtyChange={setItemPanelDirty}
                 onClose={()=>selectNext(selected.id)}
                 onSaved={(newItem)=>{
@@ -950,7 +954,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // attribute's UA-stylesheet default can't do on its own.
   return (
     <div className="cgm-panel-backdrop" style={hidden ? {display:'none'} : undefined} onClick={handleClose}>
-      <div className="cgm-panel" style={{width:1000}} onClick={e=>e.stopPropagation()}>{content}</div>
+      <div className="cgm-panel" style={{width:'98vw', maxWidth:'98vw', height:'96vh', maxHeight:'96vh'}} onClick={e=>e.stopPropagation()}>{content}</div>
     </div>
   )
 }

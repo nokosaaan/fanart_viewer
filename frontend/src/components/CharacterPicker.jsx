@@ -11,8 +11,9 @@ function getCookie(name) {
 // group list is restricted to groups linked to one of those titles — and a
 // new group can be created inline, pre-linked to them — so character-group
 // naming stays tied to title naming instead of drifting independently.
-export default function CharacterPicker({ charList, setCharList, allChars, titles }) {
+export default function CharacterPicker({ charList, setCharList, allChars, titles, defaultGroupsVisible = true }) {
   const [groups, setGroups] = useState([])
+  const [groupsOpen, setGroupsOpen] = useState(defaultGroupsVisible)
   const [collapsed, setCollapsed] = useState({})
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState(true)
   const [query, setQuery] = useState('')
@@ -167,11 +168,14 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
     )
   }
 
+  const showGroupsBody = searching || groupsOpen
+
   return (
     <div className="cp-root">
-      <div className="cp-search-row">
+      <div className="cp-search-row" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
           className="cp-search-input"
+          style={{ flex: '1 1 180px' }}
           placeholder="キャラクター名で検索 / 新規追加"
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -180,16 +184,28 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
         {searching && !exactExists && (
           <button className="btn" onClick={() => addNew(query)}>＋ 追加</button>
         )}
+        {!defaultGroupsVisible && (
+          <button
+            type="button"
+            className="btn"
+            style={{ fontSize: 11, padding: '4px 8px' }}
+            onClick={() => setGroupsOpen(v => !v)}
+          >
+            {showGroupsBody ? '▼ キャラグループ一覧を閉じる' : `▶ キャラグループ一覧を表示 (${topLevelGroups.length})`}
+          </button>
+        )}
       </div>
 
-      {selectedTitles.length === 0 && (
-        <div className="cp-hint">タイトルを選択すると、そのタイトルのキャラクターグループに絞り込まれます</div>
-      )}
-      {selectedTitles.length > 0 && matchingGroups.length === 0 && (
-        <div className="cp-hint">このタイトルに紐づくグループはまだありません（全グループを表示中）。下のボタンから作成できます</div>
-      )}
+      {showGroupsBody && (
+        <>
+          {selectedTitles.length === 0 && (
+            <div className="cp-hint">タイトルを選択すると、そのタイトルのキャラクターグループに絞り込まれます</div>
+          )}
+          {selectedTitles.length > 0 && matchingGroups.length === 0 && (
+            <div className="cp-hint">このタイトルに紐づくグループはまだありません（全グループを表示中）。下のボタンから作成できます</div>
+          )}
 
-      {topLevelGroups.map(g => renderGroupNode(g, 0))}
+          {topLevelGroups.map(g => renderGroupNode(g, 0))}
 
       {selectedTitles.length > 0 && (
         creatingGroup ? (
@@ -238,6 +254,8 @@ export default function CharacterPicker({ charList, setCharList, allChars, title
           </div>
         )
       })()}
+        </>
+      )}
 
       {/* Selected characters not currently shown above (hidden by title
           scoping or the active search) — always reachable to deselect. */}

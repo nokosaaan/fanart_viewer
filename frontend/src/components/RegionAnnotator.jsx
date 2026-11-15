@@ -42,6 +42,7 @@ export default function RegionAnnotator({
   showOwnActions = true,
   titles = null,
   proposedRegions = null,
+  compact = false,
 }) {
   const [images, setImages] = useState([])            // [{index, url, content_type}, ...]
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
@@ -610,10 +611,12 @@ export default function RegionAnnotator({
         )}
       </div>
 
-      <div style={{ marginBottom: 10, fontSize: 12, color: '#94a3b8' }}>
-        画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください(1画像内に同じキャラが何回登場してもそれぞれ指定できます)。
-        Shift/Ctrl+クリックで複数選択、または「📌 スタンプ割当」で同じキャラを連続クリックして一括入力できます。
-      </div>
+      {!compact && (
+        <div style={{ marginBottom: 10, fontSize: 12, color: '#94a3b8' }}>
+          画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください(1画像内に同じキャラが何回登場してもそれぞれ指定できます)。
+          Shift/Ctrl+クリックで複数選択、または「📌 スタンプ割当」で同じキャラを連続クリックして一括入力できます。
+        </div>
+      )}
 
       {selectedBoxIds.size > 0 && (
         <div style={{ marginBottom: 10, background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: 10 }}>
@@ -701,7 +704,12 @@ export default function RegionAnnotator({
           src={previewUrl}
           alt={`item-${item.id}`}
           draggable={false}
-          style={{ maxWidth: '100%', display: 'block' }}
+          style={{
+            maxWidth: '100%',
+            maxHeight: compact ? '40vh' : undefined,
+            width: compact ? 'auto' : undefined,
+            display: 'block',
+          }}
           onLoad={e => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
         />
 
@@ -953,7 +961,7 @@ export default function RegionAnnotator({
               </span>
             </span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: compact ? 130 : 220, overflowY: 'auto' }}>
             {visibleBoxes.map((b, idx) => {
               const [x1, y1, x2, y2] = b.box
               const w = Math.max(0, Math.round(x2 - x1))
