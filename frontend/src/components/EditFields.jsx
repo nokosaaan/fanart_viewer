@@ -1386,7 +1386,7 @@ export function ItemQueuePanel({
     }
   }, [])
 
-  const showRegionSection = manualShowRegion !== null ? manualShowRegion : (situationDraft !== 'SOLO')
+  const showRegionSection = manualShowRegion !== null ? manualShowRegion : true
 
   useEffect(()=>{
     if(!showRegionSection){
