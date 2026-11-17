@@ -1540,6 +1540,8 @@ def _predict_crop_character_scores(crop, tagger_backend):
                 embedding=crop.get('embedding'), ccip=crop.get('ccip')
             )
             for name, p in preds:
+                if not _is_appearance_color_label(name) and p <= _CLASSIFIER_NAMED_CHAR_MIN_CONF:
+                    continue
                 for alias in _expand_character_alias(name):
                     scores[alias] = max(scores.get(alias, 0.0), p * 2.0)
         except Exception:
@@ -2132,6 +2134,8 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
             if want_characters:
                 per_image_cls = [dict(_classifier_predictions(r, tagger_backend)) for _p, r in results]
                 for char_name, (confidence, k, n, seen) in _aggregate_confidences(per_image_cls).items():
+                    if not _is_appearance_color_label(char_name) and confidence <= _CLASSIFIER_NAMED_CHAR_MIN_CONF:
+                        continue
                     for alias in _expand_character_alias(char_name):
                         char_c.append({'value': alias, 'source': 'classifier', 'confidence': confidence,
                                        'images_with': k, 'images_total': n, **support(seen)})
@@ -2302,7 +2306,8 @@ def _combine_candidates(entries, weights, min_score=0.0, top_k=1):
     return [v for v, _s in ranked[:top_k]], scores
 
 
-_NAMED_CHAR_FALLBACK_THRESHOLD = 0.5
+_CLASSIFIER_NAMED_CHAR_MIN_CONF = 0.85
+_NAMED_CHAR_FALLBACK_THRESHOLD = 1.0
 
 
 def _combine_character_candidates_tiered(entries, weights, min_score=0.0, top_k=1,

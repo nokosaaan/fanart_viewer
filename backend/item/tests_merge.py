@@ -217,11 +217,11 @@ class ItemMergeTestCase(TestCase):
         self.assertFalse(_is_appearance_color_label('silver wolf'))
         self.assertFalse(_is_appearance_color_label('nagao kagetora (fate)'))
 
-        # Case 1: Named character clears threshold -> color labels are filtered out
+        # Case 1: Named character clears threshold (e.g. classifier > 0.65 -> score > 2.6) -> color labels are filtered out
         entries_with_named = [
             {'value': 'silver', 'source': 'classifier', 'confidence': 0.8},
             {'value': 'blonde', 'source': 'classifier', 'confidence': 0.6},
-            {'value': 'nagao kagetora (fate)', 'source': 'classifier', 'confidence': 0.25},
+            {'value': 'nagao kagetora (fate)', 'source': 'classifier', 'confidence': 0.7},
         ]
         vals, _scores = _combine_character_candidates_tiered(entries_with_named, DEFAULT_ENSEMBLE_WEIGHTS, top_k=5)
         self.assertEqual(vals, ['nagao kagetora (fate)'])
@@ -230,7 +230,18 @@ class ItemMergeTestCase(TestCase):
         entries_no_named = [
             {'value': 'silver', 'source': 'classifier', 'confidence': 0.7},
             {'value': 'white', 'source': 'classifier', 'confidence': 0.5},
-            {'value': 'weak_char', 'source': 'tag_similarity_weak', 'confidence': 0.3},  # 0.3 * 0.5 = 0.15 < 0.5
+            {'value': 'weak_char', 'source': 'tag_similarity_weak', 'confidence': 0.3},  # 0.3 * 0.5 = 0.15 < 1.0
         ]
         vals_fb, _scores_fb = _combine_character_candidates_tiered(entries_no_named, DEFAULT_ENSEMBLE_WEIGHTS, top_k=5)
         self.assertEqual(vals_fb, ['silver', 'white', 'weak_char'])
+
+        # Case 3: _predict_crop_character_scores filters out named classifier predictions <= 0.85
+        from unittest.mock import patch
+        from item.views import _predict_crop_character_scores
+        with patch('item.tagger.predict_character_topk', return_value=[
+            ('low_conf_char', 0.60),
+            ('silver', 0.35),
+        ]):
+            crop_scores = _predict_crop_character_scores({'general_probs': [0.1]}, 'onnx')
+        self.assertNotIn('low_conf_char', crop_scores)
+        self.assertIn('silver', crop_scores)
