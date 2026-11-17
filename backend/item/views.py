@@ -5131,6 +5131,166 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response({'groups': groups_out, 'total_groups': len(groups_out)})
 
+    @action(detail=False, methods=['get'], url_path='title_merge_candidates')
+    def title_merge_candidates(self, request):
+        """Find pairs of titles that co-occur on at least `min_overlap` items
+        (default 3), indicating possible spelling/alias variants of the same title.
+        """
+        from collections import defaultdict
+        from itertools import combinations
+
+        try:
+            min_overlap = max(2, int(request.query_params.get('min_overlap', 3) or 3))
+        except (TypeError, ValueError):
+            min_overlap = 3
+
+        title_counts = defaultdict(int)
+        co_counts = defaultdict(int)
+        co_sample_ids = defaultdict(list)
+        items_by_id = {}
+
+        rows = (
+            Item.objects
+            .exclude(titles=[])
+            .exclude(titles__isnull=True)
+            .order_by('-id')
+            .values('id', 'artist', 'situation', 'titles', 'characters', 'link')
+        )
+        for r in rows:
+            uniq = list(dict.fromkeys(
+                t.strip() for t in (r['titles'] or []) if isinstance(t, str) and t.strip()
+            ))
+            if not uniq:
+                continue
+            for t in uniq:
+                title_counts[t] += 1
+            if len(uniq) < 2:
+                continue
+            items_by_id[r['id']] = r
+            for a, b in combinations(sorted(uniq), 2):
+                pair = (a, b)
+                co_counts[pair] += 1
+                if len(co_sample_ids[pair]) < 4:
+                    co_sample_ids[pair].append(r['id'])
+
+        matched_pairs = [
+            (pair, cnt) for pair, cnt in co_counts.items() if cnt >= min_overlap
+        ]
+        matched_pairs.sort(key=lambda x: (-x[1], -(title_counts[x[0][0]] + title_counts[x[0][1]]), x[0][0], x[0][1]))
+
+        sample_ids = {iid for pair, _ in matched_pairs for iid in co_sample_ids[pair]}
+        first_preview_map = {}
+        preview_count_map = defaultdict(int)
+        if sample_ids:
+            for pi in PreviewImage.objects.filter(item_id__in=sample_ids).order_by('item_id', 'order', 'id').values('id', 'item_id'):
+                iid = pi['item_id']
+                first_preview_map.setdefault(iid, pi['id'])
+                preview_count_map[iid] += 1
+
+        candidates = []
+        for (a, b), co_count in matched_pairs:
+            cnt_a = title_counts[a]
+            cnt_b = title_counts[b]
+            samples = []
+            for iid in co_sample_ids[(a, b)]:
+                r = items_by_id[iid]
+                samples.append({
+                    'id': iid,
+                    'artist': r['artist'] or '',
+                    'situation': r['situation'] or '',
+                    'titles': r['titles'] or [],
+                    'characters': r['characters'] or [],
+                    'link': r['link'] or '',
+                    'first_preview_id': first_preview_map.get(iid),
+                    'preview_count': preview_count_map.get(iid, 0),
+                })
+            candidates.append({
+                'pair_id': f'{a}\0{b}',
+                'title_a': a,
+                'title_b': b,
+                'co_count': co_count,
+                'count_a': cnt_a,
+                'count_b': cnt_b,
+                'only_a_count': max(0, cnt_a - co_count),
+                'only_b_count': max(0, cnt_b - co_count),
+                'sample_items': samples,
+            })
+
+        return Response({
+            'min_overlap': min_overlap,
+            'total_candidates': len(candidates),
+            'candidates': candidates,
+        })
+
+    @action(detail=False, methods=['post'], url_path='merge_titles')
+    def merge_titles(self, request):
+        """Unify `source_title` into `target_title` across Item.titles,
+        CharacterGroup.titles, and TitleDanbooruLink.
+        """
+        from django.db import transaction
+
+        data = request.data if isinstance(request.data, dict) else {}
+        source_title = (data.get('source_title') or '').strip()
+        target_title = (data.get('target_title') or '').strip()
+        if not source_title or not target_title:
+            return Response({'detail': 'source_title and target_title are required'}, status=status.HTTP_400_BAD_REQUEST)
+        if source_title == target_title:
+            return Response({'detail': 'source_title and target_title must differ'}, status=status.HTTP_400_BAD_REQUEST)
+
+        updated_items = 0
+        updated_groups = 0
+        with transaction.atomic():
+            for it in Item.objects.exclude(titles=[]).exclude(titles__isnull=True).only('id', 'titles'):
+                titles = it.titles or []
+                if source_title not in titles:
+                    continue
+                new_titles = list(dict.fromkeys(
+                    target_title if t == source_title else t
+                    for t in titles
+                    if isinstance(t, str) and t.strip()
+                ))
+                if new_titles != titles:
+                    it.titles = new_titles
+                    it.save(update_fields=['titles'])
+                    updated_items += 1
+
+            for grp in CharacterGroup.objects.all().only('id', 'titles'):
+                gtitles = grp.titles or []
+                if source_title not in gtitles:
+                    continue
+                new_gtitles = list(dict.fromkeys(
+                    target_title if t == source_title else t
+                    for t in gtitles
+                    if isinstance(t, str) and t.strip()
+                ))
+                if new_gtitles != gtitles:
+                    grp.titles = new_gtitles
+                    grp.save(update_fields=['titles'])
+                    updated_groups += 1
+
+            src_link = TitleDanbooruLink.objects.filter(title_name=source_title).first()
+            if src_link is not None:
+                tgt_link = TitleDanbooruLink.objects.filter(title_name=target_title).first()
+                if tgt_link is None:
+                    src_link.title_name = target_title
+                    src_link.save(update_fields=['title_name'])
+                else:
+                    if not tgt_link.danbooru_tag and src_link.danbooru_tag:
+                        tgt_link.danbooru_tag = src_link.danbooru_tag
+                        tgt_link.resolved_via = src_link.resolved_via
+                        tgt_link.match_score = src_link.match_score
+                        tgt_link.debug_info = src_link.debug_info
+                        tgt_link.save(update_fields=['danbooru_tag', 'resolved_via', 'match_score', 'debug_info'])
+                    src_link.delete()
+
+        return Response({
+            'status': 'merged',
+            'source_title': source_title,
+            'target_title': target_title,
+            'updated_items': updated_items,
+            'updated_groups': updated_groups,
+        })
+
     @action(detail=False, methods=['post'], url_path='merge')
     def merge(self, request):
         """Merge one or more source items into target_id, keeping/reordering

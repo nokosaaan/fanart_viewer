@@ -153,3 +153,50 @@ class ItemMergeTestCase(TestCase):
         results = data['results'] if isinstance(data, dict) and 'results' in data else data
         self.assertEqual(len(results), 2)
         self.assertTrue(all(r['artist'] == 'ArtistA' for r in results))
+
+    def test_title_merge_candidates_and_merge_titles(self):
+        from item.models import CharacterGroup, TitleDanbooruLink
+
+        # 3 items sharing both "TitleA" and "Title A" (should be detected at default min_overlap=3)
+        t1 = Item.objects.create(external_id=2001, source='pixiv_bookmark', artist='X', titles=['TitleA', 'Title A'])
+        t2 = Item.objects.create(external_id=2002, source='pixiv_bookmark', artist='X', titles=['Title A', 'TitleA'])
+        t3 = Item.objects.create(external_id=2003, source='pixiv_bookmark', artist='X', titles=['TitleA', 'Title A'])
+        # 1 item with only "Title A", 1 item with only "TitleA"
+        t4 = Item.objects.create(external_id=2004, source='pixiv_bookmark', artist='X', titles=['Title A'])
+        t5 = Item.objects.create(external_id=2005, source='pixiv_bookmark', artist='X', titles=['TitleA'])
+        # 2 items sharing "Other1" and "Other2" (below min_overlap=3)
+        Item.objects.create(external_id=2006, source='pixiv_bookmark', artist='X', titles=['Other1', 'Other2'])
+        Item.objects.create(external_id=2007, source='pixiv_bookmark', artist='X', titles=['Other1', 'Other2'])
+
+        grp = CharacterGroup.objects.create(name='GrpT', characters=['C1'], titles=['Title A', 'Extra'])
+        TitleDanbooruLink.objects.create(title_name='Title A', danbooru_tag='title_a')
+
+        res = self.client.get('/api/items/title_merge_candidates/')
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data['total_candidates'], 1)
+        cand = data['candidates'][0]
+        self.assertEqual(cand['co_count'], 3)
+        self.assertEqual({cand['title_a'], cand['title_b']}, {'TitleA', 'Title A'})
+
+        res_merge = self.client.post('/api/items/merge_titles/', {
+            'source_title': 'Title A',
+            'target_title': 'TitleA',
+        }, format='json')
+        self.assertEqual(res_merge.status_code, 200)
+        self.assertEqual(res_merge.json()['updated_items'], 4)
+        self.assertEqual(res_merge.json()['updated_groups'], 1)
+
+        for it in (t1, t2, t3, t4, t5):
+            it.refresh_from_db()
+            self.assertEqual(it.titles, ['TitleA'])
+
+        grp.refresh_from_db()
+        self.assertEqual(grp.titles, ['TitleA', 'Extra'])
+        self.assertFalse(TitleDanbooruLink.objects.filter(title_name='Title A').exists())
+        self.assertTrue(TitleDanbooruLink.objects.filter(title_name='TitleA', danbooru_tag='title_a').exists())
+
+        # Candidate list is now empty
+        res_after = self.client.get('/api/items/title_merge_candidates/')
+        self.assertEqual(res_after.status_code, 200)
+        self.assertEqual(res_after.json()['total_candidates'], 0)

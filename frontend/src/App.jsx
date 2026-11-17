@@ -17,6 +17,7 @@ import FetchQueueManager from './components/FetchQueueManager'
 import ItemQueueManager from './components/ItemQueueManager'
 import MultiImageManager from './components/MultiImageManager'
 import MergeCandidatesModal from './components/MergeCandidatesModal'
+import TitleMergeCandidatesModal from './components/TitleMergeCandidatesModal'
 import ArtistStatsModal from './components/ArtistStatsModal'
 import ManualAddItem from './components/ManualAddItem'
 import EditFields from './components/EditFields'
@@ -150,6 +151,7 @@ function AppMain({ role, onLogout }){
   const [itemQueueMounted, setItemQueueMounted] = useState(false)
   const [multiImageManagerOpen, setMultiImageManagerOpen] = useState(false)
   const [mergeCandidatesOpen, setMergeCandidatesOpen] = useState(false)
+  const [titleMergeOpen, setTitleMergeOpen] = useState(false)
   const [artistStatsOpen, setArtistStatsOpen] = useState(false)
   const [charGroupOpen, setCharGroupOpen] = useState(false)
   const [charAliasGroupOpen, setCharAliasGroupOpen] = useState(false)
@@ -1014,6 +1016,10 @@ function AppMain({ role, onLogout }){
                 onClick: () => setMergeCandidatesOpen(true),
                 tourId: 'menu-merge-candidates',
               },
+              {
+                label: <MenuIconLabel iconNode="🏷️" text="タイトル表記ゆれ・統一候補" />,
+                onClick: () => setTitleMergeOpen(true),
+              },
               { label: <MenuIconLabel iconNode="✋" text="手動でアイテムを追加" />, onClick: () => setManualAddOpen(true), tourId: 'menu-manual-add' },
               { divider: true },
               {
@@ -1240,6 +1246,9 @@ function AppMain({ role, onLogout }){
       )}
       {mergeCandidatesOpen && (
         <MergeCandidatesModal onClose={() => setMergeCandidatesOpen(false)} />
+      )}
+      {titleMergeOpen && (
+        <TitleMergeCandidatesModal onClose={() => setTitleMergeOpen(false)} />
       )}
       {artistStatsOpen && (
         <ArtistStatsModal

@@ -16,6 +16,33 @@ const chipStyle = {
   padding:'5px 10px', fontSize:13, display:'inline-flex', alignItems:'center', gap:6,
 }
 
+// Match list-mode .situation-chip colors in styles.css
+const SITUATION_COLORS = {
+  SOLO:     { bg: '#dc2626', tint: 'rgba(220, 38, 38, 0.16)', text: '#fca5a5', border: '#dc2626' },
+  CP:       { bg: '#f59e0b', tint: 'rgba(245, 158, 11, 0.16)', text: '#fcd34d', border: '#f59e0b' },
+  MULTIPLE: { bg: '#16a34a', tint: 'rgba(22, 163, 74, 0.16)',  text: '#86efac', border: '#16a34a' },
+  PARODY:   { bg: '#3b82f6', tint: 'rgba(59, 130, 246, 0.16)', text: '#93c5fd', border: '#3b82f6' },
+  R18:      { bg: '#ec4899', tint: 'rgba(236, 72, 153, 0.16)', text: '#f9a8d4', border: '#ec4899' },
+}
+
+function getSituationButtonStyle(value, selected, compact) {
+  const c = SITUATION_COLORS[(value || '').toUpperCase()]
+  const baseBg = compact ? '#1e293b' : '#0f172a'
+  return {
+    padding: compact ? '3px 7px' : '8px 16px',
+    borderRadius: compact ? 4 : 6,
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: compact ? 11 : 13,
+    fontWeight: selected ? 600 : 500,
+    background: selected ? (c ? c.bg : '#3b82f6') : (c ? c.tint : baseBg),
+    color: selected ? '#fff' : (c ? c.text : '#94a3b8'),
+    outline: selected
+      ? `2px solid ${c ? '#fff' : (compact ? '#60a5fa' : '#3b82f6')}`
+      : `1px solid ${c ? c.border : '#334155'}`,
+  }
+}
+
 // Renders text with #hashtags visually distinguished, so a quick glance
 // confirms whether _extract_full_text actually captured the hashtags a
 // post used (the signal _match_hashtags relies on) rather than requiring
@@ -747,12 +774,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
               <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center', flex: 1, minWidth: 0 }}>
                 {situationsList.map(s => (
                   <button key={s.value} type="button" onClick={() => setSituation(prev => prev === s.value ? '' : s.value)}
-                    style={{
-                      padding: '3px 7px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 500,
-                      background: situation === s.value ? '#3b82f6' : '#1e293b',
-                      color: situation === s.value ? '#fff' : '#94a3b8',
-                      outline: situation === s.value ? '1px solid #60a5fa' : '1px solid #334155',
-                    }}
+                    style={getSituationButtonStyle(s.value, situation === s.value, true)}
                   >{s.label || '—'}</button>
                 ))}
                 {!showAddSituation && (
@@ -1261,12 +1283,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <div style={{display:'flex', gap:8, flexWrap:'wrap', alignItems:'center'}}>
           {situationsList.map(s=>(
             <button key={s.value} type="button" onClick={()=>setSituation(prev => prev === s.value ? '' : s.value)}
-              style={{
-                padding:'8px 16px', borderRadius:6, border:'none', cursor:'pointer', fontSize:13, fontWeight:500,
-                background: situation===s.value ? '#3b82f6' : '#0f172a',
-                color: situation===s.value ? '#fff' : '#94a3b8',
-                outline: situation===s.value ? '2px solid #3b82f6' : '1px solid #334155',
-              }}
+              style={getSituationButtonStyle(s.value, situation===s.value, false)}
             >{s.label || '—'}</button>
           ))}
           {!showAddSituation && (
