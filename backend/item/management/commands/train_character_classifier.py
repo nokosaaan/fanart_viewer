@@ -67,10 +67,12 @@ Usage:
       --use-cache /app/data/tagger/character_features_canary_embedding.joblib --exclude 牢屋敷メンバー
 """
 import importlib.util
+import json
 import os
 import time
 import zlib
 from collections import defaultdict
+from datetime import datetime, timezone
 
 import numpy as np
 from django.core.management.base import BaseCommand, CommandError
@@ -430,6 +432,9 @@ class Command(BaseCommand):
                                   "'hash' (legacy deterministic hash order).")
         parser.add_argument('--exclude-situation', type=str, default='',
                              help='Comma-separated Item.situation values (case-insensitive) to exclude from training.')
+        parser.add_argument('--feedback-threshold', type=float, default=0.95,
+                             help='Holdout accuracy threshold (0-1, default 0.95) below/at which characters are '
+                                  'flagged in training_feedback.json and training logs.')
 
     # ------------------------------------------------------------------
     # Candidate survey: what COULD be trained on, before any extraction.
@@ -1069,14 +1074,14 @@ class Command(BaseCommand):
             rows = pruned_rows
 
         # ---- assemble matrix ----------------------------------------------
-        feats, labels, groups, kinds, aug, base_w = [], [], [], [], [], []
+        feats, labels, groups, kinds, aug, base_w, row_keys = [], [], [], [], [], [], []
         for c in rows:
             kw = 1.0 if c['kind'] == _SOLO else region_weight
             feats.append(c['feat']); labels.append(c['char']); groups.append(c['item_id'])
-            kinds.append(c['kind']); aug.append(False); base_w.append(kw)
+            kinds.append(c['kind']); aug.append(False); base_w.append(kw); row_keys.append(c['key'])
             if gray and c.get('gray_feat') is not None:
                 feats.append(c['gray_feat']); labels.append(c['char']); groups.append(c['item_id'])
-                kinds.append(c['kind']); aug.append(True); base_w.append(kw * gray_weight)
+                kinds.append(c['kind']); aug.append(True); base_w.append(kw * gray_weight); row_keys.append(c['key'] + _GRAY_SUFFIX)
         X = np.stack(feats).astype(np.float32)
         y, groups = np.array(labels), np.array(groups)
         kinds, aug, base_w = np.array(kinds), np.array(aug), np.array(base_w, dtype=np.float64)
@@ -1221,3 +1226,106 @@ class Command(BaseCommand):
             'holdout_split': 'item-grouped',
         }, output_path)
         self.stdout.write(self.style.SUCCESS(f'\nSaved classifier to {output_path}'))
+
+        # ---- training feedback (holdout misclassifications & low-accuracy classes) ----
+        raw_thresh = float(options.get('feedback_threshold', 0.95) or 0.95)
+        feedback_threshold = raw_thresh / 100.0 if raw_thresh > 1.0 else raw_thresh
+        try:
+            holdout_proba = split_clf.predict_proba(X[test_idx]) if len(test_idx) > 0 else np.empty((0, len(split_clf.classes_)))
+            holdout_class_pos = {c: k for k, c in enumerate(split_clf.classes_)}
+        except Exception:
+            holdout_proba = None
+            holdout_class_pos = {}
+
+        per_char_totals = defaultdict(int)
+        per_char_hits = defaultdict(int)
+        for j, gi in enumerate(test_idx):
+            ch = str(y[gi])
+            per_char_totals[ch] += 1
+            if bool(correct[j]):
+                per_char_hits[ch] += 1
+
+        char_acc_map = {
+            ch: per_char_hits[ch] / per_char_totals[ch]
+            for ch in per_char_totals
+            if per_char_totals[ch] > 0
+        }
+        low_accuracy_chars = sorted(
+            [
+                {
+                    'character': ch,
+                    'accuracy': round(char_acc_map[ch], 4),
+                    'hits': per_char_hits[ch],
+                    'support': per_char_totals[ch],
+                }
+                for ch in char_acc_map
+                if char_acc_map[ch] <= feedback_threshold
+            ],
+            key=lambda x: (x['accuracy'], -x['support'], x['character']),
+        )
+
+        misclassified = []
+        for j, gi in enumerate(test_idx):
+            if bool(correct[j]):
+                continue
+            assigned_ch = str(y[gi])
+            pred_ch = str(pred[j])
+            pred_prob = 0.0
+            assigned_prob = 0.0
+            if holdout_proba is not None and j < len(holdout_proba):
+                row_p = holdout_proba[j]
+                if pred_ch in holdout_class_pos:
+                    pred_prob = float(row_p[holdout_class_pos[pred_ch]])
+                if assigned_ch in holdout_class_pos:
+                    assigned_prob = float(row_p[holdout_class_pos[assigned_ch]])
+            ch_acc = char_acc_map.get(assigned_ch, 0.0)
+            misclassified.append({
+                'item_id': int(groups[gi]),
+                'key': str(row_keys[gi]),
+                'is_region': bool(kinds[gi] == _REGION),
+                'assigned_char': assigned_ch,
+                'predicted_char': pred_ch,
+                'predicted_prob': round(pred_prob, 4),
+                'assigned_prob': round(assigned_prob, 4),
+                'char_accuracy': round(ch_acc, 4),
+                'char_support': int(per_char_totals.get(assigned_ch, 0)),
+                'low_accuracy': bool(ch_acc <= feedback_threshold),
+            })
+
+        feedback_path = os.path.join(os.path.dirname(output_path), 'training_feedback.json')
+        feedback_payload = {
+            'generated_at': datetime.now(timezone.utc).isoformat(),
+            'model_name': os.path.basename(output_path),
+            'backend': tagger_backend,
+            'feature_source': feature_source,
+            'classifier_type': classifier_choice,
+            'feedback_threshold': feedback_threshold,
+            'holdout_accuracy': round(test_acc, 4),
+            'holdout_total': int(len(test_idx)),
+            'low_accuracy_chars': low_accuracy_chars,
+            'misclassified': misclassified,
+        }
+        with open(feedback_path, 'w', encoding='utf-8') as f:
+            json.dump(feedback_payload, f, ensure_ascii=False, indent=2)
+
+        if low_accuracy_chars:
+            self.stdout.write(
+                f'\n[Feedback] {len(low_accuracy_chars)} character(s) at/below {feedback_threshold:.0%} holdout accuracy '
+                f'({len(misclassified)} misclassified holdout row(s) saved to {feedback_path}):'
+            )
+            by_ch_err = defaultdict(list)
+            for m in misclassified:
+                by_ch_err[m['assigned_char']].append(m)
+            for entry in low_accuracy_chars[:20]:
+                ch = entry['character']
+                errs = by_ch_err.get(ch, [])[:3]
+                err_str = ', '.join(f"#{e['item_id']}→{e['predicted_char']}({e['predicted_prob']:.0%})" for e in errs)
+                self.stdout.write(
+                    f"  - {ch}: {entry['accuracy']:.1%} ({entry['hits']}/{entry['support']})"
+                    + (f" | 例: {err_str}" if err_str else '')
+                )
+        else:
+            self.stdout.write(
+                f'\n[Feedback] All assessable characters exceeded {feedback_threshold:.0%} holdout accuracy '
+                f'({len(misclassified)} misclassified holdout row(s) saved to {feedback_path}).'
+            )

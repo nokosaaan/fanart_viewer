@@ -148,3 +148,90 @@ class BrokenRegionsAndOutliersTests(TestCase):
         self.assertEqual(r_sync.status_code, 200)
         item.refresh_from_db()
         self.assertEqual(item.characters, ["CharA"])
+
+    def test_label_outliers_merges_training_feedback(self):
+        import json
+        import os
+        import tempfile
+        import joblib
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+        from item import tagger
+
+        it_a = Item.objects.create(external_id=601, source="pixiv_bookmark", artist="A", situation="SOLO", characters=["CharA"])
+        it_b = Item.objects.create(external_id=602, source="pixiv_bookmark", artist="B", situation="SOLO", characters=["CharB"])
+        holdout_err = Item.objects.create(external_id=603, source="pixiv_bookmark", artist="C", situation="SOLO", characters=["CharA"])
+
+        X_train = np.array([[1.0, 0.0], [0.95, 0.05], [0.0, 1.0], [0.05, 0.95]], dtype=np.float32)
+        y_train = np.array(["CharA", "CharA", "CharB", "CharB"])
+        clf = LogisticRegression().fit(X_train, y_train)
+
+        rows = [
+            (it_a.id, "CharA", np.array([1.0, 0.0], dtype=np.float32), f"item:{it_a.id}"),
+            (it_b.id, "CharB", np.array([0.0, 1.0], dtype=np.float32), f"item:{it_b.id}"),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_data_dir = tagger._data_dir
+            tagger._data_dir = lambda: tmpdir
+            try:
+                joblib.dump({
+                    "classifier": clf,
+                    "classes": list(clf.classes_),
+                    "backend": "wd_v3",
+                    "feature_source": "tags",
+                    "feature_dim": 2,
+                }, os.path.join(tmpdir, "character_classifier_wd_v3.joblib"))
+                joblib.dump({
+                    "rows": rows,
+                    "manual_rows": [],
+                }, os.path.join(tmpdir, "character_features_wd_v3.joblib"))
+                with open(os.path.join(tmpdir, "training_feedback.json"), "w", encoding="utf-8") as f:
+                    json.dump({
+                        "generated_at": "2026-11-17T00:00:00+00:00",
+                        "feedback_threshold": 0.95,
+                        "holdout_accuracy": 0.85,
+                        "holdout_total": 10,
+                        "low_accuracy_chars": [
+                            {"character": "CharA", "accuracy": 0.8, "hits": 4, "support": 5}
+                        ],
+                        "misclassified": [
+                            {
+                                "item_id": holdout_err.id,
+                                "key": f"item:{holdout_err.id}",
+                                "is_region": False,
+                                "assigned_char": "CharA",
+                                "predicted_char": "CharB",
+                                "predicted_prob": 0.82,
+                                "assigned_prob": 0.18,
+                                "char_accuracy": 0.8,
+                                "char_support": 5,
+                                "low_accuracy": True,
+                            }
+                        ],
+                    }, f)
+
+                r = self.client.get("/api/items/label_outliers/?min_prob=0.35")
+                self.assertEqual(r.status_code, 200)
+                data = r.json()
+                self.assertIsNotNone(data["feedback_summary"])
+                self.assertEqual(data["feedback_summary"]["feedback_threshold"], 0.95)
+                self.assertEqual(data["feedback_summary"]["holdout_error_count"], 1)
+                self.assertEqual(len(data["outliers"]), 1)
+                o = data["outliers"][0]
+                self.assertEqual(o["item_id"], holdout_err.id)
+                self.assertTrue(o["from_holdout"])
+                self.assertTrue(o["low_accuracy"])
+                self.assertEqual(o["char_accuracy"], 0.8)
+
+                # Once fixed on the item, it disappears from label_outliers
+                self.client.post(f"/api/items/{holdout_err.id}/apply_label_fix/", {
+                    "old_char": "CharA",
+                    "new_char": "CharB",
+                    "is_region": False,
+                }, format="json")
+                r2 = self.client.get("/api/items/label_outliers/?min_prob=0.35")
+                self.assertEqual(r2.status_code, 200)
+                self.assertEqual(len(r2.json()["outliers"]), 0)
+            finally:
+                tagger._data_dir = orig_data_dir

@@ -39,6 +39,7 @@ export default function LabelOutliersModal({ onClose }) {
   const [meta, setMeta] = useState(null)
   const [outliers, setOutliers] = useState([])
   const [filterText, setFilterText] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all')
   const [minProb, setMinProb] = useState(0.35)
   const [resolved, setResolved] = useState(() => loadResolved())
   const [busyKey, setBusyKey] = useState(null)
@@ -63,6 +64,7 @@ export default function LabelOutliersModal({ onClose }) {
         featureSource: j.feature_source,
         totalChecked: j.total_checked || 0,
         outlierCount: j.outlier_count || 0,
+        feedbackSummary: j.feedback_summary || null,
       })
       if (modelVersion) {
         setResolved(loadResolved(modelVersion))
@@ -81,6 +83,9 @@ export default function LabelOutliersModal({ onClose }) {
     const q = filterText.trim().toLowerCase()
     return outliers.filter(o => {
       if (resolved.has(`${o.key}:${o.assigned_char}`)) return false
+      if (sourceFilter === 'low_acc_holdout' && !(o.from_holdout && o.low_accuracy)) return false
+      if (sourceFilter === 'holdout' && !o.from_holdout) return false
+      if (sourceFilter === 'cluster' && !o.from_cluster) return false
       if (!q) return true
       return (
         String(o.item_id).includes(q) ||
@@ -90,7 +95,7 @@ export default function LabelOutliersModal({ onClose }) {
         (o.artist || '').toLowerCase().includes(q)
       )
     })
-  }, [outliers, resolved, filterText])
+  }, [outliers, resolved, filterText, sourceFilter])
 
   async function applyFix(o, newChar) {
     if (!newChar) return
@@ -145,7 +150,7 @@ export default function LabelOutliersModal({ onClose }) {
       <div className="cgm-panel" onClick={e => e.stopPropagation()} style={{ maxWidth: 1040, width: '95vw', maxHeight: '90vh' }}>
         <div className="cgm-panel-header">
           <div>
-            <strong>誤ラベル候補チェック（学習クラスタ外れ値）</strong>
+            <strong>誤ラベル候補チェック（外れ値 / 学習フィードバック）</strong>
             {meta && meta.modelName && (
               <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--muted)' }}>
                 {meta.totalChecked}件中 {visibleOutliers.length}件表示 ({meta.modelName})
@@ -166,6 +171,15 @@ export default function LabelOutliersModal({ onClose }) {
             onChange={e => setFilterText(e.target.value)}
             style={{ flex: '1 1 220px', minWidth: 180 }}
           />
+          <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--muted)' }}>
+            検出元:
+            <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)} style={{ fontSize: 12 }}>
+              <option value="all">すべて</option>
+              <option value="low_acc_holdout">検証ミス（低精度キャラ）</option>
+              <option value="holdout">検証ミス（Holdout全件）</option>
+              <option value="cluster">クラスタ外れ値のみ</option>
+            </select>
+          </label>
           <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--muted)' }}>
             最低予測確信度:
             <select value={minProb} onChange={e => setMinProb(Number(e.target.value))} style={{ fontSize: 12 }}>
@@ -194,6 +208,38 @@ export default function LabelOutliersModal({ onClose }) {
         {infoMsg && (
           <div style={{ padding: '10px 16px', background: 'rgba(59,130,246,0.1)', color: '#93c5fd', fontSize: 13 }}>
             {infoMsg}
+          </div>
+        )}
+
+        {meta?.feedbackSummary && meta.feedbackSummary.low_accuracy_chars?.length > 0 && (
+          <div style={{ padding: '8px 16px', background: 'rgba(245,158,11,0.08)', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+            <div style={{ color: '#fbbf24', fontWeight: 600, marginBottom: 4 }}>
+              Holdout 精度 {Math.round((meta.feedbackSummary.feedback_threshold ?? 0.95) * 100)}% 以下のキャラ（{meta.feedbackSummary.low_accuracy_chars.length}件・クリックで絞り込み）
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 72, overflowY: 'auto' }}>
+              {meta.feedbackSummary.low_accuracy_chars.map(ch => {
+                const active = filterText.trim().toLowerCase() === ch.character.toLowerCase()
+                return (
+                  <button
+                    key={ch.character}
+                    type="button"
+                    onClick={() => setFilterText(active ? '' : ch.character)}
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 4,
+                      border: active ? '1px solid #f59e0b' : '1px solid rgba(245,158,11,0.3)',
+                      background: active ? 'rgba(245,158,11,0.25)' : 'rgba(15,23,42,0.6)',
+                      color: '#fde68a',
+                      cursor: 'pointer',
+                    }}
+                    title={`Holdout正解率 ${Math.round(ch.accuracy * 100)}% (${ch.hits}/${ch.support})`}
+                  >
+                    {ch.character} ({Math.round(ch.accuracy * 100)}%, {ch.hits}/{ch.support})
+                  </button>
+                )
+              })}
+            </div>
           </div>
         )}
 
@@ -261,6 +307,26 @@ export default function LabelOutliersModal({ onClose }) {
                         <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#1e293b', color: '#cbd5e1' }}>
                           {o.is_region ? '領域ラベル' : 'SOLO画像'}
                         </span>
+                        {o.from_holdout && (
+                          <span
+                            style={{
+                              fontSize: 11, padding: '1px 6px', borderRadius: 4,
+                              background: o.low_accuracy ? '#78350f' : '#1e3a8a',
+                              color: o.low_accuracy ? '#fde68a' : '#bfdbfe',
+                              fontWeight: 600,
+                            }}
+                            title={o.char_accuracy != null ? `このキャラのHoldout正解率: ${Math.round(o.char_accuracy * 100)}%` : undefined}
+                          >
+                            {o.low_accuracy && o.char_accuracy != null
+                              ? `検証ミス (${Math.round(o.char_accuracy * 100)}%)`
+                              : '検証ミス (Holdout)'}
+                          </span>
+                        )}
+                        {o.from_cluster && (
+                          <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 4, background: '#1e293b', color: '#94a3b8' }}>
+                            クラスタ外れ値
+                          </span>
+                        )}
                         {o.situation && <span className={`situation-chip s-${o.situation.toLowerCase()}`}>{o.situation}</span>}
                         {o.artist && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{o.artist}</span>}
                         {o.link && (
@@ -272,7 +338,7 @@ export default function LabelOutliersModal({ onClose }) {
 
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', fontSize: 12, marginBottom: 8 }}>
                         <span style={{ background: 'rgba(239,68,68,0.16)', color: '#fca5a5', padding: '3px 8px', borderRadius: 6 }}>
-                          現在: <strong>{o.assigned_char}</strong> ({Math.round(o.assigned_prob * 100)}% / 類似度 {Math.round(o.own_cluster_sim * 100)}%)
+                          現在: <strong>{o.assigned_char}</strong> ({Math.round(o.assigned_prob * 100)}%{o.from_cluster ? ` / 類似度 ${Math.round(o.own_cluster_sim * 100)}%` : ''})
                         </span>
                         <span>→</span>
                         <span style={{ background: 'rgba(59,130,246,0.18)', color: '#93c5fd', padding: '3px 8px', borderRadius: 6 }}>

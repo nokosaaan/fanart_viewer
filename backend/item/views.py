@@ -5722,24 +5722,77 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 'outliers': [],
             })
 
-        item_ids = list({e[0] for e in valid_entries})
-        items_map = {
-            it.id: it
-            for it in Item.objects.filter(id__in=item_ids).only(
-                'id', 'artist', 'situation', 'characters', 'character_regions', 'titles', 'link'
-            )
-        }
-        first_preview_map = {}
-        item_previews_map = {}
-        preview_pos_map = {}
-        for pi in PreviewImage.objects.filter(item_id__in=item_ids).order_by('item_id', 'order', 'id').values('id', 'item_id'):
-            iid = pi['item_id']
-            pid = pi['id']
-            first_preview_map.setdefault(iid, pid)
-            lst = item_previews_map.setdefault(iid, [])
-            idx_0 = len(lst)
-            lst.append(pid)
-            preview_pos_map[pid] = (iid, idx_0)
+        def _load_item_maps(ids):
+            if not ids:
+                return {}, {}, {}, {}
+            i_map = {
+                it.id: it
+                for it in Item.objects.filter(id__in=ids).only(
+                    'id', 'artist', 'situation', 'characters', 'character_regions', 'titles', 'link'
+                )
+            }
+            fp_map, ip_map, pp_map = {}, {}, {}
+            for pi in PreviewImage.objects.filter(item_id__in=ids).order_by('item_id', 'order', 'id').values('id', 'item_id'):
+                iid = pi['item_id']
+                pid = pi['id']
+                fp_map.setdefault(iid, pid)
+                lst = ip_map.setdefault(iid, [])
+                idx_0 = len(lst)
+                lst.append(pid)
+                pp_map[pid] = (iid, idx_0)
+            return i_map, fp_map, ip_map, pp_map
+
+        def _still_assigned(it, ch, is_reg_key):
+            if it is None:
+                return False
+            if is_reg_key:
+                for r in (it.character_regions or []):
+                    if ch in (r.get('characters') or []):
+                        return True
+                return False
+            return ch in (it.characters or [])
+
+        def _resolve_preview_target(item_id, key_str, is_reg, fp_map, ip_map, pp_map):
+            previews = ip_map.get(item_id, [])
+            preview_count = len(previews)
+            target_preview_id = fp_map.get(item_id)
+            image_index = 0 if preview_count > 0 else None
+            if key_str.startswith('pi:'):
+                try:
+                    pid = int(key_str[3:])
+                    if pid in pp_map:
+                        target_preview_id = pid
+                        image_index = pp_map[pid][1]
+                except (TypeError, ValueError):
+                    pass
+            elif is_reg:
+                kparts = key_str.split(':')
+                raw_idx = kparts[1] if (kparts[0].isdigit() and len(kparts) >= 2) else (kparts[2] if len(kparts) >= 3 else '')
+                try:
+                    idx_0 = int(raw_idx)
+                    image_index = idx_0
+                    if 0 <= idx_0 < preview_count:
+                        target_preview_id = previews[idx_0]
+                except (TypeError, ValueError):
+                    pass
+            return target_preview_id, image_index, preview_count
+
+        # Load training_feedback.json if available
+        feedback_data = None
+        feedback_path = os.path.join(data_dir, 'training_feedback.json')
+        if os.path.exists(feedback_path):
+            try:
+                import json as _json
+                with open(feedback_path, 'r', encoding='utf-8') as f:
+                    feedback_data = _json.load(f)
+            except Exception:
+                feedback_data = None
+
+        fb_misclassified = list((feedback_data or {}).get('misclassified') or [])
+        item_ids = list({e[0] for e in valid_entries} | {
+            int(m['item_id']) for m in fb_misclassified if m.get('item_id') is not None
+        })
+        items_map, first_preview_map, item_previews_map, preview_pos_map = _load_item_maps(item_ids)
 
         # Filter to entries whose assigned label still exists on the item in DB
         active_entries = []
@@ -5747,56 +5800,58 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             it = items_map.get(item_id)
             if it is None:
                 continue
-            if key.startswith('solo:'):
-                if ch not in (it.characters or []):
-                    continue
-            elif key.startswith('reg:'):
-                # Keep if the character still exists in item's regions
-                reg_chars = set()
-                for r in (it.character_regions or []):
-                    for rc in (r.get('characters') or []):
-                        reg_chars.add(rc)
-                if ch not in reg_chars:
-                    continue
+            is_reg_key = key.startswith('reg:') or (
+                not key.startswith('pi:')
+                and not key.startswith('item:')
+                and not key.startswith('solo:')
+                and ':' in key
+            )
+            if not _still_assigned(it, ch, is_reg_key):
+                continue
             active_entries.append((item_id, ch, feat, key))
 
-        if not active_entries:
+        if not active_entries and not fb_misclassified:
             return Response({
                 'model_name': os.path.basename(model_path),
                 'model_mtime': model_mtime,
                 'total_checked': 0,
+                'outlier_count': 0,
                 'outliers': [],
             })
 
-        X = np.stack([e[2] for e in active_entries]).astype(np.float32)
-        probs = clf.predict_proba(X)
+        X = np.stack([e[2] for e in active_entries]).astype(np.float32) if active_entries else None
+        probs = clf.predict_proba(X) if X is not None else None
         class_to_idx = {c: idx for idx, c in enumerate(classes)}
 
         # Compute L2-normalized class centroids from the feature matrix
-        norms = np.linalg.norm(X, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        X_unit = X / norms
-
         centroids = {}
-        by_class = {}
-        for idx, e in enumerate(active_entries):
-            by_class.setdefault(e[1], []).append(idx)
-        for ch, idxs in by_class.items():
-            c_vec = X_unit[idxs].mean(axis=0)
-            c_norm = np.linalg.norm(c_vec)
-            if c_norm > 0:
-                c_vec = c_vec / c_norm
-            centroids[ch] = c_vec
+        centroid_names = []
+        centroid_name_to_idx = {}
+        all_sims = None
+        if X is not None:
+            norms = np.linalg.norm(X, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            X_unit = X / norms
 
-        centroid_names = sorted(centroids.keys())
-        centroid_mat = np.stack([centroids[c] for c in centroid_names]) if centroid_names else None
-        centroid_name_to_idx = {c: i for i, c in enumerate(centroid_names)}
-        all_sims = (X_unit @ centroid_mat.T) if centroid_mat is not None else None
+            by_class = {}
+            for idx, e in enumerate(active_entries):
+                by_class.setdefault(e[1], []).append(idx)
+            for ch, idxs in by_class.items():
+                c_vec = X_unit[idxs].mean(axis=0)
+                c_norm = np.linalg.norm(c_vec)
+                if c_norm > 0:
+                    c_vec = c_vec / c_norm
+                centroids[ch] = c_vec
+
+            centroid_names = sorted(centroids.keys())
+            centroid_mat = np.stack([centroids[c] for c in centroid_names]) if centroid_names else None
+            centroid_name_to_idx = {c: i for i, c in enumerate(centroid_names)}
+            all_sims = (X_unit @ centroid_mat.T) if centroid_mat is not None else None
 
         min_prob = float(request.query_params.get('min_prob', 0.35) or 0.35)
         limit = min(int(request.query_params.get('limit', 200) or 200), 500)
 
-        outliers = []
+        outlier_map = {}
         for idx, (item_id, assigned_char, _feat, key) in enumerate(active_entries):
             row_probs = probs[idx]
             pred_idx = int(np.argmax(row_probs))
@@ -5824,41 +5879,26 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 continue
 
             it = items_map[item_id]
-            previews = item_previews_map.get(item_id, [])
-            preview_count = len(previews)
-            target_preview_id = first_preview_map.get(item_id)
-            image_index = 0 if preview_count > 0 else None
             is_region = key.startswith('reg:') or (
                 not key.startswith('pi:')
                 and not key.startswith('item:')
                 and not key.startswith('solo:')
                 and ':' in key
             )
-
-            if key.startswith('pi:'):
-                try:
-                    pid = int(key[3:])
-                    if pid in preview_pos_map:
-                        target_preview_id = pid
-                        image_index = preview_pos_map[pid][1]
-                except (TypeError, ValueError):
-                    pass
-            elif is_region:
-                kparts = key.split(':')
-                raw_idx = kparts[1] if (kparts[0].isdigit() and len(kparts) >= 2) else (kparts[2] if len(kparts) >= 3 else '')
-                try:
-                    idx_0 = int(raw_idx)
-                    image_index = idx_0
-                    if 0 <= idx_0 < preview_count:
-                        target_preview_id = previews[idx_0]
-                except (TypeError, ValueError):
-                    pass
+            target_preview_id, image_index, preview_count = _resolve_preview_target(
+                item_id, key, is_region, first_preview_map, item_previews_map, preview_pos_map
+            )
 
             score = round(prob_gap + sim_gap, 4)
-            outliers.append({
+            outlier_map[(key, assigned_char)] = {
                 'item_id': item_id,
                 'key': key,
                 'is_region': is_region,
+                'from_cluster': True,
+                'from_holdout': False,
+                'char_accuracy': None,
+                'char_support': None,
+                'low_accuracy': False,
                 'assigned_char': assigned_char,
                 'predicted_char': pred_char,
                 'predicted_prob': round(pred_prob, 4),
@@ -5876,15 +5916,84 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 'target_preview_id': target_preview_id,
                 'image_index': image_index,
                 'preview_count': preview_count,
-            })
+            }
 
+        active_holdout_errors = 0
+        for m in fb_misclassified:
+            item_id = int(m.get('item_id'))
+            assigned_char = str(m.get('assigned_char') or '')
+            key = str(m.get('key') or '')
+            is_region = bool(m.get('is_region', False))
+            it = items_map.get(item_id)
+            if not _still_assigned(it, assigned_char, is_region):
+                continue
+            active_holdout_errors += 1
+            low_acc = bool(m.get('low_accuracy', False))
+            ch_acc = m.get('char_accuracy')
+            ch_sup = m.get('char_support')
+            map_key = (key, assigned_char)
+            if map_key in outlier_map:
+                existing = outlier_map[map_key]
+                existing['from_holdout'] = True
+                existing['char_accuracy'] = ch_acc
+                existing['char_support'] = ch_sup
+                existing['low_accuracy'] = low_acc
+                existing['outlier_score'] = round(existing['outlier_score'] + (0.25 if low_acc else 0.1), 4)
+            else:
+                pred_char = str(m.get('predicted_char') or '')
+                pred_prob = float(m.get('predicted_prob') or 0.0)
+                assigned_prob = float(m.get('assigned_prob') or 0.0)
+                target_preview_id, image_index, preview_count = _resolve_preview_target(
+                    item_id, key, is_region, first_preview_map, item_previews_map, preview_pos_map
+                )
+                score = round(max(0.1, pred_prob - assigned_prob) + (0.25 if low_acc else 0.05), 4)
+                outlier_map[map_key] = {
+                    'item_id': item_id,
+                    'key': key,
+                    'is_region': is_region,
+                    'from_cluster': False,
+                    'from_holdout': True,
+                    'char_accuracy': ch_acc,
+                    'char_support': ch_sup,
+                    'low_accuracy': low_acc,
+                    'assigned_char': assigned_char,
+                    'predicted_char': pred_char,
+                    'predicted_prob': round(pred_prob, 4),
+                    'assigned_prob': round(assigned_prob, 4),
+                    'own_cluster_sim': 0.0,
+                    'nearest_cluster_char': '',
+                    'nearest_cluster_sim': 0.0,
+                    'outlier_score': score,
+                    'artist': it.artist or '',
+                    'situation': it.situation or '',
+                    'titles': it.titles or [],
+                    'characters': it.characters or [],
+                    'link': it.link or '',
+                    'first_preview_id': first_preview_map.get(item_id),
+                    'target_preview_id': target_preview_id,
+                    'image_index': image_index,
+                    'preview_count': preview_count,
+                }
+
+        outliers = list(outlier_map.values())
         outliers.sort(key=lambda o: -o['outlier_score'])
+        feedback_summary = None
+        if feedback_data:
+            feedback_summary = {
+                'generated_at': feedback_data.get('generated_at'),
+                'feedback_threshold': feedback_data.get('feedback_threshold', 0.95),
+                'holdout_accuracy': feedback_data.get('holdout_accuracy'),
+                'holdout_total': feedback_data.get('holdout_total'),
+                'low_accuracy_chars': feedback_data.get('low_accuracy_chars') or [],
+                'holdout_error_count': active_holdout_errors,
+            }
         return Response({
             'model_name': os.path.basename(model_path),
             'model_mtime': model_mtime,
             'feature_source': feature_source,
             'total_checked': len(active_entries),
             'outlier_count': len(outliers),
+            'feedback_summary': feedback_summary,
             'outliers': outliers[:limit],
         })
 
