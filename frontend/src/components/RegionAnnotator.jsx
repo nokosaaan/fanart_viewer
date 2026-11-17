@@ -343,10 +343,22 @@ export default function RegionAnnotator({
       let detected = []
       if (Array.isArray(j.proposed_regions) && j.proposed_regions.length > 0) {
         detected = j.proposed_regions.map(r => ({
-          id: nextBoxId(), imageIndex: r.image_index ?? resolvedIndex, box: r.box, characters: r.characters || [],
+          id: nextBoxId(),
+          imageIndex: r.image_index ?? resolvedIndex,
+          box: r.box,
+          polygon: Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon : null,
+          characters: r.characters || [],
+        }))
+      } else if (Array.isArray(j.regions) && j.regions.length > 0) {
+        detected = j.regions.map(r => ({
+          id: nextBoxId(),
+          imageIndex: resolvedIndex,
+          box: r.box,
+          polygon: Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon : null,
+          characters: [],
         }))
       } else {
-        detected = (j.boxes || []).map(box => ({ id: nextBoxId(), imageIndex: resolvedIndex, box, characters: [] }))
+        detected = (j.boxes || []).map(box => ({ id: nextBoxId(), imageIndex: resolvedIndex, box, polygon: null, characters: [] }))
       }
       setBoxes(prev => [...prev, ...detected])
       if (detected.length === 0) setNotice('人物が検出されませんでした。手動でドラッグして矩形を追加してください。')

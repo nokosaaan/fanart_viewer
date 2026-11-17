@@ -1569,20 +1569,17 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
     for position, r in results:
         img_idx = image_indices[position] if image_indices and position < len(image_indices) else None
         crops = r.get('crops') or []
+        regions = r.get('regions') or []
         boxes = r.get('boxes') or [c['box'] for c in crops]
 
-        if not boxes:
+        if not boxes and not regions:
             continue
 
         box_infos = []
-        if crops and len(crops) == len(boxes):
+        if crops:
             for crop in crops:
                 scores = _predict_crop_character_scores(crop, tagger_backend)
-                box_infos.append((crop['box'], scores))
-        elif crops:
-            for crop in crops:
-                scores = _predict_crop_character_scores(crop, tagger_backend)
-                box_infos.append((crop['box'], scores))
+                box_infos.append((crop['box'], scores, crop.get('polygon')))
         else:
             # Fallback when person crops are not available (e.g. 1 box)
             whole_scores = {}
@@ -1600,8 +1597,12 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
                     pass
             for name in char_names:
                 whole_scores.setdefault(name, 1.0)
-            for box in boxes:
-                box_infos.append((box, whole_scores))
+            if regions:
+                for rg in regions:
+                    box_infos.append((rg['box'], whole_scores, rg.get('polygon')))
+            else:
+                for box in boxes:
+                    box_infos.append((box, whole_scores, None))
 
         box_assignments = [None] * len(box_infos)
 
@@ -1611,7 +1612,7 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
             # crop's own scores decide so extra people aren't mislabeled.
             box_assignments = [char_names[0]] * len(box_infos)
         else:
-            for b_idx, (box, scores) in enumerate(box_infos):
+            for b_idx, (box, scores, _poly) in enumerate(box_infos):
                 best_c = None
                 best_s = 0.0
                 for c_idx, c_name in enumerate(char_names):
@@ -1636,13 +1637,16 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
                 if box_assignments[b_idx] is None and remaining and not box_infos[b_idx][1]:
                     box_assignments[b_idx] = remaining.pop(0)
 
-        for b_idx, (box, _scores) in enumerate(box_infos):
+        for b_idx, (box, _scores, poly) in enumerate(box_infos):
             assigned = box_assignments[b_idx]
-            proposed.append({
+            entry = {
                 'image_index': img_idx,
                 'box': [int(v) for v in box],
                 'characters': [assigned] if assigned else [],
-            })
+            }
+            if isinstance(poly, list) and len(poly) >= 3:
+                entry['polygon'] = poly
+            proposed.append(entry)
 
     return proposed
 
@@ -4843,20 +4847,38 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             logging.exception('detect_regions: person detection failed')
             boxes = []
 
+        region_defs = []
+        if boxes and HAVE_TAGGER:
+            try:
+                head_boxes = tagger._detect_head_boxes(image_bytes)
+            except Exception:
+                logging.debug('detect_regions: head detection failed', exc_info=True)
+                head_boxes = []
+            try:
+                region_defs = tagger._extract_region_polygons(
+                    image_bytes, boxes[:tagger._MAX_PERSON_CROPS], head_boxes=head_boxes,
+                )
+            except Exception:
+                logging.exception('detect_regions: polygon extraction failed')
+                region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:tagger._MAX_PERSON_CROPS]]
+
         proposed_regions = []
         if boxes and HAVE_TAGGER:
             try:
                 tagger_backend = 'onnx'
                 item_chars = list(item.characters or [])
                 crops = []
-                for box in boxes[:tagger._MAX_PERSON_CROPS]:
+                for rdef in region_defs:
+                    box = rdef['box']
+                    poly = rdef.get('polygon')
                     try:
-                        crop_bytes = tagger._crop_with_padding(image_bytes, box)
+                        crop_bytes = tagger._crop_with_padding(image_bytes, box, polygon=poly)
                         crop_result = tagger._suggest_tags_single_pass(
                             crop_bytes, 0.35, 0.85, 15, backend=tagger_backend,
                         )
                         crops.append({
                             'box': list(box),
+                            'polygon': poly,
                             'characters': crop_result.get('characters', []),
                             'general_probs': crop_result.pop('_general_probs'),
                             'embedding': crop_result.pop('_embedding', None),
@@ -4864,7 +4886,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                         })
                     except Exception:
                         continue
-                r = {'crops': crops, 'boxes': [list(b) for b in boxes]}
+                r = {'crops': crops, 'boxes': [r['box'] for r in region_defs], 'regions': region_defs}
                 proposed_regions = _derive_proposed_regions([(0, r)], item_chars, tagger_backend, image_indices=[resolved_index])
             except Exception:
                 logging.exception('detect_regions: character matching failed')
@@ -4872,6 +4894,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         return Response({
             'image_index': resolved_index,
             'boxes': [list(box) for box in boxes],
+            'regions': region_defs,
             'proposed_regions': proposed_regions,
         })
 

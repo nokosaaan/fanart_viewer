@@ -268,3 +268,76 @@ class BrokenRegionsAndOutliersTests(TestCase):
         self.assertEqual(out.getpixel((5, 5)), (200, 20, 20))
         # Outside triangle inside bounding box (e.g. (25, 25) -> (35, 35)) is masked to white
         self.assertEqual(out.getpixel((25, 25)), (255, 255, 255))
+
+    def test_extract_region_polygons_excludes_neighbor_head_and_preserves_in_proposed(self):
+        import io
+        from unittest.mock import patch
+        import cv2
+        import numpy as np
+        from PIL import Image
+        from item import tagger
+        from item.views import _derive_proposed_regions
+
+        src = Image.new("RGB", (200, 200), (240, 240, 240))
+        buf = io.BytesIO()
+        src.save(buf, format="PNG")
+        img_bytes = buf.getvalue()
+
+        # Two closely overlapping person boxes with heads where Head 1 sits inside Box 0's right edge
+        boxes = [(10, 10, 130, 190), (70, 10, 190, 190)]
+        head_boxes = [(30, 20, 70, 60), (100, 20, 140, 60)]
+
+        # Mock get_isnetis_mask returning float [0, 1] foreground mask covering both characters
+        fg = np.zeros((200, 200), dtype=np.float32)
+        fg[15:185, 20:180] = 1.0
+        with patch("imgutils.segment.isnetis.get_isnetis_mask", return_value=fg):
+            regions = tagger._extract_region_polygons(img_bytes, boxes, head_boxes=head_boxes, use_isnetis=True)
+
+        self.assertEqual(len(regions), 2)
+        poly0 = regions[0]["polygon"]
+        poly1 = regions[1]["polygon"]
+        self.assertIsNotNone(poly0)
+        self.assertIsNotNone(poly1)
+        self.assertGreaterEqual(len(poly0), 3)
+        self.assertGreaterEqual(len(poly1), 3)
+
+        cnt0 = np.array(poly0, dtype=np.int32)
+        cnt1 = np.array(poly1, dtype=np.int32)
+        # Head 0 center (50, 40) belongs to polygon 0 and NOT polygon 1
+        self.assertGreaterEqual(cv2.pointPolygonTest(cnt0, (50, 40), False), 0)
+        self.assertLess(cv2.pointPolygonTest(cnt1, (50, 40), False), 0)
+        # Head 1 center (120, 40) belongs to polygon 1 and is excluded from polygon 0
+        self.assertGreaterEqual(cv2.pointPolygonTest(cnt1, (120, 40), False), 0)
+        self.assertLess(cv2.pointPolygonTest(cnt0, (120, 40), False), 0)
+
+        # Verify _derive_proposed_regions preserves polygon on both multi-crop and single-region paths
+        proposed_multi = _derive_proposed_regions(
+            [(0, {
+                "crops": [
+                    {"box": regions[0]["box"], "polygon": poly0, "characters": [], "general_probs": None},
+                    {"box": regions[1]["box"], "polygon": poly1, "characters": [], "general_probs": None},
+                ],
+                "boxes": [regions[0]["box"], regions[1]["box"]],
+                "regions": regions,
+            })],
+            ["CharA", "CharB"],
+            "onnx",
+            image_indices=[0],
+        )
+        self.assertEqual(len(proposed_multi), 2)
+        self.assertEqual(proposed_multi[0]["polygon"], poly0)
+        self.assertEqual(proposed_multi[1]["polygon"], poly1)
+
+        proposed_single = _derive_proposed_regions(
+            [(0, {
+                "crops": [],
+                "boxes": [regions[0]["box"]],
+                "regions": [regions[0]],
+                "general_probs": None,
+            })],
+            ["CharA"],
+            "onnx",
+            image_indices=[0],
+        )
+        self.assertEqual(len(proposed_single), 1)
+        self.assertEqual(proposed_single[0]["polygon"], poly0)

@@ -695,6 +695,7 @@ def _detect_person_boxes(image_bytes):
 
 
 _HEAD_DETECT_CONF_THRESHOLD = 0.3
+_MASCOT_BOORU_LABELS = {'feral', 'hdrago', 'hpony', 'hfox', 'hrabb', 'hcat', 'hbear', 'hhorse', 'hbird'}
 
 
 def _detect_head_boxes(image_bytes):
@@ -726,6 +727,273 @@ def _detect_head_boxes(image_bytes):
     results = detect_heads(image, conf_threshold=_HEAD_DETECT_CONF_THRESHOLD)
     ordered = sorted(results, key=lambda r: -r[2])
     return [tuple(int(v) for v in box) for box, _label, _score in ordered]
+
+
+def _box_iou(a, b):
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    area_a = max(0, a[2] - a[0]) * max(0, a[3] - a[1])
+    area_b = max(0, b[2] - b[0]) * max(0, b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _detect_mascot_boxes(image_bytes, existing_boxes=()):
+    """Supplementary non-human/mascot detection via dghs-imgutils booru_yolo.
+    Returns boxes that do not overlap strongly or share center containment
+    with existing person detections (so catgirl/bunnygirl ears on a human
+    head aren't duplicated as standalone mascots).
+    """
+    from imgutils.detect import detect_with_booru_yolo
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    results = detect_with_booru_yolo(image, conf_threshold=0.3)
+    out = []
+    for box, label, _score in sorted(results, key=lambda r: -r[2]):
+        if label not in _MASCOT_BOORU_LABELS:
+            continue
+        b = tuple(int(v) for v in box)
+        cx = 0.5 * (b[0] + b[2])
+        cy = 0.5 * (b[1] + b[3])
+        contained = any(eb[0] <= cx <= eb[2] and eb[1] <= cy <= eb[3] for eb in existing_boxes)
+        if contained:
+            continue
+        if any(_box_iou(b, eb) >= 0.4 for eb in existing_boxes):
+            continue
+        out.append(b)
+    return out
+
+
+def _mask_to_polygon(binary_mask, offset_x=0, offset_y=0):
+    """Extract the dominant external contour from a uint8 binary mask and
+    approximate it with `cv2.approxPolyDP` into `([[x, y], ...], [x1, y1, x2, y2])`.
+    Returns `(None, None)` if no valid polygon (>= 3 points, >= 5x5 bbox) exists.
+    """
+    import cv2
+
+    mask_u8 = np.asarray(binary_mask, dtype=np.uint8)
+    if mask_u8.size == 0 or not np.any(mask_u8):
+        return None, None
+    res = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = res[0] if len(res) == 2 else res[1]
+    if not contours:
+        return None, None
+
+    valid = [c for c in contours if cv2.contourArea(c) >= 16.0]
+    if not valid:
+        return None, None
+    cnt = max(valid, key=cv2.contourArea)
+    peri = cv2.arcLength(cnt, True)
+    approx = cv2.approxPolyDP(cnt, max(2.0, 0.012 * peri), True)
+    if len(approx) < 3:
+        approx = cv2.approxPolyDP(cnt, 1.0, True)
+    if len(approx) < 3:
+        return None, None
+
+    polygon = [[int(pt[0][0] + offset_x), int(pt[0][1] + offset_y)] for pt in approx]
+    xs = [p[0] for p in polygon]
+    ys = [p[1] for p in polygon]
+    tight_box = [min(xs), min(ys), max(xs), max(ys)]
+    if tight_box[2] - tight_box[0] < 5 or tight_box[3] - tight_box[1] < 5:
+        return None, None
+    return polygon, tight_box
+
+
+def _match_heads_to_boxes(clamped_boxes, head_boxes):
+    """Map each head box index -> owning person box index, and each person box
+    index -> best owned head box (or None).
+    """
+    n_boxes = len(clamped_boxes)
+    head_list = [tuple(int(v) for v in h) for h in (head_boxes or ())]
+    head_owner = [None] * len(head_list)
+    box_head = [None] * n_boxes
+    best_score_for_box = [(-1.0, 0.0)] * n_boxes
+
+    for h_idx, (hx1, hy1, hx2, hy2) in enumerate(head_list):
+        if hx2 <= hx1 or hy2 <= hy1:
+            continue
+        cx = 0.5 * (hx1 + hx2)
+        cy = 0.5 * (hy1 + hy2)
+        h_area = float(max(1, (hx2 - hx1) * (hy2 - hy1)))
+        best_i = None
+        best_rank = None
+        for i, (bx1, by1, bx2, by2) in enumerate(clamped_boxes):
+            ix1, iy1 = max(bx1, hx1), max(by1, hy1)
+            ix2, iy2 = min(bx2, hx2), min(by2, hy2)
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+            overlap_ratio = ((ix2 - ix1) * (iy2 - iy1)) / h_area
+            contains_center = (bx1 <= cx <= bx2 and by1 <= cy <= by2)
+            if not contains_center and overlap_ratio < 0.5:
+                continue
+            b_area = float(max(1, (bx2 - bx1) * (by2 - by1)))
+            rank = (1 if contains_center else 0, round(overlap_ratio, 4), -b_area)
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_i = i
+        if best_i is not None:
+            head_owner[h_idx] = best_i
+            score = (best_rank[1], best_rank[2])
+            if score > best_score_for_box[best_i]:
+                best_score_for_box[best_i] = score
+                box_head[best_i] = (hx1, hy1, hx2, hy2)
+
+    return head_list, head_owner, box_head
+
+
+def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=True):
+    """Extract instance-separated foreground closed-region polygons for each
+    detected character/mascot box:
+      1. Foreground mask via dghs-imgutils IS-Net (`get_isnetis_mask`), falling
+         back to full-box masks if segmentation is unavailable.
+      2. Neighbor-head exclusion: zeros out pixels inside any detected head
+         belonging to another character.
+      3. Voronoi ownership in overlapping box zones: assigns overlap pixels to
+         whichever character's anchor (head center if matched, else upper body
+         center) is closer in normalized coordinates.
+      4. Simplifies each instance mask into a polygon via `cv2.approxPolyDP`.
+
+    Returns [{'box': [x1, y1, x2, y2], 'polygon': [[x, y], ...] | None}, ...].
+    """
+    from PIL import Image
+
+    if not boxes:
+        return []
+
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    img_w, img_h = image.size
+
+    fg_mask = None
+    if use_isnetis:
+        try:
+            from imgutils.segment.isnetis import get_isnetis_mask
+
+            raw_mask = np.asarray(get_isnetis_mask(image), dtype=np.float32)
+            if raw_mask.ndim == 3:
+                raw_mask = raw_mask[:, :, 0]
+            if raw_mask.shape[:2] == (img_h, img_w):
+                if raw_mask.max() <= 1.05:
+                    raw_mask = raw_mask * 255.0
+                fg_mask = np.where(raw_mask >= 96.0, 255, 0).astype(np.uint8)
+        except Exception:
+            logger.debug('isnetis foreground mask unavailable; falling back to box mask', exc_info=True)
+            fg_mask = None
+
+    if fg_mask is None:
+        fg_mask = np.full((img_h, img_w), 255, dtype=np.uint8)
+
+    clamped_boxes = []
+    for box in boxes:
+        x1, y1, x2, y2 = box
+        bx1 = max(0, min(img_w, int(round(min(x1, x2)))))
+        by1 = max(0, min(img_h, int(round(min(y1, y2)))))
+        bx2 = max(0, min(img_w, int(round(max(x1, x2)))))
+        by2 = max(0, min(img_h, int(round(max(y1, y2)))))
+        clamped_boxes.append((bx1, by1, bx2, by2))
+
+    head_list, head_owner, box_head = _match_heads_to_boxes(clamped_boxes, head_boxes)
+
+    anchors = []
+    for i, (bx1, by1, bx2, by2) in enumerate(clamped_boxes):
+        bw = float(max(1, bx2 - bx1))
+        bh = float(max(1, by2 - by1))
+        hb = box_head[i]
+        if hb is not None:
+            anchors.append((0.5 * (hb[0] + hb[2]), 0.5 * (hb[1] + hb[3]), bw, bh))
+        else:
+            anchors.append((0.5 * (bx1 + bx2), by1 + 0.3 * bh, bw, bh))
+
+    regions = []
+    for i, (bx1, by1, bx2, by2) in enumerate(clamped_boxes):
+        if bx2 <= bx1 or by2 <= by1:
+            regions.append({'box': [bx1, by1, bx2, by2], 'polygon': None})
+            continue
+
+        pad_x = int((bx2 - bx1) * 0.05)
+        pad_y = int((by2 - by1) * 0.05)
+        sx1 = max(0, bx1 - pad_x)
+        sy1 = max(0, by1 - pad_y)
+        sx2 = min(img_w, bx2 + pad_x)
+        sy2 = min(img_h, by2 + pad_y)
+
+        sub_mask = fg_mask[sy1:sy2, sx1:sx2].copy()
+
+        # Zero out regions outside this box's Voronoi ownership when overlapping another box
+        ax_i, ay_i, bw_i, bh_i = anchors[i]
+        for j, (ox1, oy1, ox2, oy2) in enumerate(clamped_boxes):
+            if j == i or ox2 <= ox1 or oy2 <= oy1:
+                continue
+            ix1, iy1 = max(sx1, ox1), max(sy1, oy1)
+            ix2, iy2 = min(sx2, ox2), min(sy2, oy2)
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+            ax_j, ay_j, bw_j, bh_j = anchors[j]
+            xs = (np.arange(ix1, ix2, dtype=np.float32) + 0.5)[None, :]
+            ys = (np.arange(iy1, iy2, dtype=np.float32) + 0.5)[:, None]
+            dist_i = ((xs - ax_i) / bw_i) ** 2 + ((ys - ay_i) / bh_i) ** 2
+            dist_j = ((xs - ax_j) / bw_j) ** 2 + ((ys - ay_j) / bh_j) ** 2
+            sub_view = sub_mask[iy1 - sy1:iy2 - sy1, ix1 - sx1:ix2 - sx1]
+            sub_view[dist_j < dist_i] = 0
+
+        # Zero out neighbor head boxes directly so close faces never contaminate crops
+        own_head = box_head[i]
+        for h_idx, (hx1, hy1, hx2, hy2) in enumerate(head_list):
+            if hx2 <= hx1 or hy2 <= hy1:
+                continue
+            owner = head_owner[h_idx]
+            if owner == i:
+                continue
+            if owner is None and own_head == (hx1, hy1, hx2, hy2):
+                continue
+            if owner is None and own_head is None:
+                # Only exclude unowned heads if clearly outside own anchor core
+                continue
+            ix1, iy1 = max(sx1, hx1), max(sy1, hy1)
+            ix2, iy2 = min(sx2, hx2), min(sy2, hy2)
+            if ix2 > ix1 and iy2 > iy1:
+                sub_mask[iy1 - sy1:iy2 - sy1, ix1 - sx1:ix2 - sx1] = 0
+
+        poly, tight_box = _mask_to_polygon(sub_mask, offset_x=sx1, offset_y=sy1)
+        if poly is not None and tight_box is not None:
+            regions.append({'box': tight_box, 'polygon': poly})
+        else:
+            regions.append({'box': [bx1, by1, bx2, by2], 'polygon': None})
+
+    return regions
+
+
+def _detect_character_regions(image_bytes, include_mascots=False, max_regions=None, use_isnetis=True):
+    """Detect characters (and optionally non-human mascots/animals) and extract
+    instance-separated closed-region polygons.
+    Returns {'boxes': [...], 'head_boxes': [...], 'regions': [...]}.
+    """
+    try:
+        boxes = _detect_person_boxes(image_bytes)
+    except Exception:
+        logger.exception('Person detection failed')
+        boxes = []
+
+    if include_mascots:
+        try:
+            mascot_boxes = _detect_mascot_boxes(image_bytes, existing_boxes=boxes)
+            if mascot_boxes:
+                boxes = list(boxes) + mascot_boxes
+        except Exception:
+            logger.debug('Mascot detection unavailable; continuing with person boxes only', exc_info=True)
+
+    try:
+        head_boxes = _detect_head_boxes(image_bytes)
+    except Exception:
+        logger.debug('Head detection failed; proceeding without head boxes', exc_info=True)
+        head_boxes = []
+
+    target_boxes = boxes[:max_regions] if max_regions else boxes
+    regions = _extract_region_polygons(image_bytes, target_boxes, head_boxes=head_boxes, use_isnetis=use_isnetis)
+    return {'boxes': list(boxes), 'head_boxes': list(head_boxes), 'regions': regions}
 
 
 def _crop_with_padding(image_bytes, box, padding_ratio=0.15, polygon=None):
@@ -829,6 +1097,21 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
         boxes = []
     person_count = len(boxes)
 
+    region_defs = []
+    if boxes:
+        try:
+            head_boxes = _detect_head_boxes(image_bytes)
+        except Exception:
+            logger.debug('Head detection failed — extracting polygons without head priors', exc_info=True)
+            head_boxes = []
+        try:
+            region_defs = _extract_region_polygons(
+                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes,
+            )
+        except Exception:
+            logger.exception('Region polygon extraction failed — falling back to raw boxes')
+            region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:_MAX_PERSON_CROPS]]
+
     result = _suggest_tags_single_pass(
         image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
         with_embedding=with_embedding,
@@ -840,9 +1123,11 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     crops = []
     if len(boxes) >= 2:
         merged = {}
-        for box in boxes[:_MAX_PERSON_CROPS]:
+        for rdef in region_defs:
+            box = rdef['box']
+            poly = rdef.get('polygon')
             try:
-                crop_bytes = _crop_with_padding(image_bytes, box)
+                crop_bytes = _crop_with_padding(image_bytes, box, polygon=poly)
                 crop_result = _suggest_tags_single_pass(
                     crop_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,
                     with_embedding=with_embedding,
@@ -852,6 +1137,7 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
                 continue
             crops.append({
                 'box': list(box),
+                'polygon': poly,
                 'characters': crop_result.get('characters', []),
                 'general_probs': crop_result.pop('_general_probs'),
                 'embedding': crop_result.pop('_embedding', None),
@@ -872,6 +1158,7 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     result['ccip'] = ccip
     result['crops'] = crops
     result['boxes'] = [list(b) for b in boxes]
+    result['regions'] = region_defs
     result['person_count'] = person_count
     return result
 
@@ -916,9 +1203,20 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
 
     crop_raws = []
     if person_count >= 2:
-        for box in boxes[:_MAX_PERSON_CROPS]:
+        try:
+            head_boxes = _detect_head_boxes(image_bytes)
+        except Exception:
+            head_boxes = []
+        try:
+            region_defs = _extract_region_polygons(
+                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes,
+            )
+        except Exception:
+            region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:_MAX_PERSON_CROPS]]
+        for rdef in region_defs:
+            box = rdef['box']
             try:
-                crop_bytes = _crop_with_padding(image_bytes, box)
+                crop_bytes = _crop_with_padding(image_bytes, box, polygon=rdef.get('polygon'))
                 crop_raws.append(_raw_predict(crop_bytes, model_repo, backend))
             except Exception:
                 logger.exception('Per-crop tagging failed for box %s', box)
