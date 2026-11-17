@@ -84,3 +84,17 @@ class TrainClassifierPruningTests(TestCase):
         self.assertIn('--prune-strategy', argv)
         idx = argv.index('--prune-strategy')
         self.assertEqual(argv[idx + 1], 'centroid')
+
+    def test_select_prioritizes_polygon_regions_over_box_regions(self):
+        cands = [
+            {'kind': 'region', 'char': 'CharA', 'item_id': i, 'key': f'{i}:0:0,0,10,10', 'polygon': None}
+            for i in range(1, 6)
+        ] + [
+            {'kind': 'region', 'char': 'CharA', 'item_id': i, 'key': f'{i}:0:0,0,10,10:p1234abcd', 'polygon': [(0, 0), (10, 0), (0, 10)]}
+            for i in range(6, 11)
+        ]
+        selected, _ = self.cmd._select(
+            cands, exclude=set(), min_images=5, cap=5, cached_keys=set(), per_item_cap=0, prune_strategy='hash'
+        )
+        self.assertEqual(len(selected), 5)
+        self.assertTrue(all(c.get('polygon') is not None for c in selected))

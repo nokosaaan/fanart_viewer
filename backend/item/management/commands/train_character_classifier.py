@@ -317,6 +317,7 @@ DEFAULT_MAX_PER_CHARACTER = 150
 # so it counts for less in the fit (see --region-weight).
 DEFAULT_MAX_PER_ITEM = 10  # no accuracy change vs. uncapped at 10 or 5 in item-grouped CV; fewer rows to extract
 DEFAULT_REGION_WEIGHT = 0.5
+DEFAULT_POLYGON_REGION_WEIGHT = 0.85
 DEFAULT_GRAY_WEIGHT = 0.5
 
 
@@ -354,6 +355,9 @@ class Command(BaseCommand):
                              help='Training weight of a manually region-labeled crop relative to a solo image '
                                   f'(default {DEFAULT_REGION_WEIGHT}) — a hand-drawn box around one person in a '
                                   'group image is less reliable evidence of identity than a solo image.')
+        parser.add_argument('--polygon-region-weight', type=float, default=DEFAULT_POLYGON_REGION_WEIGHT,
+                             help='Training weight of a polygon (closed-contour) region relative to a solo image '
+                                  f'(default {DEFAULT_POLYGON_REGION_WEIGHT}) — excludes adjacent characters/background.')
         parser.add_argument('--grayscale-augment', action='store_true',
                              help='Also extract each training image\'s grayscale version and train on it as an '
                                   'extra row (same label, --gray-weight), so a black-and-white drawing of a '
@@ -551,7 +555,8 @@ class Command(BaseCommand):
                 continue
             iid = _item_id_of_key(key)
             region_item_ids.add(iid)
-            cands.append({'kind': _REGION, 'char': char, 'item_id': iid, 'key': key, 'feat': feat})
+            cands.append({'kind': _REGION, 'char': char, 'item_id': iid, 'key': key, 'feat': feat,
+                          'polygon': True if ':p' in key else None})
         for item_id, char, feat, key in base_cache['rows']:
             if key is None or key.endswith(_GRAY_SUFFIX) or item_id in region_item_ids:
                 continue
@@ -588,9 +593,12 @@ class Command(BaseCommand):
         # Cosine similarity to centroid
         sims = unit_feats @ centroid
 
-        # Kind priority bonus: slight boost for SOLO over REGION crops
-        # (solo images are full-composition portraits with cleaner boundaries)
-        solo_bonus = np.array([0.05 if r['kind'] == _SOLO else 0.0 for r in char_rows], dtype=np.float32)
+        # Kind priority bonus: SOLO > polygon region > rectangular box region
+        # (solo images are full-composition portraits; polygon regions exclude neighbors/background)
+        solo_bonus = np.array([
+            0.05 if r['kind'] == _SOLO else (0.03 if (bool(r.get('polygon')) or ':p' in (r.get('key') or '')) else 0.0)
+            for r in char_rows
+        ], dtype=np.float32)
         adjusted_sims = sims + solo_bonus
 
         if strategy == 'centroid':
@@ -643,7 +651,13 @@ class Command(BaseCommand):
         rows are preferred (free), then a stable hash order (the same
         subset every run, not a different random draw each time)."""
         def priority(c):
-            return (c['kind'] != _SOLO, c['key'] not in cached_keys, zlib.crc32(c['key'].encode('utf-8')))
+            is_poly = bool(c.get('polygon')) or ':p' in (c.get('key') or '')
+            return (
+                c['kind'] != _SOLO,
+                c['kind'] == _REGION and not is_poly,
+                c['key'] not in cached_keys,
+                zlib.crc32(c['key'].encode('utf-8')),
+            )
 
         by_char = defaultdict(list)
         for c in cands:
@@ -906,7 +920,9 @@ class Command(BaseCommand):
         classifier_choice = options['classifier']
         min_images = options['min_images']
         cap = options['max_images_per_character']
-        region_weight, gray_weight = options['region_weight'], options['gray_weight']
+        region_weight = options['region_weight']
+        polygon_region_weight = options['polygon_region_weight']
+        gray_weight = options['gray_weight']
         exclude = {c.strip() for c in options['exclude'].split(',') if c.strip()}
         exclude_situations = {s.strip().upper() for s in options['exclude_situation'].split(',') if s.strip()}
         backend_choice = options['backend']
@@ -1093,7 +1109,8 @@ class Command(BaseCommand):
         # ---- assemble matrix ----------------------------------------------
         feats, labels, groups, kinds, aug, base_w, row_keys = [], [], [], [], [], [], []
         for c in rows:
-            kw = 1.0 if c['kind'] == _SOLO else region_weight
+            is_poly = bool(c.get('polygon')) or ':p' in (c.get('key') or '')
+            kw = 1.0 if c['kind'] == _SOLO else (polygon_region_weight if is_poly else region_weight)
             feats.append(c['feat']); labels.append(c['char']); groups.append(c['item_id'])
             kinds.append(c['kind']); aug.append(False); base_w.append(kw); row_keys.append(c['key'])
             if gray and c.get('gray_feat') is not None:
