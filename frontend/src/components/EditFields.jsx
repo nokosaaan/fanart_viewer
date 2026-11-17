@@ -1461,6 +1461,7 @@ export function ItemQueuePanel({
       const normalizeRegions = (regs) => regs.map(r => ({
         image_index: r.image_index ?? null,
         box: r.box,
+        polygon: Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon : null,
         characters: [...new Set((r.characters || []).map(c => (c || '').trim()).filter(Boolean))].sort(),
       })).sort((a, b) => (a.image_index ?? 0) - (b.image_index ?? 0) || (a.box[0] - b.box[0]))
 

@@ -235,3 +235,36 @@ class BrokenRegionsAndOutliersTests(TestCase):
                 self.assertEqual(len(r2.json()["outliers"]), 0)
             finally:
                 tagger._data_dir = orig_data_dir
+
+    def test_polygon_region_save_and_masked_crop(self):
+        import io
+        from PIL import Image
+        from item import tagger
+
+        item = Item.objects.create(
+            external_id=701,
+            source="pixiv_bookmark",
+            artist="ArtistP",
+            situation="CP",
+        )
+        poly = [[10, 10], [40, 10], [10, 40]]
+        r = self.client.post(f"/api/items/{item.id}/character_regions/", {
+            "regions": [
+                {"image_index": 0, "box": [10, 10, 40, 40], "polygon": poly, "characters": ["CharA"]},
+            ]
+        }, format="json")
+        self.assertEqual(r.status_code, 200)
+        item.refresh_from_db()
+        self.assertEqual(len(item.character_regions), 1)
+        self.assertEqual(item.character_regions[0]["polygon"], poly)
+
+        # Create a 60x60 red image and crop with the upper-left triangle polygon
+        src = Image.new("RGB", (60, 60), (200, 20, 20))
+        buf = io.BytesIO()
+        src.save(buf, format="PNG")
+        cropped_bytes = tagger._crop_with_padding(buf.getvalue(), [10, 10, 40, 40], polygon=poly)
+        out = Image.open(io.BytesIO(cropped_bytes)).convert("RGB")
+        # Inside triangle (e.g. (5, 5) relative to x1=10, y1=10 -> (15, 15)) keeps red
+        self.assertEqual(out.getpixel((5, 5)), (200, 20, 20))
+        # Outside triangle inside bounding box (e.g. (25, 25) -> (35, 35)) is masked to white
+        self.assertEqual(out.getpixel((25, 25)), (255, 255, 255))

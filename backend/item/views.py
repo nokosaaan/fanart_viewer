@@ -885,6 +885,33 @@ _COLOR_WORDS = {
     'violet', 'multicolored', 'platinum',
 }
 
+_APPEARANCE_COLOR_LABELS = _COLOR_WORDS | {
+    'beige', 'gold', 'brunette', 'amber', 'crimson', 'teal', 'cyan',
+    'indigo', 'magenta', 'emerald', 'lavender', 'peach', 'tan',
+}
+_APPEARANCE_COLOR_LABELS_JA = {
+    '金髪', '黒髪', '白髪', '銀髪', '茶髪', '赤髪', '青髪', '緑髪', '紫髪',
+    '桃髪', 'ピンク髪', '水色', '茶色', '黒', '白', '銀', '金', '灰', '赤',
+    '青', '緑', '紫', '桃', '肌色', '栗毛',
+}
+
+
+def _is_appearance_color_label(name):
+    """Return True if `name` is a generic hair/appearance color fallback label
+    (e.g. 'silver', 'blonde', 'black', '茶色') rather than a named character.
+    Multi-word proper names like 'cure white' or 'silver wolf' return False.
+    """
+    s = (name or '').strip()
+    if not s:
+        return False
+    low = s.lower()
+    if low in _APPEARANCE_COLOR_LABELS or s in _APPEARANCE_COLOR_LABELS_JA:
+        return True
+    parts = low.split()
+    if len(parts) == 2 and parts[0] in _APPEARANCE_COLOR_LABELS and parts[1] in ('hair', 'eyes'):
+        return True
+    return False
+
 # Best-effort keyword list, not an exhaustive taxonomy — a tag containing
 # any of these is treated as a worn accessory for weighting purposes.
 _ACCESSORY_KEYWORDS = (
@@ -2271,6 +2298,35 @@ def _combine_candidates(entries, weights, min_score=0.0, top_k=1):
     return [v for v, _s in ranked[:top_k]], scores
 
 
+_NAMED_CHAR_FALLBACK_THRESHOLD = 0.5
+
+
+def _combine_character_candidates_tiered(entries, weights, min_score=0.0, top_k=1,
+                                         named_min_score=_NAMED_CHAR_FALLBACK_THRESHOLD):
+    """Two-stage character candidate combiner (filtering/fallback):
+    1. Score only named characters first. If any named character clears
+       `named_min_score`, return only the named character pool so generic
+       hair/appearance color labels (silver, blonde, etc.) are filtered out.
+    2. Otherwise (no named character matched reliably), fall back to the
+       appearance/color label pool (plus any weak named candidates).
+    """
+    named_entries = [e for e in entries if not _is_appearance_color_label(e['value'])]
+    color_entries = [e for e in entries if _is_appearance_color_label(e['value'])]
+
+    named_values, named_scores = _combine_candidates(
+        named_entries, weights, min_score=min_score, top_k=top_k,
+    )
+    if named_values and named_scores.get(named_values[0], 0.0) >= named_min_score:
+        return named_values, named_scores
+
+    color_values, color_scores = _combine_candidates(
+        color_entries, weights, min_score=min_score, top_k=top_k,
+    )
+    merged_scores = {**named_scores, **color_scores}
+    combined = list(dict.fromkeys(color_values + named_values))[:top_k]
+    return combined, merged_scores
+
+
 def _character_breakdown(entries, values):
     """For each of `values` (already-selected character candidates), the
     individual (source, confidence, raw_name, match_method) entries that
@@ -2438,7 +2494,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     # boosted FROM, so the boost reflects "how well does the image/tags/
     # history alone support this character", not a value already inflated
     # by the very title boost it's about to help produce.
-    _char_values_stage1, char_scores_stage1 = _combine_candidates(
+    _char_values_stage1, char_scores_stage1 = _combine_character_candidates_tiered(
         collected['character'], weights, top_k=_CANDIDATE_LIST_LIMIT,
     )
 
@@ -2464,7 +2520,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     char_entries = collected['character']
     if cross_boost:
         char_entries = char_entries + _cross_boost_character_candidates(title_scores, known_titles)
-    char_values, char_scores = _combine_candidates(char_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
+    char_values, char_scores = _combine_character_candidates_tiered(char_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
     situation_values, _situation_scores = _combine_candidates(collected['situation'], DEFAULT_SITUATION_WEIGHTS, top_k=1)
 
     char_breakdown = _character_breakdown(char_entries, char_values)
@@ -4871,7 +4927,22 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
                 except (TypeError, ValueError):
                     return Response({'detail': 'region.image_index must be an integer or null'}, status=status.HTTP_400_BAD_REQUEST)
 
-            cleaned.append({'image_index': image_index, 'box': [int(v) for v in box], 'characters': names})
+            cleaned_poly = None
+            raw_poly = r.get('polygon')
+            if raw_poly is not None:
+                if (not isinstance(raw_poly, list) or len(raw_poly) < 3
+                        or not all(isinstance(pt, (list, tuple)) and len(pt) == 2
+                                   and all(isinstance(v, (int, float)) for v in pt) for pt in raw_poly)):
+                    return Response(
+                        {'detail': 'region.polygon must be a list of 3+ [x, y] points'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                cleaned_poly = [[int(round(pt[0])), int(round(pt[1]))] for pt in raw_poly]
+
+            entry = {'image_index': image_index, 'box': [int(v) for v in box], 'characters': names}
+            if cleaned_poly is not None:
+                entry['polygon'] = cleaned_poly
+            cleaned.append(entry)
 
         item.character_regions = cleaned
 

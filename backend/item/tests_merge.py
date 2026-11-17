@@ -200,3 +200,37 @@ class ItemMergeTestCase(TestCase):
         res_after = self.client.get('/api/items/title_merge_candidates/')
         self.assertEqual(res_after.status_code, 200)
         self.assertEqual(res_after.json()['total_candidates'], 0)
+
+    def test_character_tiered_color_fallback(self):
+        from item.views import (
+            _is_appearance_color_label,
+            _combine_character_candidates_tiered,
+            DEFAULT_ENSEMBLE_WEIGHTS,
+        )
+
+        # Color/hair labels are recognized, while proper names with color words are preserved
+        self.assertTrue(_is_appearance_color_label('silver'))
+        self.assertTrue(_is_appearance_color_label('blonde'))
+        self.assertTrue(_is_appearance_color_label('blonde hair'))
+        self.assertTrue(_is_appearance_color_label('黒髪'))
+        self.assertFalse(_is_appearance_color_label('cure white'))
+        self.assertFalse(_is_appearance_color_label('silver wolf'))
+        self.assertFalse(_is_appearance_color_label('nagao kagetora (fate)'))
+
+        # Case 1: Named character clears threshold -> color labels are filtered out
+        entries_with_named = [
+            {'value': 'silver', 'source': 'classifier', 'confidence': 0.8},
+            {'value': 'blonde', 'source': 'classifier', 'confidence': 0.6},
+            {'value': 'nagao kagetora (fate)', 'source': 'classifier', 'confidence': 0.25},
+        ]
+        vals, _scores = _combine_character_candidates_tiered(entries_with_named, DEFAULT_ENSEMBLE_WEIGHTS, top_k=5)
+        self.assertEqual(vals, ['nagao kagetora (fate)'])
+
+        # Case 2: No named character clears threshold -> color labels appear as fallback
+        entries_no_named = [
+            {'value': 'silver', 'source': 'classifier', 'confidence': 0.7},
+            {'value': 'white', 'source': 'classifier', 'confidence': 0.5},
+            {'value': 'weak_char', 'source': 'tag_similarity_weak', 'confidence': 0.3},  # 0.3 * 0.5 = 0.15 < 0.5
+        ]
+        vals_fb, _scores_fb = _combine_character_candidates_tiered(entries_no_named, DEFAULT_ENSEMBLE_WEIGHTS, top_k=5)
+        self.assertEqual(vals_fb, ['silver', 'white', 'weak_char'])

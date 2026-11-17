@@ -728,16 +728,40 @@ def _detect_head_boxes(image_bytes):
     return [tuple(int(v) for v in box) for box, _label, _score in ordered]
 
 
-def _crop_with_padding(image_bytes, box, padding_ratio=0.15):
+def _crop_with_padding(image_bytes, box, padding_ratio=0.15, polygon=None):
     """Crops to `box` plus a margin (person-detection boxes can clip hair
     ornaments, hands, etc. right at the edge) and re-encodes as PNG bytes —
     kept as bytes (not a PIL Image) so this feeds straight back into the
     same _suggest_tags_onnx/_suggest_tags_timm entry points a whole image
     would, no separate code path needed for the cropped case.
+
+    When `polygon` (list of 3+ [x, y] points) is provided, pixels outside
+    the closed polygon are masked to white (255, 255, 255) and no extra
+    padding is added so adjacent characters stay excluded.
     """
-    from PIL import Image
+    from PIL import Image, ImageDraw
 
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    has_poly = isinstance(polygon, (list, tuple)) and len(polygon) >= 3
+    if has_poly:
+        xs = [float(p[0]) for p in polygon]
+        ys = [float(p[1]) for p in polygon]
+        x1 = max(0, int(min(xs)))
+        y1 = max(0, int(min(ys)))
+        x2 = min(image.width, int(max(xs)) + 1)
+        y2 = min(image.height, int(max(ys)) + 1)
+        if x2 <= x1 or y2 <= y1:
+            x1, y1, x2, y2 = (int(v) for v in box)
+        cropped = image.crop((x1, y1, x2, y2))
+        mask = Image.new('L', cropped.size, 0)
+        shifted = [(float(p[0]) - x1, float(p[1]) - y1) for p in polygon]
+        ImageDraw.Draw(mask).polygon(shifted, fill=255)
+        bg = Image.new('RGB', cropped.size, (255, 255, 255))
+        bg.paste(cropped, mask=mask)
+        buf = io.BytesIO()
+        bg.save(buf, format='PNG')
+        return buf.getvalue()
+
     x1, y1, x2, y2 = box
     pad_x, pad_y = int((x2 - x1) * padding_ratio), int((y2 - y1) * padding_ratio)
     x1, y1 = max(0, x1 - pad_x), max(0, y1 - pad_y)

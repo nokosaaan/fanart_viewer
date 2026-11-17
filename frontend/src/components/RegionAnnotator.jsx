@@ -33,6 +33,31 @@ function getCharColor(charName) {
   return CHAR_COLORS[Math.abs(hash) % CHAR_COLORS.length]
 }
 
+function simplifyPolygon(points, minStep = 6) {
+  if (!Array.isArray(points) || points.length <= 3) return points || []
+  const out = [points[0]]
+  for (let i = 1; i < points.length; i++) {
+    const prev = out[out.length - 1]
+    const dx = points[i][0] - prev[0]
+    const dy = points[i][1] - prev[1]
+    if (dx * dx + dy * dy >= minStep * minStep) {
+      out.push(points[i])
+    }
+  }
+  return out
+}
+
+function boundingBoxOfPolygon(points) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+  for (const [x, y] of points) {
+    if (x < x1) x1 = x
+    if (y < y1) y1 = y
+    if (x > x2) x2 = x
+    if (y > y2) y2 = y
+  }
+  return [Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2)]
+}
+
 export default function RegionAnnotator({
   item,
   onSaved,
@@ -76,7 +101,11 @@ export default function RegionAnnotator({
   const imgRef = useRef(null)
   const containerRef = useRef(null)
   const drawStartRef = useRef(null)
+  const [drawMode, setDrawMode] = useState('box') // 'box' | 'lasso' | 'poly'
   const [drawRect, setDrawRect] = useState(null)
+  const [lassoPoints, setLassoPoints] = useState(null) // [[x, y], ...] while dragging
+  const [polyPoints, setPolyPoints] = useState([])     // [[x, y], ...] while clicking vertices
+  const [polyHoverPt, setPolyHoverPt] = useState(null)
 
   // Close the single-box popover on click outside
   useEffect(() => {
@@ -86,18 +115,25 @@ export default function RegionAnnotator({
     return () => document.removeEventListener('mousedown', handleOutsideMouseDown)
   }, [activeBoxId])
 
-  // Cancel modes on Escape key
+  // Cancel modes on Escape key, finalize polygon on Enter
   useEffect(() => {
     function handleKeyDown(e) {
       if (e.key === 'Escape') {
+        if (polyPoints.length > 0) { setPolyPoints([]); setPolyHoverPt(null) }
+        if (lassoPoints) setLassoPoints(null)
         if (stampChar) setStampChar(null)
         if (activeBoxId) setActiveBoxId(null)
         if (selectedBoxIds.size > 0) setSelectedBoxIds(new Set())
+      } else if (e.key === 'Enter' && drawMode === 'poly' && polyPoints.length >= 3) {
+        e.preventDefault()
+        commitPolygon(polyPoints)
+        setPolyPoints([])
+        setPolyHoverPt(null)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [stampChar, activeBoxId, selectedBoxIds.size])
+  }, [stampChar, activeBoxId, selectedBoxIds.size, drawMode, polyPoints, lassoPoints])
 
   const loadItemPreviews = useCallback((id) => {
     fetch(`/api/items/${id}/previews/`, { cache: 'no-store' })
@@ -127,7 +163,9 @@ export default function RegionAnnotator({
           .then(fresh => {
             if (fresh && Array.isArray(fresh.character_regions)) {
               setBoxes(fresh.character_regions.map(r => ({
-                id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+                id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box,
+                polygon: Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon : null,
+                characters: r.characters || [],
               })))
               setSelectedBoxIds(new Set())
               setActiveBoxId(null)
@@ -143,12 +181,16 @@ export default function RegionAnnotator({
   useEffect(() => {
     if (Array.isArray(item.character_regions) && item.character_regions.length > 0) {
       setBoxes(item.character_regions.map(r => ({
-        id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+        id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box,
+        polygon: Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon : null,
+        characters: r.characters || [],
       })))
       setCurrentImageIndex(item.character_regions[0].image_index ?? null)
     } else if (Array.isArray(proposedRegions) && proposedRegions.length > 0) {
       setBoxes(proposedRegions.map(r => ({
-        id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box, characters: r.characters || [],
+        id: nextBoxId(), imageIndex: r.image_index ?? null, box: r.box,
+        polygon: Array.isArray(r.polygon) && r.polygon.length >= 3 ? r.polygon : null,
+        characters: r.characters || [],
       })))
       if (proposedRegions[0].image_index != null) {
         setCurrentImageIndex(proposedRegions[0].image_index)
@@ -320,9 +362,52 @@ export default function RegionAnnotator({
     }
   }
 
+  function commitPolygon(points) {
+    const simplified = simplifyPolygon(points, 5)
+    if (simplified.length < 3) return
+    const [x1, y1, x2, y2] = boundingBoxOfPolygon(simplified)
+    if (x2 - x1 < 8 || y2 - y1 < 8) return
+    const id = nextBoxId()
+    const initialChars = stampChar ? [stampChar] : []
+    setBoxes(prev => [...prev, {
+      id,
+      imageIndex: currentImageIndex,
+      box: [x1, y1, x2, y2],
+      polygon: simplified.map(([px, py]) => [Math.round(px), Math.round(py)]),
+      characters: initialChars,
+    }])
+    if (!stampChar) {
+      setActiveBoxId(null)
+      setSelectedBoxIds(new Set([id]))
+    }
+    setCharQuery('')
+    if (onDirtyChange) onDirtyChange(true)
+  }
+
   function handleMouseDown(e) {
     if (e.target !== containerRef.current && e.target !== imgRef.current) return
     const { x, y } = toNaturalCoords(e.clientX, e.clientY)
+    if (drawMode === 'poly') {
+      // If clicking near the start vertex with >= 3 points, close the polygon
+      if (polyPoints.length >= 3) {
+        const s = scale()
+        const [sx, sy] = polyPoints[0]
+        const dist = Math.hypot((x - sx) * s, (y - sy) * s)
+        if (dist <= 12) {
+          commitPolygon(polyPoints)
+          setPolyPoints([])
+          setPolyHoverPt(null)
+          return
+        }
+      }
+      setPolyPoints(prev => [...prev, [x, y]])
+      return
+    }
+    if (drawMode === 'lasso') {
+      drawStartRef.current = { x, y }
+      setLassoPoints([[x, y]])
+      return
+    }
     drawStartRef.current = { x, y }
     setDrawRect({ x1: x, y1: y, x2: x, y2: y })
   }
@@ -339,14 +424,36 @@ export default function RegionAnnotator({
       } else {
         setCursorPos(null)
       }
+      if (drawMode === 'poly' && polyPoints.length > 0) {
+        setPolyHoverPt([x, y])
+      }
     }
     if (!drawStartRef.current) return
     const { x, y } = toNaturalCoords(e.clientX, e.clientY)
+    if (drawMode === 'lasso') {
+      setLassoPoints(prev => {
+        if (!prev || prev.length === 0) return [[x, y]]
+        const last = prev[prev.length - 1]
+        if (Math.hypot(x - last[0], y - last[1]) < 3) return prev
+        return [...prev, [x, y]]
+      })
+      return
+    }
     const start = drawStartRef.current
     setDrawRect({ x1: Math.min(start.x, x), y1: Math.min(start.y, y), x2: Math.max(start.x, x), y2: Math.max(start.y, y) })
   }
 
   function handleMouseUp() {
+    if (drawMode === 'poly') return
+    if (drawMode === 'lasso') {
+      const pts = lassoPoints
+      drawStartRef.current = null
+      setLassoPoints(null)
+      if (pts && pts.length >= 3) {
+        commitPolygon(pts)
+      }
+      return
+    }
     if (!drawStartRef.current || !drawRect) { drawStartRef.current = null; setDrawRect(null); return }
     const { x1, y1, x2, y2 } = drawRect
     drawStartRef.current = null
@@ -354,7 +461,7 @@ export default function RegionAnnotator({
     if (x2 - x1 < 8 || y2 - y1 < 8) return
     const id = nextBoxId()
     const initialChars = stampChar ? [stampChar] : []
-    setBoxes(prev => [...prev, { id, imageIndex: currentImageIndex, box: [x1, y1, x2, y2], characters: initialChars }])
+    setBoxes(prev => [...prev, { id, imageIndex: currentImageIndex, box: [x1, y1, x2, y2], polygon: null, characters: initialChars }])
     if (!stampChar) {
       setActiveBoxId(null)
       setSelectedBoxIds(new Set([id]))
@@ -443,7 +550,10 @@ export default function RegionAnnotator({
 
   function labeledRegionsPayload() {
     return boxes.filter(b => b.characters.length > 0)
-      .map(b => ({ image_index: b.imageIndex, box: b.box, characters: b.characters }))
+      .map(b => b.polygon && b.polygon.length >= 3
+        ? { image_index: b.imageIndex, box: b.box, polygon: b.polygon, characters: b.characters }
+        : { image_index: b.imageIndex, box: b.box, characters: b.characters }
+      )
   }
 
   useEffect(() => {
@@ -551,6 +661,59 @@ export default function RegionAnnotator({
         <button className="btn" onClick={runDetect} disabled={detecting}>
           {detecting ? '検出中…' : '🔍 自動検出'}
         </button>
+        <div style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #334155' }} title="領域の描き方を切り替えます">
+          {[
+            { id: 'box', label: '⬜ 矩形' },
+            { id: 'lasso', label: '✏️ 投げ縄' },
+            { id: 'poly', label: '📐 多角形' },
+          ].map(m => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => {
+                setDrawMode(m.id)
+                setDrawRect(null)
+                setLassoPoints(null)
+                setPolyPoints([])
+                setPolyHoverPt(null)
+              }}
+              style={{
+                border: 'none',
+                padding: '5px 9px',
+                fontSize: 12,
+                cursor: 'pointer',
+                background: drawMode === m.id ? '#2563eb' : '#0f172a',
+                color: drawMode === m.id ? '#fff' : '#cbd5e1',
+                fontWeight: drawMode === m.id ? 600 : 400,
+              }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        {drawMode === 'poly' && polyPoints.length > 0 && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 11, color: '#93c5fd' }}>頂点 {polyPoints.length}点</span>
+            {polyPoints.length >= 3 && (
+              <button
+                type="button"
+                className="btn"
+                style={{ fontSize: 11, padding: '3px 8px', background: '#16a34a', color: '#fff' }}
+                onClick={() => { commitPolygon(polyPoints); setPolyPoints([]); setPolyHoverPt(null) }}
+              >
+                ✓ 閉じる (Enter)
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn"
+              style={{ fontSize: 11, padding: '3px 8px', background: '#334155', color: '#cbd5e1' }}
+              onClick={() => { setPolyPoints([]); setPolyHoverPt(null) }}
+            >
+              ✕ 取消 (Esc)
+            </button>
+          </div>
+        )}
         <button
           type="button"
           className="btn"
@@ -625,7 +788,14 @@ export default function RegionAnnotator({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={() => { setHoverColor(null); setCursorPos(null) }}
+        onDoubleClick={() => {
+          if (drawMode === 'poly' && polyPoints.length >= 3) {
+            commitPolygon(polyPoints)
+            setPolyPoints([])
+            setPolyHoverPt(null)
+          }
+        }}
+        onMouseLeave={() => { setHoverColor(null); setCursorPos(null); setPolyHoverPt(null) }}
       >
         <img
           ref={imgRef}
@@ -641,9 +811,99 @@ export default function RegionAnnotator({
           onLoad={e => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
         />
 
+        {naturalSize && (
+          <svg
+            viewBox={`0 0 ${naturalSize.width} ${naturalSize.height}`}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+              zIndex: 4,
+            }}
+          >
+            {sortedVisibleBoxes.filter(b => Array.isArray(b.polygon) && b.polygon.length >= 3).map(b => {
+              const isLabeled = b.characters.length > 0
+              const isSelected = selectedBoxIds.has(b.id)
+              const isHovered = hoveredBoxId === b.id
+              const firstChar = b.characters[0]
+              const charColor = isLabeled ? getCharColor(firstChar) : null
+              const borderColor = isSelected
+                ? '#3b82f6'
+                : (isHovered ? '#facc15' : (charColor ? charColor.border : (isLabeled ? '#22c55e' : '#f59e0b')))
+              const bgColor = isSelected
+                ? 'rgba(59,130,246,0.24)'
+                : (charColor ? charColor.bg : (isLabeled ? 'rgba(34,197,94,0.12)' : 'rgba(245,158,11,0.12)'))
+              const ptsAttr = b.polygon.map(([px, py]) => `${px},${py}`).join(' ')
+              const s = scale() || 1
+              const strokeW = (isSelected || isHovered ? 3 : 2) / s
+              return (
+                <polygon
+                  key={`poly-${b.id}`}
+                  points={ptsAttr}
+                  fill={bgColor}
+                  stroke={borderColor}
+                  strokeWidth={strokeW}
+                  strokeLinejoin="round"
+                  style={{ pointerEvents: 'auto', cursor: stampChar ? 'copy' : 'pointer' }}
+                  onMouseDown={ev => ev.stopPropagation()}
+                  onClick={ev => handleBoxClick(b.id, ev)}
+                />
+              )
+            })}
+            {lassoPoints && lassoPoints.length >= 2 && (() => {
+              const s = scale() || 1
+              const ptsAttr = lassoPoints.map(([px, py]) => `${px},${py}`).join(' ')
+              return (
+                <>
+                  <polygon
+                    points={ptsAttr}
+                    fill="rgba(96, 165, 250, 0.16)"
+                    stroke="#60a5fa"
+                    strokeWidth={2 / s}
+                    strokeDasharray={`${5 / s} ${3 / s}`}
+                    strokeLinejoin="round"
+                  />
+                </>
+              )
+            })()}
+            {polyPoints.length > 0 && (() => {
+              const s = scale() || 1
+              const previewPts = polyHoverPt ? [...polyPoints, polyHoverPt] : polyPoints
+              const ptsAttr = previewPts.map(([px, py]) => `${px},${py}`).join(' ')
+              return (
+                <>
+                  {previewPts.length >= 2 && (
+                    <polyline
+                      points={ptsAttr}
+                      fill="none"
+                      stroke="#60a5fa"
+                      strokeWidth={2 / s}
+                      strokeDasharray={`${5 / s} ${3 / s}`}
+                    />
+                  )}
+                  {polyPoints.map(([px, py], i) => (
+                    <circle
+                      key={i}
+                      cx={px}
+                      cy={py}
+                      r={(i === 0 ? 6 : 4) / s}
+                      fill={i === 0 && polyPoints.length >= 3 ? '#22c55e' : '#60a5fa'}
+                      stroke="#0f172a"
+                      strokeWidth={1.5 / s}
+                    />
+                  ))}
+                </>
+              )
+            })()}
+          </svg>
+        )}
+
         {naturalSize && sortedVisibleBoxes.map((b, idx) => {
           const s = scale()
           const [x1, y1, x2, y2] = b.box
+          const hasPoly = Array.isArray(b.polygon) && b.polygon.length >= 3
           const isLabeled = b.characters.length > 0
           const isSelected = selectedBoxIds.has(b.id)
           const isActive = activeBoxId === b.id
@@ -668,6 +928,10 @@ export default function RegionAnnotator({
             ? '#2563eb'
             : (charColor ? charColor.tag : (isLabeled ? '#166534' : '#78350f'))
 
+          // z-index: Base stacking order puts smaller boxes (higher idx) on top of larger boxes (lower idx).
+          // Selected boxes, hovered box from the list, and active box get higher priority.
+          const zIndex = isActive ? 100 : (isHovered ? 90 : (isSelected ? 50 + idx : 1 + idx))
+
           const labelText = b.characters.length > 0
             ? b.characters.map(c => {
                 const count = currentCharCounts[c] || 0
@@ -675,33 +939,39 @@ export default function RegionAnnotator({
               }).join('、')
             : '?'
 
-          // z-index: Base stacking order puts smaller boxes (higher idx) on top of larger boxes (lower idx).
-          // Selected boxes, hovered box from the list, and active box get higher priority.
-          const zIndex = isActive ? 100 : (isHovered ? 90 : (isSelected ? 50 + idx : 1 + idx))
-
           return (
             <div key={b.id}
-              onClick={ev => handleBoxClick(b.id, ev)}
-              onMouseDown={ev => ev.stopPropagation()}
+              onClick={hasPoly ? undefined : ev => handleBoxClick(b.id, ev)}
+              onMouseDown={hasPoly ? undefined : ev => ev.stopPropagation()}
               style={{
                 position: 'absolute', left: x1 * s, top: y1 * s, width: (x2 - x1) * s, height: (y2 - y1) * s,
-                border: `2px solid ${borderColor}`,
-                outline: isSelected ? '3px solid #3b82f6' : (isHovered ? '3px solid #facc15' : (stampChar ? '1px dashed #60a5fa' : 'none')),
+                border: hasPoly ? 'none' : `2px solid ${borderColor}`,
+                outline: hasPoly
+                  ? (isSelected ? '1px dashed #3b82f6' : (isHovered ? '1px dashed #facc15' : 'none'))
+                  : (isSelected ? '3px solid #3b82f6' : (isHovered ? '3px solid #facc15' : (stampChar ? '1px dashed #60a5fa' : 'none'))),
                 outlineOffset: 2,
-                background: bgColor,
-                boxShadow: isHovered ? '0 0 0 2px rgba(250, 204, 21, 0.45)' : undefined,
-                cursor: stampChar ? 'copy' : 'pointer', boxSizing: 'border-box',
+                background: hasPoly ? 'transparent' : bgColor,
+                boxShadow: !hasPoly && isHovered ? '0 0 0 2px rgba(250, 204, 21, 0.45)' : undefined,
+                cursor: hasPoly ? 'default' : (stampChar ? 'copy' : 'pointer'),
+                pointerEvents: hasPoly ? 'none' : 'auto',
+                boxSizing: 'border-box',
                 transition: 'border-color 0.1s ease, background 0.1s ease',
-                zIndex,
+                zIndex: hasPoly ? Math.max(zIndex, 10) : zIndex,
               }}
-              title={stampChar ? `クリックして「${stampChar}」を割り当て/解除` : undefined}
+              title={!hasPoly && stampChar ? `クリックして「${stampChar}」を割り当て/解除` : undefined}
             >
-              <span style={{
-                position: 'absolute', top: -20, left: 0, fontSize: 11, padding: '1px 5px', borderRadius: 3,
-                background: tagBg, color: '#fff', whiteSpace: 'nowrap',
-                maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis',
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}>
+              <span
+                onClick={hasPoly ? ev => handleBoxClick(b.id, ev) : undefined}
+                onMouseDown={hasPoly ? ev => ev.stopPropagation() : undefined}
+                style={{
+                  position: 'absolute', top: -20, left: 0, fontSize: 11, padding: '1px 5px', borderRadius: 3,
+                  background: tagBg, color: '#fff', whiteSpace: 'nowrap',
+                  maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis',
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  pointerEvents: 'auto',
+                  cursor: hasPoly ? (stampChar ? 'copy' : 'pointer') : undefined,
+                }}
+              >
                 <span>{labelText}</span>
                 {totalSameChar > 1 && (
                   <span style={{ fontSize: 9, opacity: 0.8, background: 'rgba(0,0,0,0.3)', padding: '0 3px', borderRadius: 2 }}>
@@ -711,11 +981,13 @@ export default function RegionAnnotator({
               </span>
               <button
                 onClick={ev => { ev.stopPropagation(); removeBox(b.id) }}
+                onMouseDown={ev => ev.stopPropagation()}
                 style={{
                   position: 'absolute', top: -20, right: 0, fontSize: 11, border: 'none', borderRadius: 3,
                   background: '#7f1d1d', color: '#fff', padding: '1px 5px', cursor: 'pointer', lineHeight: 1,
+                  pointerEvents: 'auto',
                 }}
-                title="この矩形を削除"
+                title="この領域を削除"
               >×</button>
             </div>
           )

@@ -492,9 +492,21 @@ class Command(BaseCommand):
                         n_ambiguous += 1
                         continue
                     image_index = region.get('image_index')
+                    raw_poly = region.get('polygon')
+                    polygon = None
+                    if (isinstance(raw_poly, list) and len(raw_poly) >= 3
+                            and all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in raw_poly)):
+                        try:
+                            polygon = [(float(pt[0]), float(pt[1])) for pt in raw_poly]
+                        except (TypeError, ValueError):
+                            polygon = None
+                    base_key = f'{item.id}:{image_index}:{",".join(str(v) for v in box)}'
+                    if polygon is not None:
+                        poly_sig = zlib.crc32(';'.join(f'{int(round(px))},{int(round(py))}' for px, py in polygon).encode('utf-8'))
+                        base_key = f'{base_key}:p{poly_sig:08x}'
                     cands.append({
                         'kind': _REGION, 'char': label, 'item_id': item.id, 'image_index': image_index,
-                        'box': tuple(box), 'key': f'{item.id}:{image_index}:{",".join(str(v) for v in box)}',
+                        'box': tuple(box), 'polygon': polygon, 'key': base_key,
                     })
 
         preview_ids = defaultdict(list)
@@ -720,7 +732,12 @@ class Command(BaseCommand):
             last['ident'], last['bytes'] = ident, image_bytes
         if last['bytes'] is None:
             return None
-        return tagger._crop_with_padding(last['bytes'], cand['box'])
+        return tagger._crop_with_padding(
+            last['bytes'],
+            cand['box'],
+            padding_ratio=0.0 if cand.get('polygon') else 0.15,
+            polygon=cand.get('polygon'),
+        )
 
     def _extract(self, selected, cached, tagger_backend, feature_source, gray, expected_names, checkpoint):
         """Attach 'feat' (and 'gray_feat' when `gray`) to every selected
