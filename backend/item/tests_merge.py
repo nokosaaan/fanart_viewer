@@ -245,3 +245,83 @@ class ItemMergeTestCase(TestCase):
             crop_scores = _predict_crop_character_scores({'general_probs': [0.1]}, 'onnx')
         self.assertNotIn('low_conf_char', crop_scores)
         self.assertIn('silver', crop_scores)
+
+    def test_per_image_title_character_cross_boost(self):
+        from unittest.mock import patch
+        from item.models import CharacterGroup, PreviewImage
+        from item.views import _suggest_for_item_ensemble
+
+        CharacterGroup.objects.create(name='GrpA', characters=['CharA'], titles=['TitleA'])
+        CharacterGroup.objects.create(name='GrpB', characters=['CharB'], titles=['TitleB'])
+
+        item = Item.objects.create(
+            external_id=3001,
+            source='pixiv_bookmark',
+            artist='MultiArtist',
+            situation='MULTIPLE',
+        )
+        PreviewImage.objects.create(item=item, order=0, data=b'IMG0')
+        PreviewImage.objects.create(item=item, order=1, data=b'IMG1')
+
+        # Image 0 detects CharA, Image 1 detects CharB
+        fake_results = [
+            {
+                'characters': [{'name': 'CharA', 'score': 0.92}],
+                'tags': [],
+                'tags_full': [],
+                'situation_hint': None,
+                'general_probs': [0.1],
+                'embedding': None,
+                'ccip': None,
+                'crops': [],
+                'boxes': [],
+                'regions': [],
+                'person_count': 1,
+            },
+            {
+                'characters': [{'name': 'CharB', 'score': 0.88}],
+                'tags': [],
+                'tags_full': [],
+                'situation_hint': None,
+                'general_probs': [0.1],
+                'embedding': None,
+                'ccip': None,
+                'crops': [],
+                'boxes': [],
+                'regions': [],
+                'person_count': 1,
+            },
+        ]
+        call_idx = {'i': 0}
+
+        def fake_suggest_tags(*_args, **_kwargs):
+            res = fake_results[call_idx['i']]
+            call_idx['i'] += 1
+            return res
+
+        with patch('item.views.HAVE_TAGGER', True), \
+             patch('item.tagger.suggest_tags', side_effect=fake_suggest_tags), \
+             patch('item.tagger.is_monochrome', return_value=False), \
+             patch('item.tagger.predict_character_topk', return_value=[]):
+            out = _suggest_for_item_ensemble(item, external=False, max_images=4)
+
+        self.assertEqual(len(out['per_image']), 2)
+        # Image 0 boosted TitleA & CharA; Image 1 independently boosted TitleB & CharB
+        p0_chars = [c['name'] for c in out['per_image'][0]['characters']]
+        p0_titles = [t['name'] for t in out['per_image'][0]['titles']]
+        p1_chars = [c['name'] for c in out['per_image'][1]['characters']]
+        p1_titles = [t['name'] for t in out['per_image'][1]['titles']]
+        self.assertIn('CharA', p0_chars)
+        self.assertIn('TitleA', p0_titles)
+        self.assertNotIn('TitleB', p0_titles)
+        self.assertIn('CharB', p1_chars)
+        self.assertIn('TitleB', p1_titles)
+        self.assertNotIn('TitleA', p1_titles)
+
+        # Combined item-level candidates retain both titles and characters
+        all_titles = [t['name'] for t in out['titles']]
+        all_chars = [c['name'] for c in out['characters']]
+        self.assertIn('TitleA', all_titles)
+        self.assertIn('TitleB', all_titles)
+        self.assertIn('CharA', all_chars)
+        self.assertIn('CharB', all_chars)

@@ -2069,6 +2069,10 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
         return {'image_indices': [image_indices[results[p][0]] for p in entry_positions
                                   if image_indices[results[p][0]] is not None]}
 
+    shared_char_base = list(char_c)
+    shared_title_base = list(title_c)
+    per_image_candidates = []
+
     if results:
         if want_tags:
             merged_tags = {}
@@ -2083,6 +2087,39 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
                 situation_c.append({'value': hint, 'source': 'tagger', 'confidence': 1.0})
 
         if want_characters or want_titles:
+            for pos, r in results:
+                img_idx = image_indices[pos] if pos < len(image_indices) else None
+                img_char_list = []
+                img_title_list = []
+                img_raw = [{'name': c['name'], 'score': round(c['score'], 4)} for c in r.get('characters', [])]
+                img_matched, img_tagger_titles = _match_tagger_characters(img_raw)
+                if want_characters:
+                    for c in img_matched:
+                        if not c.get('matched'):
+                            continue
+                        conf = c['score'] if c.get('score') is not None else 0.5
+                        img_char_list.append({
+                            'value': c['name'], 'source': 'tagger', 'confidence': conf,
+                            'raw_name': c.get('raw_name'), 'match_method': c.get('match_method'),
+                            'image_indices': [img_idx] if img_idx is not None else [],
+                        })
+                    for char_name, conf in _classifier_predictions(r, tagger_backend):
+                        if not _is_appearance_color_label(char_name) and conf <= _CLASSIFIER_NAMED_CHAR_MIN_CONF:
+                            continue
+                        for alias in _expand_character_alias(char_name):
+                            img_char_list.append({
+                                'value': alias, 'source': 'classifier', 'confidence': conf,
+                                'image_indices': [img_idx] if img_idx is not None else [],
+                            })
+                if want_titles:
+                    for t in img_tagger_titles:
+                        img_title_list.append({'value': t, 'source': 'tagger_group', 'confidence': 1.0})
+                per_image_candidates.append({
+                    'image_index': img_idx,
+                    'char_entries': img_char_list,
+                    'title_entries': img_title_list,
+                })
+
             per_image_raw = [{c['name']: c['score'] for c in r['characters']} for _p, r in results]
             raw_agg = _aggregate_confidences(per_image_raw)
             raw_candidates = [{'name': n, 'score': round(v[0], 4)} for n, v in raw_agg.items()]
@@ -2152,6 +2189,8 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
             sim2 = _suggest_from_similar_tags(tags_for_matching, item.description, exclude_pk=item.pk, monochrome=monochrome)
             _append_tag_similarity_candidates(sim2, title_c, char_c, situation_c,
                                                want_titles, want_characters, want_situation)
+            _append_tag_similarity_candidates(sim2, shared_title_base, shared_char_base, [],
+                                               want_titles, want_characters, False)
 
     logging.info(
         'suggest item=%s backend=%s want(t/c/tag/s)=%s/%s/%s/%s have_tagger=%s '
@@ -2162,6 +2201,8 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
     )
     return {
         'title': title_c, 'character': char_c, 'situation': situation_c, 'tags': tags_out,
+        'shared_title': shared_title_base, 'shared_character': shared_char_base,
+        'per_image_candidates': per_image_candidates,
         'want_titles': want_titles, 'want_characters': want_characters,
         'want_tags': want_tags, 'want_situation': want_situation,
         'image_index': resolved_image_index, 'image_indices': image_indices, 'images_analyzed': n_results,
@@ -2497,39 +2538,106 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     # FROM).
     cross_boost = collected['want_titles'] and collected['want_characters']
     known_titles = _known_titles() if cross_boost else None
+    per_image_cands = collected.get('per_image_candidates') or []
+    per_image_out = []
 
-    # Stage 1: characters combined from their own sources only — this
-    # (not the final, title-boosted char_scores below) is what titles get
-    # boosted FROM, so the boost reflects "how well does the image/tags/
-    # history alone support this character", not a value already inflated
-    # by the very title boost it's about to help produce.
-    _char_values_stage1, char_scores_stage1 = _combine_character_candidates_tiered(
-        collected['character'], weights, top_k=_CANDIDATE_LIST_LIMIT,
-    )
+    if cross_boost and len(per_image_cands) >= 2:
+        # Run title <-> character cross-boost independently per image so an
+        # earlier image's strong character/title never pulls or suppresses
+        # later images' own character/title matching.
+        shared_char = collected.get('shared_character') or []
+        shared_title = collected.get('shared_title') or []
+        agg_title_scores = {}
+        agg_char_scores = {}
+        title_entries = list(collected['title'])
+        char_entries = list(collected['character'])
+        seen_title_boosts = set()
+        seen_char_boosts = set()
 
-    title_entries = collected['title']
-    if cross_boost:
-        title_entries = title_entries + _cross_boost_title_candidates(char_scores_stage1, known_titles)
-    title_values, title_scores = _combine_candidates(title_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
-    # top_k=3 (not more): this is a REVIEW list a human picks from (see
-    # EditFields.jsx's candidate cards), not an auto-apply-everything list
-    # — three ranked options is enough to catch "the right answer wasn't
-    # #1" without turning the review UI into a wall of low-confidence
-    # noise. Titles used to be dumped straight into `suggested_titles` and
-    # auto-applied wholesale despite this very comment already describing
-    # the intended review-card design — this finishes that: titles now get
-    # the exact same {name, score, contributors} shape `characters` does,
-    # via the same (source-name-agnostic) _character_breakdown helper, so
-    # a title suggestion is never applied without a human choosing it, and
-    # always shows which source proposed it (crucially including 'danbooru'
-    # — a live reverse lookup against Danbooru's OWN tag database, so it can
-    # already name a title that has never been used anywhere in this app
-    # before; that capability existed in `collected['title']` all along, it
-    # just never survived past this function).
-    char_entries = collected['character']
-    if cross_boost:
-        char_entries = char_entries + _cross_boost_character_candidates(title_scores, known_titles)
-    char_values, char_scores = _combine_character_candidates_tiered(char_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
+        for img_c in per_image_cands:
+            img_char_base = shared_char + img_c['char_entries']
+            _iv1, img_c_scores1 = _combine_character_candidates_tiered(
+                img_char_base, weights, top_k=_CANDIDATE_LIST_LIMIT,
+            )
+            img_t_boosts = _cross_boost_title_candidates(img_c_scores1, known_titles)
+            for b in img_t_boosts:
+                bk = (b['value'], b['source'])
+                if bk not in seen_title_boosts:
+                    seen_title_boosts.add(bk)
+                    title_entries.append(b)
+            img_t_entries = shared_title + img_c['title_entries'] + img_t_boosts
+            img_t_vals, img_t_scores = _combine_candidates(
+                img_t_entries, weights, top_k=_CANDIDATE_LIST_LIMIT,
+            )
+            for t, sc in img_t_scores.items():
+                if sc > agg_title_scores.get(t, -1.0):
+                    agg_title_scores[t] = sc
+
+            img_c_boosts = _cross_boost_character_candidates(img_t_scores, known_titles)
+            for b in img_c_boosts:
+                bk = (b['value'], b['source'])
+                if bk not in seen_char_boosts:
+                    seen_char_boosts.add(bk)
+                    char_entries.append(b)
+            img_c_entries = img_char_base + img_c_boosts
+            img_c_vals, img_c_scores = _combine_character_candidates_tiered(
+                img_c_entries, weights, top_k=_CANDIDATE_LIST_LIMIT,
+            )
+            for ch, sc in img_c_scores.items():
+                if sc > agg_char_scores.get(ch, -1.0):
+                    agg_char_scores[ch] = sc
+
+            per_image_out.append({
+                'image_index': img_c['image_index'],
+                'characters': [{'name': n, 'score': round(img_c_scores[n], 4)} for n in img_c_vals],
+                'titles': [{'name': n, 'score': round(img_t_scores[n], 4)} for n in img_t_vals],
+            })
+
+        title_scores = agg_title_scores
+        title_values = [
+            t for t, _sc in sorted(title_scores.items(), key=lambda kv: -kv[1])[:_CANDIDATE_LIST_LIMIT]
+        ]
+
+        char_scores = agg_char_scores
+        named_ranked = [
+            (ch, sc) for ch, sc in sorted(char_scores.items(), key=lambda kv: -kv[1])
+            if not _is_appearance_color_label(ch)
+        ]
+        if named_ranked and named_ranked[0][1] >= _NAMED_CHAR_FALLBACK_THRESHOLD:
+            char_values = [ch for ch, _sc in named_ranked[:_CANDIDATE_LIST_LIMIT]]
+        else:
+            color_ranked = [
+                (ch, sc) for ch, sc in sorted(char_scores.items(), key=lambda kv: -kv[1])
+                if _is_appearance_color_label(ch)
+            ]
+            char_values = list(dict.fromkeys(
+                [ch for ch, _sc in color_ranked] + [ch for ch, _sc in named_ranked]
+            ))[:_CANDIDATE_LIST_LIMIT]
+    else:
+        # Stage 1: characters combined from their own sources only — this
+        # (not the final, title-boosted char_scores below) is what titles get
+        # boosted FROM, so the boost reflects "how well does the image/tags/
+        # history alone support this character", not a value already inflated
+        # by the very title boost it's about to help produce.
+        _char_values_stage1, char_scores_stage1 = _combine_character_candidates_tiered(
+            collected['character'], weights, top_k=_CANDIDATE_LIST_LIMIT,
+        )
+
+        title_entries = collected['title']
+        if cross_boost:
+            title_entries = title_entries + _cross_boost_title_candidates(char_scores_stage1, known_titles)
+        title_values, title_scores = _combine_candidates(title_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
+        char_entries = collected['character']
+        if cross_boost:
+            char_entries = char_entries + _cross_boost_character_candidates(title_scores, known_titles)
+        char_values, char_scores = _combine_character_candidates_tiered(char_entries, weights, top_k=_CANDIDATE_LIST_LIMIT)
+        if len(per_image_cands) == 1:
+            per_image_out.append({
+                'image_index': per_image_cands[0]['image_index'],
+                'characters': [{'name': n, 'score': round(char_scores[n], 4)} for n in char_values],
+                'titles': [{'name': n, 'score': round(title_scores[n], 4)} for n in title_values],
+            })
+
     situation_values, _situation_scores = _combine_candidates(collected['situation'], DEFAULT_SITUATION_WEIGHTS, top_k=1)
 
     char_breakdown = _character_breakdown(char_entries, char_values)
@@ -2580,6 +2688,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         'image_index': collected['image_index'],
         'image_indices': collected['image_indices'],
         'images_analyzed': collected['images_analyzed'],
+        'per_image': per_image_out,
     }
 
 
