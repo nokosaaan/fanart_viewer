@@ -4,14 +4,79 @@ Downscales oversized images and recompresses them to lean WebP format,
 dramatically reducing SQLite database file size and memory footprint.
 """
 
+import io
 import json
 import os
 import sys
 from pathlib import Path
+from PIL import Image
 from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 from item.models import Item, PreviewImage
 from item.image_optimizer import optimize_image_data, DEFAULT_MAX_DIM, DEFAULT_QUALITY
+
+
+def _image_dimensions(raw_bytes):
+    try:
+        with Image.open(io.BytesIO(raw_bytes)) as im:
+            return im.size  # (width, height)
+    except Exception:
+        return None
+
+
+def _rescale_item_regions(item_id, image_index, orig_size, new_size):
+    """Rescale Item.character_regions box/polygon coordinates when an image is
+    downscaled during compression so region labels never drift out of alignment.
+    """
+    if not orig_size or not new_size or orig_size == new_size:
+        return False
+    ow, oh = orig_size
+    nw, nh = new_size
+    if ow <= 0 or oh <= 0 or nw <= 0 or nh <= 0:
+        return False
+    sx = nw / float(ow)
+    sy = nh / float(oh)
+
+    item = Item.objects.filter(pk=item_id).only("id", "character_regions").first()
+    if not item or not item.character_regions:
+        return False
+
+    updated = False
+    new_regions = []
+    for r in item.character_regions:
+        if not isinstance(r, dict):
+            new_regions.append(r)
+            continue
+        r_idx = r.get("image_index")
+        matches = (image_index is None) or (r_idx == image_index) or (r_idx is None and image_index == 0)
+        if not matches:
+            new_regions.append(r)
+            continue
+
+        nr = dict(r)
+        box = nr.get("box")
+        if isinstance(box, list) and len(box) == 4:
+            nr["box"] = [
+                int(round(box[0] * sx)),
+                int(round(box[1] * sy)),
+                int(round(box[2] * sx)),
+                int(round(box[3] * sy)),
+            ]
+            updated = True
+        poly = nr.get("polygon")
+        if isinstance(poly, list) and len(poly) >= 3:
+            nr["polygon"] = [
+                [int(round(pt[0] * sx)), int(round(pt[1] * sy))]
+                for pt in poly
+                if isinstance(pt, (list, tuple)) and len(pt) == 2
+            ]
+            updated = True
+        new_regions.append(nr)
+
+    if updated:
+        item.character_regions = new_regions
+        item.save(update_fields=["character_regions"])
+    return updated
 
 
 class Command(BaseCommand):
@@ -155,6 +220,7 @@ class Command(BaseCommand):
                         batch_checked_ids.append(p.id)
                     continue
 
+                orig_size = _image_dimensions(raw_data)
                 opt_data, opt_ctype = optimize_image_data(
                     raw_data,
                     content_type=p.content_type,
@@ -169,6 +235,16 @@ class Command(BaseCommand):
                     saved_kb = (orig_len - opt_len) / 1024
                     if not dry_run:
                         PreviewImage.objects.filter(pk=p.id).update(data=opt_data, content_type=opt_ctype)
+                        new_size = _image_dimensions(opt_data)
+                        if orig_size and new_size and orig_size != new_size:
+                            # Compute 0-based preview index for this PreviewImage within its item
+                            ordered_pids = list(
+                                PreviewImage.objects.filter(item_id=p.item_id)
+                                .order_by("order", "id")
+                                .values_list("id", flat=True)
+                            )
+                            img_idx = ordered_pids.index(p.id) if p.id in ordered_pids else p.order
+                            _rescale_item_regions(p.item_id, img_idx, orig_size, new_size)
 
                     if compressed_count % 25 == 0 or compressed_count == 1:
                         self.stdout.write(
@@ -195,6 +271,7 @@ class Command(BaseCommand):
             orig_len = len(raw_data)
             total_orig_bytes += orig_len
             if orig_len > min_size_bytes:
+                orig_size = _image_dimensions(raw_data)
                 opt_data, opt_ctype = optimize_image_data(
                     raw_data,
                     content_type=it.preview_content_type,
@@ -210,6 +287,9 @@ class Command(BaseCommand):
                             preview_data=opt_data,
                             preview_content_type=opt_ctype,
                         )
+                        new_size = _image_dimensions(opt_data)
+                        if orig_size and new_size and orig_size != new_size:
+                            _rescale_item_regions(it.id, None, orig_size, new_size)
                 else:
                     total_opt_bytes += orig_len
             else:

@@ -117,7 +117,9 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // 'attention' = フィールド不足または領域未設定のアイテム(統合編集画面)。
   // 'mismatch' = 一度は領域ラベルを保存したものの、編集キューのキャラ一覧と
   // 完全には一致していないアイテム(従来のdiff/adoptパネルをそのまま維持)。
+  // 'regions' = 既に領域指定されたアイテムの見直し・描き直し用モード。
   const [mode, setMode] = useState('attention')
+  const [regionReviewFilter, setRegionReviewFilter] = useState('all') // 'all' | 'issues' | 'box_only'
   const [items, setItems] = useState([])
   const [count, setCount] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -241,9 +243,21 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
     // request needed) — filter it client-side by the same predicate the
     // corresponding server-side action uses.
     if(Array.isArray(scopedItems)){
-      const list = mode === 'mismatch'
-        ? scopedItems.filter(isMismatched)
-        : scopedItems.filter(it => isNeedsAttention(it, activeFields))
+      let list
+      if(mode === 'mismatch'){
+        list = scopedItems.filter(isMismatched)
+      } else if(mode === 'regions'){
+        list = scopedItems.filter(it => {
+          const regs = it.character_regions || []
+          if(regs.length === 0) return false
+          if(regionReviewFilter === 'box_only'){
+            return regs.some(r => !(Array.isArray(r.polygon) && r.polygon.length >= 3))
+          }
+          return true
+        })
+      } else {
+        list = scopedItems.filter(it => isNeedsAttention(it, activeFields))
+      }
       setItems(list)
       setSelectedId(prev => (prev != null && list.some(it => it.id === prev)) ? prev : null)
       setCount(list.length)
@@ -257,6 +271,8 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       let url
       if(mode === 'mismatch'){
         url = '/api/items/region_mismatch_queue/'
+      } else if(mode === 'regions'){
+        url = `/api/items/region_review_queue/?filter=${encodeURIComponent(regionReviewFilter)}`
       } else {
         const missing = Array.from(activeFields).join(',') || MISSING_FIELDS.map(f=>f.key).join(',')
         url = `/api/items/needs_attention_queue/?missing=${encodeURIComponent(missing)}`
@@ -275,7 +291,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
     }finally{
       setLoading(false)
     }
-  }, [activeFields, scopedItems, mode])
+  }, [activeFields, scopedItems, mode, regionReviewFilter])
 
   useEffect(()=>{ load() }, [load])
 
@@ -336,6 +352,8 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       let url
       if(mode === 'mismatch'){
         url = `/api/items/region_mismatch_queue/?before_id=${nextBeforeId}`
+      } else if(mode === 'regions'){
+        url = `/api/items/region_review_queue/?filter=${encodeURIComponent(regionReviewFilter)}&before_id=${nextBeforeId}`
       } else {
         const missing = Array.from(activeFields).join(',') || MISSING_FIELDS.map(f=>f.key).join(',')
         url = `/api/items/needs_attention_queue/?missing=${encodeURIComponent(missing)}&before_id=${nextBeforeId}`
@@ -397,7 +415,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // Guard for anything that would throw away unsaved work: skipping to
   // another item, switching mode tabs, changing page, or closing the panel.
   function confirmDiscardIfDirty() {
-    const dirty = mode === 'mismatch' ? regionDirty : itemPanelDirty
+    const dirty = (mode === 'mismatch' || mode === 'regions') ? regionDirty : itemPanelDirty
     if (!dirty) return true
     return window.confirm('保存されていない変更があります。破棄しますか？')
   }
@@ -546,16 +564,34 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
       <div className="cgm-panel-header" style={{ position: 'relative' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <strong>編集キュー ({count}件)</strong>
-          <span style={{
-            fontSize: 11,
-            padding: '2px 7px',
-            borderRadius: 999,
-            background: mode === 'mismatch' ? 'rgba(239,68,68,0.18)' : 'var(--active-bg)',
-            color: mode === 'mismatch' ? '#fca5a5' : 'var(--active-text)',
-            fontWeight: 600,
-          }}>
-            {mode === 'mismatch' ? '不整合あり' : '要対応'}
-          </span>
+          <div style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: '1px solid var(--border)' }}>
+            {[
+              { id: 'attention', label: '要対応' },
+              { id: 'mismatch', label: '不整合あり' },
+              { id: 'regions', label: '領域見直し' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => changeMode(tab.id)}
+                style={{
+                  border: 'none',
+                  padding: '3px 9px',
+                  fontSize: 11,
+                  fontWeight: mode === tab.id ? 700 : 400,
+                  cursor: 'pointer',
+                  background: mode === tab.id
+                    ? (tab.id === 'mismatch' ? 'rgba(239,68,68,0.28)' : 'var(--active-bg)')
+                    : 'transparent',
+                  color: mode === tab.id
+                    ? (tab.id === 'mismatch' ? '#fca5a5' : 'var(--active-text)')
+                    : 'var(--muted)',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           {bulkSuggesting && (
             <span style={{ fontSize: 11, color: '#93c5fd' }}>
               提案中 ({bulkProgress ? bulkProgress.done : 0}/{bulkProgress ? bulkProgress.total : 0})
@@ -633,11 +669,23 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                       }}
                       onClick={() => { changeMode('mismatch'); setSettingsMenuOpen(false) }}
                     >不整合あり</button>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        flex: 1, fontSize: 12,
+                        fontWeight: mode === 'regions' ? 700 : 400,
+                        background: mode === 'regions' ? 'var(--active-bg)' : undefined,
+                      }}
+                      onClick={() => { changeMode('regions'); setSettingsMenuOpen(false) }}
+                    >領域見直し</button>
                   </div>
                   <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.45 }}>
                     {mode === 'mismatch'
                       ? '領域ラベルと編集キューのキャラ一覧が一致していないアイテムです。'
-                      : '対象項目が未設定、または(SOLO以外で)領域ラベル未保存のアイテムです。'}
+                      : mode === 'regions'
+                        ? '既に領域指定済みのアイテムを一覧し、ズレの修正や多角形への描き直しができます。'
+                        : '対象項目が未設定、または(SOLO以外で)領域ラベル未保存のアイテムです。'}
                   </div>
                 </div>
 
@@ -682,7 +730,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
         </div>
       </div>
 
-      {((Array.isArray(allItems) && queuePageCount > 1) || mode === 'attention') && (
+      {((Array.isArray(allItems) && queuePageCount > 1) || mode === 'attention' || mode === 'regions') && (
         <div
           className="cgm-panel-search"
           style={{
@@ -708,6 +756,27 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
               />
             )}
           </div>
+          {mode === 'regions' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 12, color: 'var(--muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                絞り込み:
+                <select
+                  value={regionReviewFilter}
+                  onChange={e => {
+                    if (!confirmDiscardIfDirty()) return
+                    setRegionReviewFilter(e.target.value)
+                  }}
+                  style={{ fontSize: 12 }}
+                >
+                  <option value="all">領域あり全件</option>
+                  {!Array.isArray(scopedItems) && (
+                    <option value="issues">はみ出し・ズレ検知のみ</option>
+                  )}
+                  <option value="box_only">矩形のみ（未ポリゴン）</option>
+                </select>
+              </label>
+            </div>
+          )}
           {mode === 'attention' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginLeft: 'auto' }}>
               {haveTimm && (
@@ -756,6 +825,29 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
             <div className="cgm-empty-hint" style={{ padding: 8, fontSize: 11 }}>なし 🎉</div>
           )}
           {items.map(it => {
+            if(mode === 'regions'){
+              const hasIssues = Array.isArray(it.region_issues) && it.region_issues.length > 0
+              const regs = it.character_regions || []
+              const allPoly = regs.length > 0 && regs.every(r => Array.isArray(r.polygon) && r.polygon.length >= 3)
+              return (
+                <div
+                  key={it.id}
+                  onClick={() => selectItem(it.id)}
+                  title={`#${it.id}${hasIssues ? ` (領域異常 ${it.region_issues.length}件)` : (allPoly ? ' (ポリゴン済)' : ' (矩形含む)')}`}
+                  style={{
+                    padding: '6px 4px', cursor: 'pointer',
+                    background: it.id === selectedId ? 'var(--active-bg)' : 'transparent',
+                    borderBottom: '1px solid var(--divider)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 3,
+                  }}
+                >
+                  <span style={{ fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>#{it.id}</span>
+                  <span style={{ fontSize: 11, flexShrink: 0, color: hasIssues ? '#fbbf24' : (allPoly ? '#4ade80' : '#94a3b8') }}>
+                    {hasIssues ? '⚠' : (allPoly ? '✓' : '⬜')}
+                  </span>
+                </div>
+              )
+            }
             if(mode === 'mismatch'){
               const diff = 'region_only_characters' in it
                 ? { regionOnly: it.region_only_characters || [], itemOnly: it.item_only_characters || [] }
@@ -829,6 +921,38 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
         }>
           {!selected ? (
             <div className="cgm-empty-hint">左のリストから項目を選んでください</div>
+          ) : mode === 'regions' ? (
+            <div style={{ background: '#1e293b', borderRadius: 8, padding: '12px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ color: '#f8fafc', fontWeight: 700, fontSize: 15 }}>Item #{selected.id}</span>
+                  {selected.situation && <span className={`situation-chip s-${selected.situation.toLowerCase()}`}>{selected.situation}</span>}
+                  {selected.artist && <span style={{ color: '#94a3b8', fontSize: 12 }}>{selected.artist}</span>}
+                  <SourceLink item={selected} />
+                </span>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn" style={{ padding: '4px 10px', fontSize: 12 }} onClick={skipCurrent}>スキップ（次へ）</button>
+                </div>
+              </div>
+              {Array.isArray(selected.region_issues) && selected.region_issues.length > 0 && (
+                <div style={{
+                  marginBottom: 10, padding: '6px 10px', borderRadius: 6,
+                  background: 'rgba(245, 158, 11, 0.14)', border: '1px solid #f59e0b',
+                  color: '#fde68a', fontSize: 12,
+                }}>
+                  ⚠️ 領域のズレ・はみ出しを {selected.region_issues.length} 件検知しました。不要な矩形を削除して描き直してから保存してください。
+                </div>
+              )}
+              <RegionAnnotator
+                key={selected.id}
+                item={selected}
+                onDirtyChange={setRegionDirty}
+                onSaved={(newItem) => {
+                  notify('item-updated', { id: selected.id, item: newItem })
+                  selectNext(selected.id)
+                }}
+              />
+            </div>
           ) : mode === 'attention' ? (
             <div style={{background:'#1e293b', borderRadius:8, padding:'10px 14px', flex:'1 1 auto', minHeight:0, display:'flex', flexDirection:'column'}}>
               <ItemQueuePanel

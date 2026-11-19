@@ -73,6 +73,7 @@ export default function RegionAnnotator({
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
   const [naturalSize, setNaturalSize] = useState(null) // {width, height} of the currently-displayed image
+  const [displayWidth, setDisplayWidth] = useState(0)  // rendered width of <img> tracked via ResizeObserver
   const [detecting, setDetecting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -231,9 +232,22 @@ export default function RegionAnnotator({
         : `/api/items/${item.id}/preview/`))
 
   useEffect(() => {
-    if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
-      setNaturalSize({ width: imgRef.current.naturalWidth, height: imgRef.current.naturalHeight })
+    const img = imgRef.current
+    if (!img) return
+    const syncWidth = () => {
+      if (img.clientWidth > 0) setDisplayWidth(img.clientWidth)
     }
+    if (img.complete && img.naturalWidth > 0) {
+      setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight })
+      syncWidth()
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(syncWidth)
+      ro.observe(img)
+      return () => ro.disconnect()
+    }
+    window.addEventListener('resize', syncWidth)
+    return () => window.removeEventListener('resize', syncWidth)
   }, [previewUrl])
 
   const visibleBoxes = boxes.filter(b => b.imageIndex === currentImageIndex)
@@ -315,12 +329,14 @@ export default function RegionAnnotator({
   }
 
   function scale() {
-    if (!imgRef.current || !naturalSize) return 1
-    return imgRef.current.clientWidth / naturalSize.width
+    if (!imgRef.current || !naturalSize || naturalSize.width <= 0) return 1
+    const w = imgRef.current.clientWidth || displayWidth
+    return w > 0 ? (w / naturalSize.width) : 1
   }
 
   function toNaturalCoords(clientX, clientY) {
-    const rect = containerRef.current.getBoundingClientRect()
+    const targetEl = imgRef.current || containerRef.current
+    const rect = targetEl.getBoundingClientRect()
     const s = scale()
     return {
       x: Math.round((clientX - rect.left) / s),
@@ -820,7 +836,10 @@ export default function RegionAnnotator({
             width: compact ? 'auto' : undefined,
             display: 'block',
           }}
-          onLoad={e => setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })}
+          onLoad={e => {
+            setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })
+            if (e.target.clientWidth > 0) setDisplayWidth(e.target.clientWidth)
+          }}
         />
 
         {naturalSize && (

@@ -341,3 +341,41 @@ class BrokenRegionsAndOutliersTests(TestCase):
         )
         self.assertEqual(len(proposed_single), 1)
         self.assertEqual(proposed_single[0]["polygon"], poly0)
+
+    def test_region_review_queue_filters(self):
+        import io
+        from PIL import Image
+        from item.models import PreviewImage
+
+        buf = io.BytesIO()
+        Image.new("RGB", (100, 100), (200, 200, 200)).save(buf, format="PNG")
+        img_bytes = buf.getvalue()
+
+        # Item 1: polygon region inside bounds
+        it_poly = Item.objects.create(
+            external_id=801, source="pixiv_bookmark", artist="A", situation="CP",
+            characters=["CharA"],
+            character_regions=[{"image_index": 0, "box": [10, 10, 50, 50], "polygon": [[10, 10], [50, 10], [10, 50]], "characters": ["CharA"]}],
+        )
+        PreviewImage.objects.create(item=it_poly, order=0, data=img_bytes)
+
+        # Item 2: rectangular box out of bounds (x2=180 > 100)
+        it_oob = Item.objects.create(
+            external_id=802, source="pixiv_bookmark", artist="B", situation="CP",
+            characters=["CharB"],
+            character_regions=[{"image_index": 0, "box": [20, 20, 180, 90], "characters": ["CharB"]}],
+        )
+        PreviewImage.objects.create(item=it_oob, order=0, data=img_bytes)
+
+        r_all = self.client.get("/api/items/region_review_queue/?filter=all")
+        self.assertEqual(r_all.status_code, 200)
+        self.assertEqual({x["id"] for x in r_all.json()["results"]}, {it_poly.id, it_oob.id})
+
+        r_box = self.client.get("/api/items/region_review_queue/?filter=box_only")
+        self.assertEqual(r_box.status_code, 200)
+        self.assertEqual([x["id"] for x in r_box.json()["results"]], [it_oob.id])
+
+        r_iss = self.client.get("/api/items/region_review_queue/?filter=issues")
+        self.assertEqual(r_iss.status_code, 200)
+        self.assertEqual([x["id"] for x in r_iss.json()["results"]], [it_oob.id])
+        self.assertGreater(len(r_iss.json()["results"][0]["region_issues"]), 0)

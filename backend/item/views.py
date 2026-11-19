@@ -4624,6 +4624,90 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'next_before_id': batch[-1].id if (has_more and batch) else None,
         })
 
+    @action(detail=False, methods=['get'], url_path='region_review_queue')
+    def region_review_queue(self, request):
+        """Items that already have saved `character_regions` so users can review,
+        redraw drifted boxes, or upgrade rectangular boxes into polygons in bulk.
+
+        Query param `filter`:
+          - 'all' (default): all items with non-empty character_regions
+          - 'issues': only items where _inspect_item_regions detects out-of-bounds/inverted boxes
+          - 'box_only': items that contain at least one rectangular region without a polygon
+        """
+        flt = (request.GET.get('filter') or 'all').strip().lower()
+        candidates = (
+            Item.objects
+            .exclude(character_regions=[])
+            .exclude(character_regions__isnull=True)
+            .only('id', 'character_regions')
+            .order_by('-id')
+        )
+
+        matched_ids = []
+        issues_by_id = {}
+        for item in candidates.iterator(chunk_size=200):
+            regs = item.character_regions or []
+            if not regs:
+                continue
+            if flt == 'box_only':
+                has_box_only = any(
+                    isinstance(r, dict) and not (isinstance(r.get('polygon'), list) and len(r.get('polygon')) >= 3)
+                    for r in regs
+                )
+                if not has_box_only:
+                    continue
+                matched_ids.append(item.id)
+            elif flt == 'issues':
+                issues, _repaired = self._inspect_item_regions(item)
+                if not issues:
+                    continue
+                issues_by_id[item.id] = issues
+                matched_ids.append(item.id)
+            else:
+                matched_ids.append(item.id)
+
+        total_count = len(matched_ids)
+
+        before_id = request.GET.get('before_id')
+        if before_id:
+            try:
+                bid = int(before_id)
+                matched_ids = [i for i in matched_ids if i < bid]
+            except (TypeError, ValueError):
+                pass
+
+        page_size = 50
+        batch_ids = matched_ids[:page_size + 1]
+        has_more = len(batch_ids) > page_size
+        batch_ids = batch_ids[:page_size]
+
+        item_map = {it.id: it for it in self.get_queryset().filter(id__in=batch_ids)}
+        batch = [item_map[i] for i in batch_ids if i in item_map]
+
+        serialized = self.get_serializer(batch, many=True).data
+        for entry, item in zip(serialized, batch):
+            regs = item.character_regions or []
+            entry['has_polygon'] = any(
+                isinstance(r, dict) and isinstance(r.get('polygon'), list) and len(r.get('polygon')) >= 3
+                for r in regs
+            )
+            entry['has_box_only'] = any(
+                isinstance(r, dict) and not (isinstance(r.get('polygon'), list) and len(r.get('polygon')) >= 3)
+                for r in regs
+            )
+            if item.id in issues_by_id:
+                entry['region_issues'] = issues_by_id[item.id]
+            else:
+                issues, _repaired = self._inspect_item_regions(item)
+                entry['region_issues'] = issues
+
+        return Response({
+            'results': serialized,
+            'count': total_count,
+            'has_more': has_more,
+            'next_before_id': batch[-1].id if (has_more and batch) else None,
+        })
+
     @action(detail=True, methods=['post'], url_path='assign_character_groups')
     def assign_character_groups(self, request, pk=None):
         """File characters into the groups a person chose -- the answer to the
