@@ -5288,14 +5288,18 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'boxes': [list(box) for box in boxes],
             'regions': region_defs,
             'proposed_regions': proposed_regions,
+            'segmentation_engine': (
+                __import__('item.sam_segmenter', fromlist=['active_engine_name']).active_engine_name()
+                or 'isnetis_fallback'
+            ),
         })
 
     @action(detail=True, methods=['post'], url_path='segment_point')
     def segment_point(self, request, pk=None):
-        """Interactive MobileSAM segmentation from user click point(s) on an
+        """Interactive SAM 2.1 segmentation from user click point(s) on an
         item's image. Body: `{image_index: int|null, pos_points: [[x, y], ...],
         neg_points?: [[x, y], ...], box?: [x1, y1, x2, y2]}`.
-        Returns `{image_index, box, polygon}`.
+        Returns `{image_index, box, polygon, segmentation_engine}`.
         """
         from item import sam_segmenter
 
@@ -5321,7 +5325,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         result = sam_segmenter.segment_point(image_bytes, pos_points=pos_points, neg_points=neg_points, box=box)
         if result is None:
             return Response(
-                {'detail': 'MobileSAM による領域抽出に失敗しました（モデルのダウンロードまたは推論に失敗した可能性があります）'},
+                {'detail': 'SAM 2.1 による領域抽出に失敗しました（モデルのダウンロードまたは推論に失敗した可能性があります）'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
@@ -5329,6 +5333,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'image_index': resolved_index,
             'box': result['box'],
             'polygon': result['polygon'],
+            'segmentation_engine': sam_segmenter.active_engine_name() or 'sam2.1',
         })
 
     @action(detail=True, methods=['post'], url_path='character_regions')

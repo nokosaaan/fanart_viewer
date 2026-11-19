@@ -1,104 +1,143 @@
-"""Lightweight MobileSAM (ONNX Runtime) instance segmentation for fanart_viewer.
+"""SAM 2.1 Hiera Small / Base+ (ONNX Runtime) instance segmentation for fanart_viewer.
 
-Runs entirely on CPU via `onnxruntime` + `huggingface_hub` (no extra PyTorch
-SAM package required). Downloads `mobile_sam_image_encoder.onnx` (~28MB) and
-`sam_mask_decoder_multi.onnx` (~16.5MB) from `Acly/MobileSAM` once on first
-use and caches them under `tagger._data_dir()`.
+Runs on CPU via `onnxruntime` + `huggingface_hub` (no extra PyTorch `sam2`
+package required). Downloads the SAM 2.1 Hiera Small ONNX archive from
+`vietanhdev/segment-anything-2.1-onnx-models` once on first use and caches it
+under `tagger._data_dir()/sam2/<variant>/`.
 
-Supports:
-  - Automatic per-character segmentation from (person BBox + own head positive
-    point + neighboring character heads as negative points).
-  - Interactive one-click segmentation from user clicks in RegionAnnotator.jsx.
+Unlike SAM 1 / MobileSAM, SAM 2.1 feeds two high-resolution feature maps
+(`high_res_feats_0` [1, 32, 256, 256] and `high_res_feats_1` [1, 64, 128, 128])
+directly into the mask decoder alongside the main `image_embed` [1, 256, 64, 64],
+yielding much cleaner boundaries on overlapping anime characters, hair strands,
+and small mascots/chibis.
+
+Environment overrides:
+  - SAM2_VARIANT: 'small' (default), 'base_plus', or 'tiny'
+  - SAM2_ONNX_REPO: default 'vietanhdev/segment-anything-2.1-onnx-models'
 """
+import glob
 import hashlib
 import io
 import logging
 import os
 import threading
+import time
+import zipfile
 from collections import OrderedDict
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SAM_ONNX_REPO = os.environ.get('SAM_ONNX_REPO', 'Acly/MobileSAM')
-SAM_ENCODER_FILE = os.environ.get('SAM_ENCODER_FILE', 'mobile_sam_image_encoder.onnx')
-SAM_DECODER_FILE = os.environ.get('SAM_DECODER_FILE', 'sam_mask_decoder_multi.onnx')
-SAM_TARGET_LENGTH = 1024
+SAM2_ONNX_REPO = os.environ.get('SAM2_ONNX_REPO', 'vietanhdev/segment-anything-2.1-onnx-models')
+SAM2_VARIANT = os.environ.get('SAM2_VARIANT', 'small').strip().lower()
+SAM2_ARCHIVE_MAP = {
+    'tiny': 'sam2.1_hiera_tiny_20260221.zip',
+    'small': 'sam2.1_hiera_small_20260221.zip',
+    'base_plus': 'sam2.1_hiera_base_plus_20260221.zip',
+}
+SAM2_INPUT_SIZE = 1024
 
-# Standard SAM pixel normalization constants (RGB 0..255 scale)
-_PIXEL_MEAN = np.array([123.675, 116.28, 103.53], dtype=np.float32)
-_PIXEL_STD = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+# ImageNet mean/std in 0..1 scale (standard SAM 2 / Hiera preprocessing)
+_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 _lock = threading.Lock()
-_sessions = None  # (encoder_sess, decoder_sess) or False if permanently failed
-_embed_cache = OrderedDict()  # sha1(image_bytes) -> (embeddings, (orig_h, orig_w), scale, (new_h, new_w))
+_sessions = None  # (encoder_sess, decoder_sess, variant_name)
+_last_fail_ts = 0.0
+_RETRY_COOLDOWN_SEC = 60.0
+_embed_cache = OrderedDict()  # sha1(image_bytes) -> (enc_out_map, enc_out_by_shape, (orig_h, orig_w))
 _EMBED_CACHE_MAX = 4
 
 
-def _data_dir():
+def _data_dir(variant=None):
     from item import tagger
-    d = os.path.join(tagger._data_dir(), 'sam')
+    v = variant or SAM2_VARIANT
+    d = os.path.join(tagger._data_dir(), 'sam2', v)
     os.makedirs(d, exist_ok=True)
     return d
 
 
+def _find_extracted_onnx(extract_dir):
+    enc_candidates = sorted(glob.glob(os.path.join(extract_dir, '**', '*encoder*.onnx'), recursive=True))
+    dec_candidates = sorted(glob.glob(os.path.join(extract_dir, '**', '*decoder*.onnx'), recursive=True))
+    if enc_candidates and dec_candidates:
+        return enc_candidates[0], dec_candidates[0]
+    return None, None
+
+
 def _load_sessions():
-    global _sessions
+    global _sessions, _last_fail_ts
     if _sessions is not None:
-        return _sessions if _sessions is not False else None
+        return _sessions
+    if _last_fail_ts and (time.monotonic() - _last_fail_ts) < _RETRY_COOLDOWN_SEC:
+        return None
     with _lock:
         if _sessions is not None:
-            return _sessions if _sessions is not False else None
+            return _sessions
+        if _last_fail_ts and (time.monotonic() - _last_fail_ts) < _RETRY_COOLDOWN_SEC:
+            return None
         try:
             import onnxruntime as ort
             from huggingface_hub import hf_hub_download
 
-            cache_dir = _data_dir()
-            enc_path = hf_hub_download(repo_id=SAM_ONNX_REPO, filename=SAM_ENCODER_FILE, local_dir=cache_dir)
-            dec_path = hf_hub_download(repo_id=SAM_ONNX_REPO, filename=SAM_DECODER_FILE, local_dir=cache_dir)
+            variant = SAM2_VARIANT if SAM2_VARIANT in SAM2_ARCHIVE_MAP else 'small'
+            archive_name = SAM2_ARCHIVE_MAP[variant]
+            extract_dir = _data_dir(variant)
+
+            enc_path, dec_path = _find_extracted_onnx(extract_dir)
+            if not (enc_path and dec_path):
+                zip_path = hf_hub_download(
+                    repo_id=SAM2_ONNX_REPO,
+                    filename=archive_name,
+                    local_dir=extract_dir,
+                )
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    zf.extractall(extract_dir)
+                enc_path, dec_path = _find_extracted_onnx(extract_dir)
+
+            if not (enc_path and dec_path):
+                raise FileNotFoundError(f'SAM 2.1 encoder/decoder ONNX files not found in {extract_dir}')
 
             opts = ort.SessionOptions()
             opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             providers = ['CPUExecutionProvider']
             enc_sess = ort.InferenceSession(enc_path, sess_options=opts, providers=providers)
             dec_sess = ort.InferenceSession(dec_path, sess_options=opts, providers=providers)
-            _sessions = (enc_sess, dec_sess)
-            logger.info('Loaded MobileSAM ONNX sessions from %s', cache_dir)
+            _sessions = (enc_sess, dec_sess, f'sam2.1_{variant}')
+            logger.info('Loaded SAM 2.1 (%s) ONNX sessions from %s', variant, extract_dir)
             return _sessions
         except Exception:
-            logger.warning('MobileSAM ONNX sessions unavailable; falling back to non-SAM segmentation', exc_info=True)
-            _sessions = False
+            _last_fail_ts = time.monotonic()
+            logger.warning('SAM 2.1 ONNX sessions unavailable; falling back to non-SAM segmentation', exc_info=True)
             return None
 
 
+def active_engine_name():
+    return _sessions[2] if _sessions is not None else None
+
+
 def _preprocess_image(image_rgb):
-    """Resize longest side to 1024, ImageNet-normalize, and zero-pad to 1024x1024."""
+    """SAM 2.1 preprocessing: resize directly to 1024x1024 and ImageNet-normalize."""
     import cv2
 
     orig_h, orig_w = image_rgb.shape[:2]
-    scale = SAM_TARGET_LENGTH / float(max(orig_h, orig_w))
-    new_h = max(1, int(round(orig_h * scale)))
-    new_w = max(1, int(round(orig_w * scale)))
-    resized = cv2.resize(image_rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR).astype(np.float32)
-    normed = (resized - _PIXEL_MEAN) / _PIXEL_STD
-
-    padded = np.zeros((SAM_TARGET_LENGTH, SAM_TARGET_LENGTH, 3), dtype=np.float32)
-    padded[:new_h, :new_w, :] = normed
-    chw = np.transpose(padded, (2, 0, 1))
-    return chw, (orig_h, orig_w), scale, (new_h, new_w)
+    resized = cv2.resize(image_rgb, (SAM2_INPUT_SIZE, SAM2_INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
+    normed = (resized.astype(np.float32) / 255.0 - _IMAGENET_MEAN) / _IMAGENET_STD
+    chw = np.transpose(normed, (2, 0, 1))
+    return chw, (orig_h, orig_w)
 
 
 def encode_image(image_bytes):
-    """Compute (or retrieve cached) MobileSAM image embeddings for `image_bytes`.
-    Returns `(embeddings, (orig_h, orig_w), scale, (new_h, new_w))` or None if unavailable.
+    """Compute (or retrieve cached) SAM 2.1 multi-scale image features for `image_bytes`.
+    Returns `(out_by_name, out_by_shape, (orig_h, orig_w))` or None if unavailable.
     """
     from PIL import Image
 
-    sess_pair = _load_sessions()
-    if sess_pair is None:
+    sess_tuple = _load_sessions()
+    if sess_tuple is None:
         return None
-    enc_sess, _dec_sess = sess_pair
+    enc_sess = sess_tuple[0]
 
     key = hashlib.sha1(image_bytes).hexdigest()
     with _lock:
@@ -108,15 +147,21 @@ def encode_image(image_bytes):
 
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     img_rgb = np.asarray(image)
-    chw, orig_size, scale, new_size = _preprocess_image(img_rgb)
+    chw, orig_size = _preprocess_image(img_rgb)
 
     enc_inp = enc_sess.get_inputs()[0]
     inp_tensor = chw[np.newaxis, :, :, :] if len(enc_inp.shape) == 4 else chw
-    embeddings = enc_sess.run(None, {enc_inp.name: inp_tensor.astype(np.float32)})[0]
-    if embeddings.ndim == 3:
-        embeddings = embeddings[np.newaxis, :, :, :]
+    enc_outputs = enc_sess.run(None, {enc_inp.name: inp_tensor.astype(np.float32)})
+    enc_names = [o.name for o in enc_sess.get_outputs()]
 
-    val = (embeddings, orig_size, scale, new_size)
+    out_by_name = {}
+    out_by_shape = {}
+    for name, arr in zip(enc_names, enc_outputs):
+        a = np.asarray(arr, dtype=np.float32)
+        out_by_name[name] = a
+        out_by_shape[tuple(a.shape)] = a
+
+    val = (out_by_name, out_by_shape, orig_size)
     with _lock:
         _embed_cache[key] = val
         _embed_cache.move_to_end(key)
@@ -125,100 +170,126 @@ def encode_image(image_bytes):
     return val
 
 
+def _cast_for_ort_type(arr, ort_type):
+    t = (ort_type or '').lower()
+    if 'int64' in t:
+        return np.asarray(arr, dtype=np.int64)
+    if 'int32' in t:
+        return np.asarray(arr, dtype=np.int32)
+    return np.asarray(arr, dtype=np.float32)
+
+
 def predict_mask(encoded, box=None, pos_points=None, neg_points=None):
-    """Run the MobileSAM mask decoder on precomputed `encoded` features.
-    Prompt labels follow standard SAM convention:
-      - 2.0 / 3.0: box top-left / bottom-right
-      - 1.0: positive foreground point
-      - 0.0: negative background/other-character point
-      - -1.0: padding point (appended when only point prompts are supplied)
+    """Run the SAM 2.1 mask decoder on precomputed `encoded` features.
+    Prompt labels follow standard SAM 2 convention:
+      - 2 / 3: box top-left / bottom-right
+      - 1: positive foreground point
+      - 0: negative background/other-character point
     Returns uint8 `(orig_h, orig_w)` binary mask (0 or 255), or None.
     """
     import cv2
 
-    sess_pair = _load_sessions()
-    if sess_pair is None or encoded is None:
+    sess_tuple = _load_sessions()
+    if sess_tuple is None or encoded is None:
         return None
-    _enc_sess, dec_sess = sess_pair
-    embeddings, (orig_h, orig_w), scale, (new_h, new_w) = encoded
+    dec_sess = sess_tuple[1]
+    out_by_name, out_by_shape, (orig_h, orig_w) = encoded
+
+    scale_x = SAM2_INPUT_SIZE / float(max(1, orig_w))
+    scale_y = SAM2_INPUT_SIZE / float(max(1, orig_h))
 
     coords = []
     labels = []
     if box is not None and len(box) == 4:
         x1, y1, x2, y2 = (float(v) for v in box)
-        coords.append([x1 * scale, y1 * scale])
-        labels.append(2.0)
-        coords.append([x2 * scale, y2 * scale])
-        labels.append(3.0)
+        coords.append([x1 * scale_x, y1 * scale_y])
+        labels.append(2)
+        coords.append([x2 * scale_x, y2 * scale_y])
+        labels.append(3)
     for pt in (pos_points or ()):
-        coords.append([float(pt[0]) * scale, float(pt[1]) * scale])
-        labels.append(1.0)
+        coords.append([float(pt[0]) * scale_x, float(pt[1]) * scale_y])
+        labels.append(1)
     for pt in (neg_points or ()):
-        coords.append([float(pt[0]) * scale, float(pt[1]) * scale])
-        labels.append(0.0)
+        coords.append([float(pt[0]) * scale_x, float(pt[1]) * scale_y])
+        labels.append(0)
 
     if not coords:
         return None
     if box is None:
-        # Standard SAM ONNX decoder expects a trailing padding point when no box is provided
         coords.append([0.0, 0.0])
-        labels.append(-1.0)
+        labels.append(-1)
 
     point_coords = np.asarray(coords, dtype=np.float32)[np.newaxis, :, :]
-    point_labels = np.asarray(labels, dtype=np.float32)[np.newaxis, :]
+    point_labels_raw = np.asarray(labels, dtype=np.float32)[np.newaxis, :]
     mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
     has_mask_input = np.zeros((1,), dtype=np.float32)
-    orig_im_size = np.array([float(orig_h), float(orig_w)], dtype=np.float32)
+    orig_im_size_raw = np.array([orig_h, orig_w], dtype=np.int32)
 
-    all_inputs = {
-        'image_embeddings': embeddings.astype(np.float32),
-        'point_coords': point_coords,
-        'point_labels': point_labels,
-        'mask_input': mask_input,
-        'has_mask_input': has_mask_input,
-        'orig_im_size': orig_im_size,
-    }
-    dec_input_names = {i.name for i in dec_sess.get_inputs()}
-    feed = {k: v for k, v in all_inputs.items() if k in dec_input_names}
+    # Resolve encoder feature tensors by exact name OR by canonical SAM 2.1 shape
+    embed_256 = out_by_shape.get((1, 256, 64, 64))
+    hr0_32 = out_by_shape.get((1, 32, 256, 256))
+    hr1_64 = out_by_shape.get((1, 64, 128, 128))
+
+    feed = {}
+    for inp in dec_sess.get_inputs():
+        name = inp.name
+        low = name.lower()
+        if name in out_by_name:
+            feed[name] = out_by_name[name]
+        elif 'high_res' in low and '0' in low and hr0_32 is not None:
+            feed[name] = hr0_32
+        elif 'high_res' in low and '1' in low and hr1_64 is not None:
+            feed[name] = hr1_64
+        elif ('embed' in low or 'pix_feat' in low) and embed_256 is not None:
+            feed[name] = embed_256
+        elif 'point_coords' in low or 'coords' in low:
+            feed[name] = point_coords
+        elif 'point_labels' in low or 'labels' in low:
+            feed[name] = _cast_for_ort_type(point_labels_raw, inp.type)
+        elif 'has_mask' in low:
+            feed[name] = _cast_for_ort_type(has_mask_input, inp.type)
+        elif 'mask_input' in low:
+            feed[name] = mask_input
+        elif 'orig_im_size' in low or 'im_size' in low:
+            feed[name] = _cast_for_ort_type(orig_im_size_raw, inp.type)
 
     outputs = dec_sess.run(None, feed)
     out_names = [o.name for o in dec_sess.get_outputs()]
     out_map = dict(zip(out_names, outputs))
 
-    masks = out_map.get('masks', outputs[0])
-    iou_preds = out_map.get('iou_predictions', outputs[1] if len(outputs) > 1 else None)
-    low_res = out_map.get('low_res_masks', outputs[2] if len(outputs) > 2 else None)
+    masks = None
+    iou_preds = None
+    for name, arr in out_map.items():
+        low = name.lower()
+        if 'iou' in low or 'score' in low:
+            iou_preds = np.asarray(arr)
+        elif 'mask' in low and masks is None:
+            masks = np.asarray(arr)
+    if masks is None:
+        masks = np.asarray(outputs[0])
+    if iou_preds is None and len(outputs) > 1:
+        iou_preds = np.asarray(outputs[1])
 
-    # Pick the highest-IoU candidate mask (skip index 0 in 4-mask multi output only if
-    # there are 4 masks and box is None? Actually argmax over iou_predictions is standard
-    # and reliable for both single and multi decoders).
+    # Normalize masks to 4D [B, M, H, W]
+    if masks.ndim == 3:
+        masks = masks[np.newaxis, :, :, :]
+
     best_idx = 0
     if iou_preds is not None and iou_preds.size > 1:
         scores = iou_preds.reshape(-1)
         best_idx = int(np.argmax(scores))
 
-    if masks is not None and masks.ndim == 4 and masks.shape[2] == orig_h and masks.shape[3] == orig_w:
-        chosen = masks[0, min(best_idx, masks.shape[1] - 1)]
-        return np.where(chosen > 0.0, 255, 0).astype(np.uint8)
-
-    # Upscale from 256x256 low-res logits by cropping the padded region first
-    src_masks = low_res if low_res is not None else masks
-    if src_masks is None:
-        return None
-    chosen = src_masks[0, min(best_idx, src_masks.shape[1] - 1)]
-    lh, lw = chosen.shape[:2]
-    valid_h = max(1, int(round(new_h * lh / float(SAM_TARGET_LENGTH))))
-    valid_w = max(1, int(round(new_w * lw / float(SAM_TARGET_LENGTH))))
-    unpadded = chosen[:valid_h, :valid_w]
-    upscaled = cv2.resize(unpadded, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-    return np.where(upscaled > 0.0, 255, 0).astype(np.uint8)
+    chosen = masks[0, min(best_idx, masks.shape[1] - 1)].astype(np.float32)
+    if chosen.shape[0] != orig_h or chosen.shape[1] != orig_w:
+        chosen = cv2.resize(chosen, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+    return np.where(chosen > 0.0, 255, 0).astype(np.uint8)
 
 
 def segment_boxes(image_bytes, boxes, head_boxes=None):
-    """Segment each detected character box using MobileSAM with BBox + own-head
+    """Segment each detected character box using SAM 2.1 with BBox + own-head
     positive point + neighbor-head negative points.
     Returns list of `[{'box': [x1, y1, x2, y2], 'polygon': [[x, y], ...] | None}, ...]`
-    or None if MobileSAM is unavailable.
+    or None if SAM 2.1 is unavailable.
     """
     from item import tagger
 
@@ -228,7 +299,7 @@ def segment_boxes(image_bytes, boxes, head_boxes=None):
     if encoded is None:
         return None
 
-    _emb, (img_h, img_w), _scale, _new_size = encoded
+    _out_map, _out_shape, (img_h, img_w) = encoded
     clamped_boxes = []
     for box in boxes:
         x1, y1, x2, y2 = box

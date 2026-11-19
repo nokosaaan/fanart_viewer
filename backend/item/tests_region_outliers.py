@@ -291,7 +291,7 @@ class BrokenRegionsAndOutliersTests(TestCase):
         fg = np.zeros((200, 200), dtype=np.float32)
         fg[15:185, 20:180] = 1.0
         with patch("imgutils.segment.isnetis.get_isnetis_mask", return_value=fg):
-            regions = tagger._extract_region_polygons(img_bytes, boxes, head_boxes=head_boxes, use_isnetis=True)
+            regions = tagger._extract_region_polygons(img_bytes, boxes, head_boxes=head_boxes, use_isnetis=True, use_sam=False)
 
         self.assertEqual(len(regions), 2)
         poly0 = regions[0]["polygon"]
@@ -395,39 +395,51 @@ class BrokenRegionsAndOutliersTests(TestCase):
         captured_feeds = []
 
         class _DummyIO:
-            def __init__(self, name, shape=None):
+            def __init__(self, name, shape=None, typ="tensor(float)"):
                 self.name = name
                 self.shape = shape or [1, 3, 1024, 1024]
+                self.type = typ
 
         class _FakeEncoder:
             def get_inputs(self):
-                return [_DummyIO("input_image", [1, 3, 1024, 1024])]
+                return [_DummyIO("image", [1, 3, 1024, 1024])]
+            def get_outputs(self):
+                return [
+                    _DummyIO("image_embed", [1, 256, 64, 64]),
+                    _DummyIO("high_res_feats_0", [1, 32, 256, 256]),
+                    _DummyIO("high_res_feats_1", [1, 64, 128, 128]),
+                ]
             def run(self, _out, _feed):
-                return [np.zeros((1, 256, 64, 64), dtype=np.float32)]
+                return [
+                    np.zeros((1, 256, 64, 64), dtype=np.float32),
+                    np.zeros((1, 32, 256, 256), dtype=np.float32),
+                    np.zeros((1, 64, 128, 128), dtype=np.float32),
+                ]
 
         class _FakeDecoder:
             def get_inputs(self):
                 return [
-                    _DummyIO("image_embeddings"),
+                    _DummyIO("image_embed"),
+                    _DummyIO("high_res_feats_0"),
+                    _DummyIO("high_res_feats_1"),
                     _DummyIO("point_coords"),
-                    _DummyIO("point_labels"),
+                    _DummyIO("point_labels", typ="tensor(int64)"),
                     _DummyIO("mask_input"),
                     _DummyIO("has_mask_input"),
-                    _DummyIO("orig_im_size"),
+                    _DummyIO("orig_im_size", typ="tensor(int32)"),
                 ]
             def get_outputs(self):
-                return [_DummyIO("masks"), _DummyIO("iou_predictions"), _DummyIO("low_res_masks")]
+                return [_DummyIO("masks"), _DummyIO("iou_predictions")]
             def run(self, _out, feed):
                 captured_feeds.append(feed)
                 # Return a clean square mask inside [20:90, 20:90] for mask index 1 (highest IoU)
-                masks = np.full((1, 3, 200, 200), -5.0, dtype=np.float32)
-                masks[0, 1, 20:90, 20:90] = 5.0
-                ious = np.array([[0.3, 0.95, 0.5]], dtype=np.float32)
-                low = np.full((1, 3, 256, 256), -5.0, dtype=np.float32)
-                return [masks, ious, low]
+                masks = np.full((1, 4, 256, 256), -5.0, dtype=np.float32)
+                masks[0, 1, 25:115, 25:115] = 5.0
+                ious = np.array([[0.3, 0.96, 0.5, 0.4]], dtype=np.float32)
+                return [masks, ious]
 
         sam_segmenter._embed_cache.clear()
-        with patch.object(sam_segmenter, "_load_sessions", return_value=(_FakeEncoder(), _FakeDecoder())):
+        with patch.object(sam_segmenter, "_load_sessions", return_value=(_FakeEncoder(), _FakeDecoder(), "sam2.1_small")):
             boxes = [(10, 10, 120, 190), (80, 10, 190, 190)]
             heads = [(30, 20, 70, 60), (110, 20, 150, 60)]
             regions = sam_segmenter.segment_boxes(img_bytes, boxes, head_boxes=heads)
@@ -435,8 +447,10 @@ class BrokenRegionsAndOutliersTests(TestCase):
             self.assertIsNotNone(regions[0]["polygon"])
             self.assertGreaterEqual(len(regions[0]["polygon"]), 3)
             # First box prompt must include box (2, 3), own head pos point (1), and neighbor head neg point (0)
-            labels0 = list(captured_feeds[0]["point_labels"][0])
-            self.assertEqual(labels0, [2.0, 3.0, 1.0, 0.0])
+            self.assertEqual(captured_feeds[0]["point_labels"].dtype, np.int64)
+            self.assertEqual(list(captured_feeds[0]["point_labels"][0]), [2, 3, 1, 0])
+            self.assertIn("high_res_feats_0", captured_feeds[0])
+            self.assertIn("high_res_feats_1", captured_feeds[0])
 
             # Also verify POST /api/items/<id>/segment_point/ endpoint
             it = Item.objects.create(external_id=901, source="pixiv_bookmark", artist="S", situation="CP")
