@@ -1666,7 +1666,7 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
 def _suggest_for_item(item, external=False, tagger_backend='onnx',
                        general_threshold=0.35, character_threshold=0.85,
                        tag_limit_for_matching=None, use_classifier=False,
-                       image_index=None):
+                       image_index=None, sam_variant=None):
     """Suggest titles/characters/tags/situation for `item`. Extracted from
     ItemViewSet.suggest_tags_view (the actual HTTP endpoint, now a thin
     wrapper around this) so it can also be called directly against an
@@ -1818,6 +1818,7 @@ def _suggest_for_item(item, external=False, tagger_backend='onnx',
                     general_threshold=general_threshold,
                     character_threshold=character_threshold,
                     backend=tagger_backend,
+                    sam_variant=sam_variant,
                     **dict(zip(('with_embedding', 'with_ccip'), _classifier_needs(tagger_backend))),
                 )
             except Exception:
@@ -1948,7 +1949,8 @@ def _append_tag_similarity_candidates(sim, title_c, char_c, situation_c,
 
 def _collect_candidates(item, external=False, tagger_backend='onnx',
                          general_threshold=0.35, character_threshold=0.85,
-                         tag_limit_for_matching=None, image_index=None, max_images=DEFAULT_MAX_IMAGES):
+                         tag_limit_for_matching=None, image_index=None, max_images=DEFAULT_MAX_IMAGES,
+                         sam_variant=None):
     """Candidate-collecting counterpart to _suggest_for_item, used both by
     _suggest_for_item_ensemble (the live suggest_tags endpoint's default —
     see that function's own docstring) and directly by
@@ -2069,6 +2071,7 @@ def _collect_candidates(item, external=False, tagger_backend='onnx',
                     general_threshold=general_threshold,
                     character_threshold=character_threshold,
                     backend=tagger_backend,
+                    sam_variant=sam_variant,
                     **needs,
                 )))
             except Exception:
@@ -2683,7 +2686,8 @@ _CANDIDATE_LIST_LIMIT = 12
 
 def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
                                 general_threshold=0.35, character_threshold=0.85,
-                                image_index=None, max_images=DEFAULT_MAX_IMAGES):
+                                image_index=None, max_images=DEFAULT_MAX_IMAGES,
+                                sam_variant=None):
     """Weighted-ensemble counterpart to _suggest_for_item — same
     want_titles/want_characters/want_tags/want_situation contract and
     return shape (drop-in compatible with suggest_tags_view's response),
@@ -2706,7 +2710,7 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
     collected = _collect_candidates(
         item, external=external, tagger_backend=tagger_backend,
         general_threshold=general_threshold, character_threshold=character_threshold,
-        image_index=image_index, max_images=max_images,
+        image_index=image_index, max_images=max_images, sam_variant=sam_variant,
     )
 
     weights = _ensemble_weights(collected['monochrome'])
@@ -4874,17 +4878,19 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             max_images = DEFAULT_MAX_IMAGES
         max_images = max(1, min(max_images, MAX_IMAGES_LIMIT))
 
+        sam_variant = data.get('sam_variant') or None
+
         if use_ensemble:
             result = _suggest_for_item_ensemble(
                 item, external=external, tagger_backend=tagger_backend,
                 general_threshold=general_threshold, character_threshold=character_threshold,
-                image_index=image_index, max_images=max_images,
+                image_index=image_index, max_images=max_images, sam_variant=sam_variant,
             )
         else:
             result = _suggest_for_item(
                 item, external=external, tagger_backend=tagger_backend,
                 general_threshold=general_threshold, character_threshold=character_threshold,
-                image_index=image_index,
+                image_index=image_index, sam_variant=sam_variant,
             )
         return Response(result)
 
@@ -5217,6 +5223,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
+        sam_variant = data.get('sam_variant') or None
         image_index = data.get('image_index')
         if image_index is not None:
             try:
@@ -5249,6 +5256,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             try:
                 region_defs = tagger._extract_region_polygons(
                     image_bytes, boxes[:tagger._MAX_PERSON_CROPS], head_boxes=head_boxes,
+                    sam_variant=sam_variant,
                 )
             except Exception:
                 logging.exception('detect_regions: polygon extraction failed')
@@ -5289,7 +5297,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'regions': region_defs,
             'proposed_regions': proposed_regions,
             'segmentation_engine': (
-                __import__('item.sam_segmenter', fromlist=['active_engine_name']).active_engine_name()
+                __import__('item.sam_segmenter', fromlist=['active_engine_name']).active_engine_name(sam_variant)
                 or 'isnetis_fallback'
             ),
         })
@@ -5305,6 +5313,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
+        sam_variant = data.get('sam_variant') or None
         image_index = data.get('image_index')
         if image_index is not None:
             try:
@@ -5322,7 +5331,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if image_bytes is None:
             return Response({'detail': 'No image available for this item'}, status=status.HTTP_404_NOT_FOUND)
 
-        result = sam_segmenter.segment_point(image_bytes, pos_points=pos_points, neg_points=neg_points, box=box)
+        result = sam_segmenter.segment_point(
+            image_bytes, pos_points=pos_points, neg_points=neg_points, box=box, variant=sam_variant,
+        )
         if result is None:
             return Response(
                 {'detail': 'SAM 2.1 による領域抽出に失敗しました（モデルのダウンロードまたは推論に失敗した可能性があります）'},
@@ -5333,7 +5344,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'image_index': resolved_index,
             'box': result['box'],
             'polygon': result['polygon'],
-            'segmentation_engine': sam_segmenter.active_engine_name() or 'sam2.1',
+            'segmentation_engine': sam_segmenter.active_engine_name(sam_variant) or f'sam2.1_{sam_segmenter._normalize_variant(sam_variant)}',
         })
 
     @action(detail=True, methods=['post'], url_path='character_regions')

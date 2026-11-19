@@ -845,13 +845,13 @@ def _match_heads_to_boxes(clamped_boxes, head_boxes):
     return head_list, head_owner, box_head
 
 
-def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=True, use_sam=True):
+def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=True, use_sam=True, sam_variant=None):
     """Extract instance-separated foreground closed-region polygons for each
     detected character/mascot box:
-      0. Primary engine: MobileSAM ONNX (`item.sam_segmenter.segment_boxes`)
+      0. Primary engine: SAM 2.1 ONNX (`item.sam_segmenter.segment_boxes`)
          prompted with BBox + own-head positive point + neighbor-head negative
          points so overlapping characters separate cleanly along lineart/color.
-      1. Fallback when MobileSAM is unavailable: dghs-imgutils IS-Net
+      1. Fallback when SAM 2.1 is unavailable: dghs-imgutils IS-Net
          (`get_isnetis_mask`) + neighbor-head exclusion + Voronoi ownership.
       2. Simplifies each instance mask into a polygon via `cv2.approxPolyDP`.
 
@@ -865,11 +865,11 @@ def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=Tr
     if use_sam:
         try:
             from item import sam_segmenter
-            sam_regions = sam_segmenter.segment_boxes(image_bytes, boxes, head_boxes=head_boxes)
+            sam_regions = sam_segmenter.segment_boxes(image_bytes, boxes, head_boxes=head_boxes, variant=sam_variant)
             if sam_regions is not None and len(sam_regions) == len(boxes) and any(r.get('polygon') for r in sam_regions):
                 return sam_regions
         except Exception:
-            logger.debug('MobileSAM segmentation unavailable; falling back to isnetis', exc_info=True)
+            logger.debug('SAM 2.1 segmentation unavailable; falling back to isnetis', exc_info=True)
 
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     img_w, img_h = image.size
@@ -1048,7 +1048,7 @@ def _crop_with_padding(image_bytes, box, padding_ratio=0.15, polygon=None):
 
 
 def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=15,
-                  model_repo=None, backend='onnx', with_embedding=False, with_ccip=False):
+                  model_repo=None, backend='onnx', with_embedding=False, with_ccip=False, sam_variant=None):
     """Run the tagger on a single image.
 
     Returns {'characters': [...], 'tags': [...], 'rating': str|None,
@@ -1113,7 +1113,7 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
             head_boxes = []
         try:
             region_defs = _extract_region_polygons(
-                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes,
+                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes, sam_variant=sam_variant,
             )
         except Exception:
             logger.exception('Region polygon extraction failed — falling back to raw boxes')
@@ -1179,7 +1179,7 @@ def _safe_ccip(image_bytes):
 
 
 def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_threshold=0.35,
-                                  general_limit=15, model_repo=None, backend='onnx'):
+                                  general_limit=15, model_repo=None, backend='onnx', sam_variant=None):
     """Dev/analysis helper (see the evaluate_threshold management command) —
     answers "what would suggest_tags() have returned at each of these
     character_threshold values" without re-running inference once per
@@ -1216,7 +1216,7 @@ def suggest_tags_multi_threshold(image_bytes, character_thresholds, general_thre
             head_boxes = []
         try:
             region_defs = _extract_region_polygons(
-                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes,
+                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes, sam_variant=sam_variant,
             )
         except Exception:
             region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:_MAX_PERSON_CROPS]]

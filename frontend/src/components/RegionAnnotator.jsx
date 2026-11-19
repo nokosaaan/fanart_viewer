@@ -73,7 +73,7 @@ export default function RegionAnnotator({
   const [currentImageIndex, setCurrentImageIndex] = useState(null)  // which image is being viewed/edited right now
   const [boxes, setBoxes] = useState([])               // [{id, imageIndex, box:[x1,y1,x2,y2], characters:string[]}]
   const [naturalSize, setNaturalSize] = useState(null) // {width, height} of the currently-displayed image
-  const [displayWidth, setDisplayWidth] = useState(0)  // rendered width of <img> tracked via ResizeObserver
+  const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 }) // rendered size of <img> tracked via ResizeObserver
   const [detecting, setDetecting] = useState(false)
   const [segmenting, setSegmenting] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -86,6 +86,17 @@ export default function RegionAnnotator({
   const [groups, setGroups] = useState([])
   // Stamp mode: when set, clicking any box directly assigns this character without opening the popover
   const [stampChar, setStampChar] = useState(null)
+  const [samVariant, setSamVariant] = useState(() => {
+    try {
+      const saved = localStorage.getItem('fv_sam2_variant')
+      if (saved === 'tiny' || saved === 'small' || saved === 'base_plus') return saved
+    } catch {}
+    return 'small'
+  })
+  function handleSamVariantChange(v) {
+    setSamVariant(v)
+    try { localStorage.setItem('fv_sam2_variant', v) } catch {}
+  }
 
   useEffect(() => {
     fetch('/api/character-groups/')
@@ -240,20 +251,26 @@ export default function RegionAnnotator({
   useEffect(() => {
     const img = imgRef.current
     if (!img) return
-    const syncWidth = () => {
-      if (img.clientWidth > 0) setDisplayWidth(img.clientWidth)
+    const syncSize = () => {
+      if (img.clientWidth > 0 && img.clientHeight > 0) {
+        setDisplaySize(prev => (
+          prev.width === img.clientWidth && prev.height === img.clientHeight
+            ? prev
+            : { width: img.clientWidth, height: img.clientHeight }
+        ))
+      }
     }
     if (img.complete && img.naturalWidth > 0) {
       setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight })
-      syncWidth()
+      syncSize()
     }
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(syncWidth)
+      const ro = new ResizeObserver(syncSize)
       ro.observe(img)
       return () => ro.disconnect()
     }
-    window.addEventListener('resize', syncWidth)
-    return () => window.removeEventListener('resize', syncWidth)
+    window.addEventListener('resize', syncSize)
+    return () => window.removeEventListener('resize', syncSize)
   }, [previewUrl])
 
   const visibleBoxes = boxes.filter(b => b.imageIndex === currentImageIndex)
@@ -336,17 +353,21 @@ export default function RegionAnnotator({
 
   function scale() {
     if (!imgRef.current || !naturalSize || naturalSize.width <= 0) return 1
-    const w = imgRef.current.clientWidth || displayWidth
+    const w = imgRef.current.clientWidth || displaySize.width
     return w > 0 ? (w / naturalSize.width) : 1
   }
 
   function toNaturalCoords(clientX, clientY) {
     const targetEl = imgRef.current || containerRef.current
     const rect = targetEl.getBoundingClientRect()
-    const s = scale()
+    const sx = (naturalSize && naturalSize.width > 0 && rect.width > 0) ? (rect.width / naturalSize.width) : scale()
+    const sy = (naturalSize && naturalSize.height > 0 && rect.height > 0) ? (rect.height / naturalSize.height) : sx
+    const rawX = Math.round((clientX - rect.left) / sx)
+    const rawY = Math.round((clientY - rect.top) / sy)
+    if (!naturalSize) return { x: rawX, y: rawY }
     return {
-      x: Math.round((clientX - rect.left) / s),
-      y: Math.round((clientY - rect.top) / s),
+      x: Math.max(0, Math.min(naturalSize.width, rawX)),
+      y: Math.max(0, Math.min(naturalSize.height, rawY)),
     }
   }
 
@@ -356,7 +377,7 @@ export default function RegionAnnotator({
     try {
       const resp = await fetch(`/api/items/${item.id}/detect_regions/`, {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ image_index: currentImageIndex }),
+        body: JSON.stringify({ image_index: currentImageIndex, sam_variant: samVariant }),
       })
       const j = await resp.json().catch(() => ({}))
       if (!resp.ok) throw new Error(j.detail || `自動検出に失敗しました (${resp.status})`)
@@ -430,6 +451,7 @@ export default function RegionAnnotator({
         body: JSON.stringify({
           image_index: currentImageIndex,
           pos_points: [[x, y]],
+          sam_variant: samVariant,
         }),
       })
       const j = await resp.json().catch(() => ({}))
@@ -739,6 +761,25 @@ export default function RegionAnnotator({
         <button className="btn" onClick={runDetect} disabled={detecting}>
           {detecting ? '検出中…' : '🔍 自動検出'}
         </button>
+        <select
+          value={samVariant}
+          onChange={e => handleSamVariantChange(e.target.value)}
+          disabled={detecting || segmenting}
+          title="領域切り抜き・AIクリックで使用する SAM 2.1 モデルを選択（初回使用時に自動ダウンロードされます）"
+          style={{
+            padding: '5px 8px',
+            fontSize: 12,
+            borderRadius: 6,
+            border: '1px solid #334155',
+            background: '#0f172a',
+            color: '#e2e8f0',
+            cursor: 'pointer',
+          }}
+        >
+          <option value="small">SAM2: Small (標準)</option>
+          <option value="base_plus">SAM2: Base+ (高精度)</option>
+          <option value="tiny">SAM2: Tiny (高速)</option>
+        </select>
         <div style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #334155' }} title="領域の描き方を切り替えます">
           {[
             { id: 'box', label: '⬜ 矩形' },
@@ -868,13 +909,21 @@ export default function RegionAnnotator({
       </div>
 
       {!compact && (
-        <div style={{ marginBottom: 10, fontSize: 12, color: '#94a3b8' }}>
-          画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください(1画像内に同じキャラが何回登場してもそれぞれ指定できます)。
-          Shift/Ctrl+クリックで複数選択、または「📌 スタンプ割当」で同じキャラを連続クリックして一括入力できます。
+        <div style={{ marginBottom: 10, fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <span>
+            画像上をドラッグすると手動で矩形を追加できます。矩形をクリックしてキャラ名を割り当ててください(1画像内に同じキャラが何回登場してもそれぞれ指定できます)。
+            Shift/Ctrl+クリックで複数選択、または「📌 スタンプ割当」で同じキャラを連続クリックして一括入力できます。
+          </span>
+          {naturalSize && displaySize.width > 0 && (
+            <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }}>
+              表示倍率: {Math.round((displaySize.width / naturalSize.width) * 100)}% (原寸 {naturalSize.width}×{naturalSize.height})
+            </span>
+          )}
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, alignItems: 'start' }}>
+      <div style={{ minWidth: 0, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: 20 }}>
       <div
         ref={containerRef}
         style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', cursor: stampChar ? 'copy' : 'crosshair', userSelect: 'none' }}
@@ -897,13 +946,16 @@ export default function RegionAnnotator({
           draggable={false}
           style={{
             maxWidth: '100%',
-            maxHeight: compact ? '46vh' : undefined,
-            width: compact ? 'auto' : undefined,
+            maxHeight: compact ? '46vh' : 'max(320px, calc(100vh - 280px))',
+            width: 'auto',
+            height: 'auto',
             display: 'block',
           }}
           onLoad={e => {
             setNaturalSize({ width: e.target.naturalWidth, height: e.target.naturalHeight })
-            if (e.target.clientWidth > 0) setDisplayWidth(e.target.clientWidth)
+            if (e.target.clientWidth > 0 && e.target.clientHeight > 0) {
+              setDisplaySize({ width: e.target.clientWidth, height: e.target.clientHeight })
+            }
           }}
         />
 
@@ -1100,18 +1152,19 @@ export default function RegionAnnotator({
           )
         })()}
       </div>
+      </div>
 
       {/* Right-side column: character assignment panel + region list */}
       <div
         onClick={ev => ev.stopPropagation()}
         onMouseDown={ev => ev.stopPropagation()}
         style={{
-          flex: '1 1 300px',
-          minWidth: 260,
-          maxWidth: 480,
+          minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
+          maxHeight: compact ? '46vh' : 'max(320px, calc(100vh - 260px))',
+          overflowY: 'auto',
         }}
       >
       <div

@@ -43,16 +43,21 @@ _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 _lock = threading.Lock()
-_sessions = None  # (encoder_sess, decoder_sess, variant_name)
-_last_fail_ts = 0.0
+_sessions_by_variant = {}  # variant -> (encoder_sess, decoder_sess, engine_name)
+_last_fail_by_variant = {}  # variant -> monotonic timestamp
 _RETRY_COOLDOWN_SEC = 60.0
-_embed_cache = OrderedDict()  # sha1(image_bytes) -> (enc_out_map, enc_out_by_shape, (orig_h, orig_w))
+_embed_cache = OrderedDict()  # (variant, sha1(image_bytes)) -> (enc_out_map, enc_out_by_shape, (orig_h, orig_w))
 _EMBED_CACHE_MAX = 4
+
+
+def _normalize_variant(variant=None):
+    v = (variant or SAM2_VARIANT or 'small').strip().lower()
+    return v if v in SAM2_ARCHIVE_MAP else 'small'
 
 
 def _data_dir(variant=None):
     from item import tagger
-    v = variant or SAM2_VARIANT
+    v = _normalize_variant(variant)
     d = os.path.join(tagger._data_dir(), 'sam2', v)
     os.makedirs(d, exist_ok=True)
     return d
@@ -66,24 +71,27 @@ def _find_extracted_onnx(extract_dir):
     return None, None
 
 
-def _load_sessions():
-    global _sessions, _last_fail_ts
-    if _sessions is not None:
-        return _sessions
-    if _last_fail_ts and (time.monotonic() - _last_fail_ts) < _RETRY_COOLDOWN_SEC:
+def _load_sessions(variant=None):
+    v = _normalize_variant(variant)
+    cached = _sessions_by_variant.get(v)
+    if cached is not None:
+        return cached
+    last_fail = _last_fail_by_variant.get(v, 0.0)
+    if last_fail and (time.monotonic() - last_fail) < _RETRY_COOLDOWN_SEC:
         return None
     with _lock:
-        if _sessions is not None:
-            return _sessions
-        if _last_fail_ts and (time.monotonic() - _last_fail_ts) < _RETRY_COOLDOWN_SEC:
+        cached = _sessions_by_variant.get(v)
+        if cached is not None:
+            return cached
+        last_fail = _last_fail_by_variant.get(v, 0.0)
+        if last_fail and (time.monotonic() - last_fail) < _RETRY_COOLDOWN_SEC:
             return None
         try:
             import onnxruntime as ort
             from huggingface_hub import hf_hub_download
 
-            variant = SAM2_VARIANT if SAM2_VARIANT in SAM2_ARCHIVE_MAP else 'small'
-            archive_name = SAM2_ARCHIVE_MAP[variant]
-            extract_dir = _data_dir(variant)
+            archive_name = SAM2_ARCHIVE_MAP[v]
+            extract_dir = _data_dir(v)
 
             enc_path, dec_path = _find_extracted_onnx(extract_dir)
             if not (enc_path and dec_path):
@@ -104,17 +112,20 @@ def _load_sessions():
             providers = ['CPUExecutionProvider']
             enc_sess = ort.InferenceSession(enc_path, sess_options=opts, providers=providers)
             dec_sess = ort.InferenceSession(dec_path, sess_options=opts, providers=providers)
-            _sessions = (enc_sess, dec_sess, f'sam2.1_{variant}')
-            logger.info('Loaded SAM 2.1 (%s) ONNX sessions from %s', variant, extract_dir)
-            return _sessions
+            sess_tuple = (enc_sess, dec_sess, f'sam2.1_{v}')
+            _sessions_by_variant[v] = sess_tuple
+            logger.info('Loaded SAM 2.1 (%s) ONNX sessions from %s', v, extract_dir)
+            return sess_tuple
         except Exception:
-            _last_fail_ts = time.monotonic()
-            logger.warning('SAM 2.1 ONNX sessions unavailable; falling back to non-SAM segmentation', exc_info=True)
+            _last_fail_by_variant[v] = time.monotonic()
+            logger.warning('SAM 2.1 (%s) ONNX sessions unavailable; falling back to non-SAM segmentation', v, exc_info=True)
             return None
 
 
-def active_engine_name():
-    return _sessions[2] if _sessions is not None else None
+def active_engine_name(variant=None):
+    v = _normalize_variant(variant)
+    sess = _sessions_by_variant.get(v)
+    return sess[2] if sess is not None else None
 
 
 def _preprocess_image(image_rgb):
@@ -128,18 +139,19 @@ def _preprocess_image(image_rgb):
     return chw, (orig_h, orig_w)
 
 
-def encode_image(image_bytes):
+def encode_image(image_bytes, variant=None):
     """Compute (or retrieve cached) SAM 2.1 multi-scale image features for `image_bytes`.
     Returns `(out_by_name, out_by_shape, (orig_h, orig_w))` or None if unavailable.
     """
     from PIL import Image
 
-    sess_tuple = _load_sessions()
+    v = _normalize_variant(variant)
+    sess_tuple = _load_sessions(v)
     if sess_tuple is None:
         return None
     enc_sess = sess_tuple[0]
 
-    key = hashlib.sha1(image_bytes).hexdigest()
+    key = (v, hashlib.sha1(image_bytes).hexdigest())
     with _lock:
         if key in _embed_cache:
             _embed_cache.move_to_end(key)
@@ -179,7 +191,7 @@ def _cast_for_ort_type(arr, ort_type):
     return np.asarray(arr, dtype=np.float32)
 
 
-def predict_mask(encoded, box=None, pos_points=None, neg_points=None):
+def predict_mask(encoded, box=None, pos_points=None, neg_points=None, variant=None):
     """Run the SAM 2.1 mask decoder on precomputed `encoded` features.
     Prompt labels follow standard SAM 2 convention:
       - 2 / 3: box top-left / bottom-right
@@ -189,7 +201,7 @@ def predict_mask(encoded, box=None, pos_points=None, neg_points=None):
     """
     import cv2
 
-    sess_tuple = _load_sessions()
+    sess_tuple = _load_sessions(_normalize_variant(variant))
     if sess_tuple is None or encoded is None:
         return None
     dec_sess = sess_tuple[1]
@@ -285,7 +297,7 @@ def predict_mask(encoded, box=None, pos_points=None, neg_points=None):
     return np.where(chosen > 0.0, 255, 0).astype(np.uint8)
 
 
-def segment_boxes(image_bytes, boxes, head_boxes=None):
+def segment_boxes(image_bytes, boxes, head_boxes=None, variant=None):
     """Segment each detected character box using SAM 2.1 with BBox + own-head
     positive point + neighbor-head negative points.
     Returns list of `[{'box': [x1, y1, x2, y2], 'polygon': [[x, y], ...] | None}, ...]`
@@ -295,7 +307,8 @@ def segment_boxes(image_bytes, boxes, head_boxes=None):
 
     if not boxes:
         return []
-    encoded = encode_image(image_bytes)
+    v = _normalize_variant(variant)
+    encoded = encode_image(image_bytes, variant=v)
     if encoded is None:
         return None
 
@@ -330,7 +343,7 @@ def segment_boxes(image_bytes, boxes, head_boxes=None):
             if owner is not None and owner != i:
                 neg_pts.append((0.5 * (hx1 + hx2), 0.5 * (hy1 + hy2)))
 
-        mask = predict_mask(encoded, box=(bx1, by1, bx2, by2), pos_points=pos_pts, neg_points=neg_pts)
+        mask = predict_mask(encoded, box=(bx1, by1, bx2, by2), pos_points=pos_pts, neg_points=neg_pts, variant=v)
         if mask is None:
             regions.append({'box': [bx1, by1, bx2, by2], 'polygon': None})
             continue
@@ -351,16 +364,17 @@ def segment_boxes(image_bytes, boxes, head_boxes=None):
     return regions
 
 
-def segment_point(image_bytes, pos_points, neg_points=None, box=None):
+def segment_point(image_bytes, pos_points, neg_points=None, box=None, variant=None):
     """Interactive segmentation from user click point(s) (+ optional negative points / box).
     Returns `{'box': [x1, y1, x2, y2], 'polygon': [[x, y], ...]}` or None.
     """
     from item import tagger
 
-    encoded = encode_image(image_bytes)
+    v = _normalize_variant(variant)
+    encoded = encode_image(image_bytes, variant=v)
     if encoded is None:
         return None
-    mask = predict_mask(encoded, box=box, pos_points=pos_points, neg_points=neg_points)
+    mask = predict_mask(encoded, box=box, pos_points=pos_points, neg_points=neg_points, variant=v)
     if mask is None:
         return None
     poly, tight_box = tagger._mask_to_polygon(mask, offset_x=0, offset_y=0)

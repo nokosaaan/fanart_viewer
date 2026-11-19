@@ -527,6 +527,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
           external: suggestExternal,
           model: suggestModel === 'canary' ? 'timm' : 'default',
           image_index: selectedImageIndex,
+          sam_variant: (() => { try { return localStorage.getItem('fv_sam2_variant') || 'small' } catch { return 'small' } })(),
         }),
       })
       const j = await resp.json().catch(()=>({}))

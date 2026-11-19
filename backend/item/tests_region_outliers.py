@@ -452,14 +452,16 @@ class BrokenRegionsAndOutliersTests(TestCase):
             self.assertIn("high_res_feats_0", captured_feeds[0])
             self.assertIn("high_res_feats_1", captured_feeds[0])
 
-            # Also verify POST /api/items/<id>/segment_point/ endpoint
+            # Also verify POST /api/items/<id>/segment_point/ endpoint + sam_variant forwarding
             it = Item.objects.create(external_id=901, source="pixiv_bookmark", artist="S", situation="CP")
             PreviewImage.objects.create(item=it, order=0, data=img_bytes)
             r = self.client.post(f"/api/items/{it.id}/segment_point/", {
                 "image_index": 0,
                 "pos_points": [[50, 50]],
+                "sam_variant": "base_plus",
             }, format="json")
             self.assertEqual(r.status_code, 200)
             data = r.json()
             self.assertIn("polygon", data)
             self.assertGreaterEqual(len(data["polygon"]), 3)
+            self.assertEqual(data["segmentation_engine"], "sam2.1_base_plus")
