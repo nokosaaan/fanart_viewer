@@ -89,10 +89,12 @@ export default function RegionAnnotator({
   const [samVariant, setSamVariant] = useState(() => {
     try {
       const saved = localStorage.getItem('fv_sam2_variant')
-      if (saved === 'tiny' || saved === 'small' || saved === 'base_plus') return saved
+      if (saved === 'anime_ins' || saved === 'sam2_small' || saved === 'sam2_base_plus' || saved === 'sam2_tiny') return saved
+      if (saved === 'small' || saved === 'base_plus' || saved === 'tiny') return `sam2_${saved}`
     } catch {}
-    return 'small'
+    return 'anime_ins'
   })
+  const [lastEngine, setLastEngine] = useState('')
   function handleSamVariantChange(v) {
     setSamVariant(v)
     try { localStorage.setItem('fv_sam2_variant', v) } catch {}
@@ -377,10 +379,11 @@ export default function RegionAnnotator({
     try {
       const resp = await fetch(`/api/items/${item.id}/detect_regions/`, {
         method: 'POST', headers: HEADERS, credentials: 'same-origin',
-        body: JSON.stringify({ image_index: currentImageIndex, sam_variant: samVariant }),
+        body: JSON.stringify({ image_index: currentImageIndex, sam_variant: samVariant, seg_engine: samVariant }),
       })
       const j = await resp.json().catch(() => ({}))
       if (!resp.ok) throw new Error(j.detail || `自動検出に失敗しました (${resp.status})`)
+      if (j.segmentation_engine) setLastEngine(j.segmentation_engine)
       const resolvedIndex = j.image_index ?? null
       if (resolvedIndex !== currentImageIndex) setCurrentImageIndex(resolvedIndex)
       let detected = []
@@ -456,6 +459,7 @@ export default function RegionAnnotator({
       })
       const j = await resp.json().catch(() => ({}))
       if (!resp.ok) throw new Error(j.detail || `AI領域抽出に失敗しました (${resp.status})`)
+      if (j.segmentation_engine) setLastEngine(j.segmentation_engine)
       if (j.box && Array.isArray(j.polygon) && j.polygon.length >= 3) {
         const id = nextBoxId()
         const initialChars = stampChar ? [stampChar] : []
@@ -765,7 +769,7 @@ export default function RegionAnnotator({
           value={samVariant}
           onChange={e => handleSamVariantChange(e.target.value)}
           disabled={detecting || segmenting}
-          title="領域切り抜き・AIクリックで使用する SAM 2.1 モデルを選択（初回使用時に自動ダウンロードされます）"
+          title="自動検出で使用するセグメンテーションモデルを選択（初回使用時に自動ダウンロードされます。AIクリックはSAM 2.1を使用）"
           style={{
             padding: '5px 8px',
             fontSize: 12,
@@ -776,10 +780,30 @@ export default function RegionAnnotator({
             cursor: 'pointer',
           }}
         >
-          <option value="small">SAM2: Small (標準)</option>
-          <option value="base_plus">SAM2: Base+ (高精度)</option>
-          <option value="tiny">SAM2: Tiny (高速)</option>
+          <option value="anime_ins">AnimeIns: RTMDet+ISNet (アニメ特化)</option>
+          <option value="sam2_small">SAM2: Small (標準)</option>
+          <option value="sam2_base_plus">SAM2: Base+ (高精度)</option>
+          <option value="sam2_tiny">SAM2: Tiny (高速)</option>
         </select>
+        {lastEngine && (
+          <span
+            style={{
+              fontSize: 11,
+              padding: '2px 7px',
+              borderRadius: 4,
+              background: lastEngine === 'isnetis_fallback' ? '#78350f' : '#1e293b',
+              color: lastEngine === 'isnetis_fallback' ? '#fde68a' : '#93c5fd',
+              border: lastEngine === 'isnetis_fallback' ? '1px solid #f59e0b' : '1px solid #334155',
+            }}
+            title={
+              lastEngine === 'isnetis_fallback'
+                ? 'AIモデルの読み込みに失敗したためフォールバック(IS-Net+直線分割)で実行されました'
+                : `直近の検出で実際に稼働したエンジン: ${lastEngine}`
+            }
+          >
+            {lastEngine === 'isnetis_fallback' ? '⚠ Fallback (IS-Net)' : `Engine: ${lastEngine}`}
+          </span>
+        )}
         <div style={{ display: 'inline-flex', borderRadius: 6, overflow: 'hidden', border: '1px solid #334155' }} title="領域の描き方を切り替えます">
           {[
             { id: 'box', label: '⬜ 矩形' },

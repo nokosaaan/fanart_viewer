@@ -465,3 +465,76 @@ class BrokenRegionsAndOutliersTests(TestCase):
             self.assertIn("polygon", data)
             self.assertGreaterEqual(len(data["polygon"]), 3)
             self.assertEqual(data["segmentation_engine"], "sam2.1_base_plus")
+
+    def test_anime_segmenter_multi_instance_and_refiner(self):
+        import io
+        from unittest.mock import patch
+        import numpy as np
+        from PIL import Image
+        from item import anime_segmenter
+
+        buf = io.BytesIO()
+        Image.new("RGB", (320, 320), (240, 240, 240)).save(buf, format="PNG")
+        img_bytes = buf.getvalue()
+
+        class _DummyIO:
+            def __init__(self, name, shape):
+                self.name = name
+                self.shape = shape
+
+        class _FakeRTMDet:
+            def get_inputs(self):
+                return [_DummyIO("input", [1, 3, 640, 640])]
+
+            def get_outputs(self):
+                return [
+                    _DummyIO("scores.stride8", [1, 1, 80, 80]),
+                    _DummyIO("bboxes.stride8", [1, 4, 80, 80]),
+                    _DummyIO("coeffs.stride8", [1, 169, 80, 80]),
+                    _DummyIO("mask_proto", [1, 8, 80, 80]),
+                ]
+
+            def run(self, _out_names, _feed):
+                scores = np.full((1, 1, 80, 80), -10.0, dtype=np.float32)
+                bboxes = np.zeros((1, 4, 80, 80), dtype=np.float32)
+                coeffs = np.zeros((1, 169, 80, 80), dtype=np.float32)
+                # Two distinct anime character instances: left (x=160) and right (x=480)
+                scores[0, 0, 40, 20] = 5.0   # anchor (160, 320)
+                bboxes[0, :, 40, 20] = [120, 200, 120, 200]
+                scores[0, 0, 40, 60] = 4.5   # anchor (480, 320)
+                bboxes[0, :, 40, 60] = [120, 200, 120, 200]
+
+                # Positive bias in final layer (index -1) so dynamic conv outputs positive mask
+                # Layer 0: w0 (8x10=80), Layer 1: w1 (8x8=64), Layer 2: w2 (1x8=8), b0(8), b1(8), b2(1) -> total 169
+                coeffs[0, 168, 40, 20] = 4.0
+                coeffs[0, 168, 40, 60] = 4.0
+                proto = np.zeros((1, 8, 80, 80), dtype=np.float32)
+                return [scores, bboxes, coeffs, proto]
+
+        class _FakeRefiner:
+            def get_inputs(self):
+                return [_DummyIO("input", [1, 4, 256, 256])]
+
+            def get_outputs(self):
+                return [_DummyIO("output", [1, 1, 256, 256])]
+
+            def run(self, _out_names, feed):
+                inp = feed["input"]
+                self.last_shape = inp.shape
+                out = np.full((1, 1, 256, 256), -5.0, dtype=np.float32)
+                out[0, 0, 40:200, 40:200] = 5.0
+                return [out]
+
+        refiner = _FakeRefiner()
+        with patch.object(
+            anime_segmenter,
+            "_load_sessions",
+            return_value=(_FakeRTMDet(), refiner, "anime_ins_refined"),
+        ):
+            regions = anime_segmenter.segment_instances(img_bytes)
+            self.assertEqual(len(regions), 2)
+            self.assertEqual(refiner.last_shape, (1, 4, 256, 256))
+            for reg in regions:
+                self.assertIn("box", reg)
+                self.assertIsNotNone(reg["polygon"])
+                self.assertGreaterEqual(len(reg["polygon"]), 3)

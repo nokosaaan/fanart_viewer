@@ -788,7 +788,7 @@ def _mask_to_polygon(binary_mask, offset_x=0, offset_y=0):
         return None, None
     cnt = max(valid, key=cv2.contourArea)
     peri = cv2.arcLength(cnt, True)
-    approx = cv2.approxPolyDP(cnt, max(1.5, 0.006 * peri), True)
+    approx = cv2.approxPolyDP(cnt, max(1.2, 0.002 * peri), True)
     if len(approx) < 3:
         approx = cv2.approxPolyDP(cnt, 1.0, True)
     if len(approx) < 3:
@@ -1047,6 +1047,70 @@ def _crop_with_padding(image_bytes, box, padding_ratio=0.15, polygon=None):
     return buf.getvalue()
 
 
+def _normalize_seg_engine(seg_engine=None):
+    v = (seg_engine or os.environ.get('SEG_ENGINE', 'anime_ins')).strip().lower()
+    if v in ('anime_ins', 'anime', 'rtmdet'):
+        return ('anime_ins', None)
+    if v.startswith('sam2_'):
+        v = v[5:]
+    if v in ('tiny', 'small', 'base_plus'):
+        return ('sam2', v)
+    return ('anime_ins', None)
+
+
+def _detect_regions_with_engine(image_bytes, seg_engine=None, max_regions=_MAX_PERSON_CROPS):
+    """Detect character regions + polygons using the requested segmentation engine.
+
+    Engine priority:
+      - `anime_ins` (default): `item.anime_segmenter.segment_instances` (RTMDet-Ins
+        + ISNet-DIS refiner trained on anime characters). Falls back to YOLO +
+        SAM 2.1 + IS-Net Voronoi if unavailable or 0 instances found.
+      - `sam2_small` / `sam2_base_plus` / `sam2_tiny`: YOLO person boxes + head
+        boxes + SAM 2.1 ONNX, falling back to IS-Net Voronoi.
+
+    Returns `(region_defs, boxes, engine_name)`.
+    """
+    mode, sam_var = _normalize_seg_engine(seg_engine)
+
+    if mode == 'anime_ins':
+        try:
+            from item import anime_segmenter
+            ins_regions = anime_segmenter.segment_instances(image_bytes, max_instances=max_regions)
+            if ins_regions:
+                boxes = [tuple(r['box']) for r in ins_regions]
+                engine = anime_segmenter.active_engine_name() or 'anime_ins'
+                return ins_regions, boxes, engine
+        except Exception:
+            logger.debug('AnimeInstanceSegmentation unavailable; falling back to YOLO + SAM 2.1', exc_info=True)
+
+    try:
+        boxes = _detect_person_boxes(image_bytes)
+    except Exception:
+        logger.exception('Person detection failed — falling back to whole-image character tagging')
+        boxes = []
+
+    if not boxes:
+        return [], [], 'none'
+
+    try:
+        head_boxes = _detect_head_boxes(image_bytes)
+    except Exception:
+        logger.debug('Head detection failed — extracting polygons without head priors', exc_info=True)
+        head_boxes = []
+
+    try:
+        region_defs = _extract_region_polygons(
+            image_bytes, boxes[:max_regions], head_boxes=head_boxes, sam_variant=sam_var,
+        )
+    except Exception:
+        logger.exception('Region polygon extraction failed — falling back to raw boxes')
+        region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:max_regions]]
+
+    from item import sam_segmenter
+    engine = sam_segmenter.active_engine_name(sam_var) or 'isnetis_fallback'
+    return region_defs, boxes, engine
+
+
 def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, general_limit=15,
                   model_repo=None, backend='onnx', with_embedding=False, with_ccip=False, sam_variant=None):
     """Run the tagger on a single image.
@@ -1097,27 +1161,10 @@ def suggest_tags(image_bytes, general_threshold=0.35, character_threshold=0.85, 
     labeled regions), so feeding it the blended whole-image vector of a
     group shot would be a train/inference mismatch.
     """
-    try:
-        boxes = _detect_person_boxes(image_bytes)
-    except Exception:
-        logger.exception('Person detection failed — falling back to whole-image character tagging')
-        boxes = []
+    region_defs, boxes, _seg_engine_used = _detect_regions_with_engine(
+        image_bytes, seg_engine=sam_variant, max_regions=_MAX_PERSON_CROPS,
+    )
     person_count = len(boxes)
-
-    region_defs = []
-    if boxes:
-        try:
-            head_boxes = _detect_head_boxes(image_bytes)
-        except Exception:
-            logger.debug('Head detection failed — extracting polygons without head priors', exc_info=True)
-            head_boxes = []
-        try:
-            region_defs = _extract_region_polygons(
-                image_bytes, boxes[:_MAX_PERSON_CROPS], head_boxes=head_boxes, sam_variant=sam_variant,
-            )
-        except Exception:
-            logger.exception('Region polygon extraction failed — falling back to raw boxes')
-            region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:_MAX_PERSON_CROPS]]
 
     result = _suggest_tags_single_pass(
         image_bytes, general_threshold, character_threshold, general_limit, model_repo, backend,

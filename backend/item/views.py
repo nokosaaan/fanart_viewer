@@ -5223,7 +5223,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
-        sam_variant = data.get('sam_variant') or None
+        seg_engine = data.get('seg_engine') or data.get('sam_variant') or 'anime_ins'
         image_index = data.get('image_index')
         if image_index is not None:
             try:
@@ -5235,32 +5235,9 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
         if image_bytes is None:
             return Response({'detail': 'No image available for this item'}, status=status.HTTP_404_NOT_FOUND)
 
-        try:
-            boxes = tagger._detect_person_boxes(image_bytes)
-        except Exception:
-            # Matches every other call site of this function (see
-            # tagger.py's suggest_tags) — its docstring's "never raises"
-            # contract is actually enforced by the caller, not the
-            # function itself (e.g. imgutils not being installed raises
-            # here), so this needs the same try/except those have.
-            logging.exception('detect_regions: person detection failed')
-            boxes = []
-
-        region_defs = []
-        if boxes and HAVE_TAGGER:
-            try:
-                head_boxes = tagger._detect_head_boxes(image_bytes)
-            except Exception:
-                logging.debug('detect_regions: head detection failed', exc_info=True)
-                head_boxes = []
-            try:
-                region_defs = tagger._extract_region_polygons(
-                    image_bytes, boxes[:tagger._MAX_PERSON_CROPS], head_boxes=head_boxes,
-                    sam_variant=sam_variant,
-                )
-            except Exception:
-                logging.exception('detect_regions: polygon extraction failed')
-                region_defs = [{'box': list(b), 'polygon': None} for b in boxes[:tagger._MAX_PERSON_CROPS]]
+        region_defs, boxes, engine_used = tagger._detect_regions_with_engine(
+            image_bytes, seg_engine=seg_engine, max_regions=tagger._MAX_PERSON_CROPS,
+        )
 
         proposed_regions = []
         if boxes and HAVE_TAGGER:
@@ -5296,10 +5273,7 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'boxes': [list(box) for box in boxes],
             'regions': region_defs,
             'proposed_regions': proposed_regions,
-            'segmentation_engine': (
-                __import__('item.sam_segmenter', fromlist=['active_engine_name']).active_engine_name(sam_variant)
-                or 'isnetis_fallback'
-            ),
+            'segmentation_engine': engine_used,
         })
 
     @action(detail=True, methods=['post'], url_path='segment_point')
@@ -5313,7 +5287,10 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
 
         item = self.get_object()
         data = request.data if isinstance(request.data, dict) else {}
-        sam_variant = data.get('sam_variant') or None
+        raw_variant = (data.get('sam_variant') or '').strip().lower()
+        if raw_variant.startswith('sam2_'):
+            raw_variant = raw_variant[5:]
+        sam_variant = raw_variant if raw_variant in ('tiny', 'small', 'base_plus') else None
         image_index = data.get('image_index')
         if image_index is not None:
             try:

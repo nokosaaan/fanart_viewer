@@ -220,7 +220,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
           body: JSON.stringify({
             external: mode === 'external',
             model: model === 'canary' ? 'timm' : 'default',
-            sam_variant: (() => { try { return localStorage.getItem('fv_sam2_variant') || 'small' } catch { return 'small' } })(),
+            sam_variant: (() => { try { return localStorage.getItem('fv_sam2_variant') || 'anime_ins' } catch { return 'anime_ins' } })(),
           }),
           signal: abortRef.current.signal,
         })
