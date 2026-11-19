@@ -116,9 +116,11 @@ export default function RegionAnnotator({
     return () => document.removeEventListener('mousedown', handleOutsideMouseDown)
   }, [activeBoxId])
 
-  // Cancel modes on Escape key, finalize polygon on Enter
+  // Cancel modes on Escape key, finalize polygon on Enter, delete selected on Delete/Backspace
   useEffect(() => {
     function handleKeyDown(e) {
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : ''
+      const isTyping = tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)
       if (e.key === 'Escape') {
         if (polyPoints.length > 0) { setPolyPoints([]); setPolyHoverPt(null) }
         if (lassoPoints) setLassoPoints(null)
@@ -130,11 +132,14 @@ export default function RegionAnnotator({
         commitPolygon(polyPoints)
         setPolyPoints([])
         setPolyHoverPt(null)
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && !isTyping && selectedBoxIds.size > 0) {
+        e.preventDefault()
+        removeSelectedBoxes()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [stampChar, activeBoxId, selectedBoxIds.size, drawMode, polyPoints, lassoPoints])
+  }, [stampChar, activeBoxId, selectedBoxIds, drawMode, polyPoints, lassoPoints])
 
   const loadItemPreviews = useCallback((id) => {
     fetch(`/api/items/${id}/previews/`, { cache: 'no-store' })
@@ -756,15 +761,15 @@ export default function RegionAnnotator({
           🎨 色ルーペ: {loupeEnabled ? 'ON' : 'OFF'}
         </button>
         {visibleBoxes.length > 0 && (
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             <button
               type="button"
               className="btn"
               style={{ fontSize: 11, padding: '3px 8px' }}
               onClick={() => setSelectedBoxIds(new Set(visibleBoxes.map(b => b.id)))}
-              title="この画像のすべての矩形を選択します"
+              title="この画像のすべての領域を選択します"
             >
-              全矩形を選択 ({visibleBoxes.length})
+              全選択 ({visibleBoxes.length})
             </button>
             <button
               type="button"
@@ -772,9 +777,23 @@ export default function RegionAnnotator({
               style={{ fontSize: 11, padding: '3px 8px' }}
               onClick={() => setSelectedBoxIds(new Set(visibleBoxes.filter(b => b.characters.length === 0).map(b => b.id)))}
               disabled={visibleBoxes.filter(b => b.characters.length === 0).length === 0}
-              title="まだキャラが割り当てられていない矩形をまとめて選択します"
+              title="まだキャラが割り当てられていない領域をまとめて選択します"
             >
               未割当を選択 ({visibleBoxes.filter(b => b.characters.length === 0).length})
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{
+                fontSize: 11, padding: '3px 8px',
+                background: selectedBoxIds.size > 0 ? '#7f1d1d' : undefined,
+                color: selectedBoxIds.size > 0 ? '#fecaca' : undefined,
+              }}
+              onClick={removeSelectedBoxes}
+              disabled={selectedBoxIds.size === 0}
+              title="選択中の領域をまとめて削除します（Deleteキーでも削除可能）"
+            >
+              選択中を削除 ({selectedBoxIds.size})
             </button>
           </div>
         )}
@@ -1165,10 +1184,37 @@ export default function RegionAnnotator({
           borderRadius: 6,
           padding: '8px 10px',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 6, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
               領域一覧 ({visibleBoxes.length}件)
             </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const allSelected = visibleBoxes.every(b => selectedBoxIds.has(b.id))
+                  setSelectedBoxIds(allSelected ? new Set() : new Set(visibleBoxes.map(b => b.id)))
+                }}
+                style={{
+                  fontSize: 10, padding: '2px 6px', borderRadius: 3, border: '1px solid #475569',
+                  background: '#1e293b', color: '#cbd5e1', cursor: 'pointer',
+                }}
+              >
+                {visibleBoxes.every(b => selectedBoxIds.has(b.id)) ? '全解除' : '全選択'}
+              </button>
+              {selectedBoxIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={removeSelectedBoxes}
+                  style={{
+                    fontSize: 10, padding: '2px 7px', borderRadius: 3, border: 'none',
+                    background: '#7f1d1d', color: '#fecaca', cursor: 'pointer', fontWeight: 600,
+                  }}
+                >
+                  選択中を削除 ({selectedBoxIds.size})
+                </button>
+              )}
+            </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: compact ? 160 : 220, overflowY: 'auto' }}>
             {visibleBoxes.map((b, idx) => {
@@ -1198,6 +1244,20 @@ export default function RegionAnnotator({
                     fontSize: 12,
                   }}
                 >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => {
+                      setSelectedBoxIds(prev => {
+                        const next = new Set(prev)
+                        if (next.has(b.id)) next.delete(b.id)
+                        else next.add(b.id)
+                        return next
+                      })
+                    }}
+                    style={{ margin: 0, cursor: 'pointer', flexShrink: 0 }}
+                    title="一括操作（削除・キャラ割当）の対象として選択"
+                  />
                   <span
                     style={{
                       width: 10,

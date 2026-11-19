@@ -128,6 +128,11 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   const [loadingMore, setLoadingMore] = useState(false)
   const [selectedId, setSelectedId] = useState(null)
   const [allChars, setAllChars] = useState([])
+  const [allTitles, setAllTitles] = useState([])
+  const [regionTitles, setRegionTitles] = useState([])
+  const [regionTitleQuery, setRegionTitleQuery] = useState('')
+  const [regionTitleFocused, setRegionTitleFocused] = useState(false)
+  const [savingRegionTitle, setSavingRegionTitle] = useState(false)
   const [charList, setCharList] = useState([]) // mismatch-tab manual fix only
   const [saving, setSaving] = useState(false) // mismatch-tab actions only
 
@@ -192,6 +197,7 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
 
   useEffect(() => {
     fetch('/api/items/all_characters/').then(r => r.json()).then(d => { if (Array.isArray(d)) setAllChars(d) }).catch(() => {})
+    fetch('/api/items/all_titles/').then(r => r.json()).then(d => { if (Array.isArray(d)) setAllTitles(d) }).catch(() => {})
   }, [])
 
   // Sequentially requests a suggestion for every item in `targetItems` that
@@ -407,10 +413,41 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // being keyed on selected.id, see below).
   useEffect(() => {
     setCharList(selected ? (selected.characters || []) : [])
+    setRegionTitles(selected ? (selected.titles || []) : [])
+    setRegionTitleQuery('')
     setRegionDirty(false)
     setAnnotating(false)
     setItemPanelDirty(false)
   }, [selected && selected.id])
+
+  async function updateRegionTitles(nextTitles) {
+    if (!selected) return
+    const cleaned = [...new Set(nextTitles.map(t => (t || '').trim()).filter(Boolean))]
+    setRegionTitles(cleaned)
+    for (const t of cleaned) {
+      if (!allTitles.includes(t)) {
+        setAllTitles(prev => [...new Set([...prev, t])].sort())
+      }
+    }
+    setSavingRegionTitle(true)
+    try {
+      const resp = await fetch(`/api/items/${selected.id}/update_fields/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        credentials: 'same-origin',
+        body: JSON.stringify({ titles: cleaned }),
+      })
+      const j = await resp.json().catch(() => ({}))
+      if (resp.ok && j.item) {
+        setItems(prev => prev.map(it => it.id === selected.id ? { ...it, ...j.item } : it))
+        notify('item-updated', { id: selected.id, item: j.item })
+      }
+    } catch (e) {
+      console.error('Failed to update titles in region review mode', e)
+    } finally {
+      setSavingRegionTitle(false)
+    }
+  }
 
   // Guard for anything that would throw away unsaved work: skipping to
   // another item, switching mode tabs, changing page, or closing the panel.
@@ -943,9 +980,115 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
                   ⚠️ 領域のズレ・はみ出しを {selected.region_issues.length} 件検知しました。不要な矩形を削除して描き直してから保存してください。
                 </div>
               )}
+
+              {/* Compact title editor so character suggestions in RegionAnnotator scope to the right CharacterGroup */}
+              {(() => {
+                const q = regionTitleQuery.trim().toLowerCase()
+                const available = allTitles.filter(t => !regionTitles.includes(t))
+                const filtered = q ? available.filter(t => t.toLowerCase().includes(q)) : available
+                const exactExists = q && [...available, ...regionTitles].some(t => t.toLowerCase() === q)
+                const addTitle = (t) => {
+                  const trimmed = (t || '').trim()
+                  if (!trimmed) return
+                  setRegionTitleQuery('')
+                  if (!regionTitles.includes(trimmed)) {
+                    updateRegionTitles([...regionTitles, trimmed])
+                  }
+                }
+                return (
+                  <div style={{
+                    marginBottom: 10, padding: '6px 10px', borderRadius: 6,
+                    background: '#0f172a', border: '1px solid #334155',
+                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', letterSpacing: '0.06em' }}>TITLE</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                      {regionTitles.length === 0 ? (
+                        <span style={{ fontSize: 11, color: '#64748b' }}>未設定</span>
+                      ) : (
+                        regionTitles.map(t => (
+                          <span key={t} style={{
+                            background: '#1e3a5f', color: '#93c5fd', borderRadius: 4,
+                            padding: '2px 7px', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4,
+                          }}>
+                            {t}
+                            <button
+                              type="button"
+                              onClick={() => updateRegionTitles(regionTitles.filter(x => x !== t))}
+                              style={{ border: 'none', background: 'none', color: '#93c5fd', cursor: 'pointer', padding: 0, fontSize: 13, lineHeight: 1 }}
+                              title="タイトルを削除"
+                            >×</button>
+                          </span>
+                        ))
+                      )}
+                    </div>
+                    <div style={{ position: 'relative', flex: '1 1 200px', maxWidth: 320 }}>
+                      <input
+                        type="text"
+                        placeholder="タイトルを追加（キャラ候補に連動）…"
+                        value={regionTitleQuery}
+                        onChange={e => setRegionTitleQuery(e.target.value)}
+                        onFocus={() => setRegionTitleFocused(true)}
+                        onBlur={() => setTimeout(() => setRegionTitleFocused(false), 150)}
+                        onKeyDown={e => {
+                          if (e.key !== 'Enter') return
+                          e.preventDefault()
+                          if (filtered.length === 1) addTitle(filtered[0])
+                          else if (regionTitleQuery.trim()) addTitle(regionTitleQuery)
+                        }}
+                        style={{
+                          width: '100%', boxSizing: 'border-box', background: '#1e293b', color: '#f1f5f9',
+                          border: '1px solid #334155', borderRadius: 4, padding: '4px 8px', fontSize: 12,
+                        }}
+                      />
+                      {regionTitleFocused && (filtered.length > 0 || (q && !exactExists)) && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4,
+                          background: '#1e293b', border: '1px solid #334155', borderRadius: 6,
+                          maxHeight: 180, overflowY: 'auto', zIndex: 40, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                        }}>
+                          {filtered.slice(0, 30).map(t => (
+                            <button
+                              key={t}
+                              type="button"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => addTitle(t)}
+                              style={{
+                                display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                                color: '#f1f5f9', padding: '6px 10px', fontSize: 12, cursor: 'pointer',
+                              }}
+                              onMouseEnter={e => e.currentTarget.style.background = '#334155'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                          {q && !exactExists && (
+                            <button
+                              type="button"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => addTitle(regionTitleQuery)}
+                              style={{
+                                display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                                borderTop: filtered.length > 0 ? '1px solid #334155' : 'none',
+                                color: '#93c5fd', padding: '6px 10px', fontSize: 12, cursor: 'pointer',
+                              }}
+                            >
+                              ＋「{regionTitleQuery.trim()}」を新規追加
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {savingRegionTitle && <span style={{ fontSize: 11, color: '#93c5fd' }}>保存中…</span>}
+                  </div>
+                )
+              })()}
+
               <RegionAnnotator
                 key={selected.id}
                 item={selected}
+                titles={regionTitles}
                 onDirtyChange={setRegionDirty}
                 onSaved={(newItem) => {
                   notify('item-updated', { id: selected.id, item: newItem })
