@@ -788,7 +788,7 @@ def _mask_to_polygon(binary_mask, offset_x=0, offset_y=0):
         return None, None
     cnt = max(valid, key=cv2.contourArea)
     peri = cv2.arcLength(cnt, True)
-    approx = cv2.approxPolyDP(cnt, max(2.0, 0.012 * peri), True)
+    approx = cv2.approxPolyDP(cnt, max(1.5, 0.006 * peri), True)
     if len(approx) < 3:
         approx = cv2.approxPolyDP(cnt, 1.0, True)
     if len(approx) < 3:
@@ -845,17 +845,15 @@ def _match_heads_to_boxes(clamped_boxes, head_boxes):
     return head_list, head_owner, box_head
 
 
-def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=True):
+def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=True, use_sam=True):
     """Extract instance-separated foreground closed-region polygons for each
     detected character/mascot box:
-      1. Foreground mask via dghs-imgutils IS-Net (`get_isnetis_mask`), falling
-         back to full-box masks if segmentation is unavailable.
-      2. Neighbor-head exclusion: zeros out pixels inside any detected head
-         belonging to another character.
-      3. Voronoi ownership in overlapping box zones: assigns overlap pixels to
-         whichever character's anchor (head center if matched, else upper body
-         center) is closer in normalized coordinates.
-      4. Simplifies each instance mask into a polygon via `cv2.approxPolyDP`.
+      0. Primary engine: MobileSAM ONNX (`item.sam_segmenter.segment_boxes`)
+         prompted with BBox + own-head positive point + neighbor-head negative
+         points so overlapping characters separate cleanly along lineart/color.
+      1. Fallback when MobileSAM is unavailable: dghs-imgutils IS-Net
+         (`get_isnetis_mask`) + neighbor-head exclusion + Voronoi ownership.
+      2. Simplifies each instance mask into a polygon via `cv2.approxPolyDP`.
 
     Returns [{'box': [x1, y1, x2, y2], 'polygon': [[x, y], ...] | None}, ...].
     """
@@ -863,6 +861,15 @@ def _extract_region_polygons(image_bytes, boxes, head_boxes=None, use_isnetis=Tr
 
     if not boxes:
         return []
+
+    if use_sam:
+        try:
+            from item import sam_segmenter
+            sam_regions = sam_segmenter.segment_boxes(image_bytes, boxes, head_boxes=head_boxes)
+            if sam_regions is not None and len(sam_regions) == len(boxes) and any(r.get('polygon') for r in sam_regions):
+                return sam_regions
+        except Exception:
+            logger.debug('MobileSAM segmentation unavailable; falling back to isnetis', exc_info=True)
 
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     img_w, img_h = image.size

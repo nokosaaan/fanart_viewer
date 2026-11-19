@@ -75,6 +75,7 @@ export default function RegionAnnotator({
   const [naturalSize, setNaturalSize] = useState(null) // {width, height} of the currently-displayed image
   const [displayWidth, setDisplayWidth] = useState(0)  // rendered width of <img> tracked via ResizeObserver
   const [detecting, setDetecting] = useState(false)
+  const [segmenting, setSegmenting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -417,9 +418,53 @@ export default function RegionAnnotator({
     if (onDirtyChange) onDirtyChange(true)
   }
 
+  async function runSegmentAtPoint(x, y) {
+    if (segmenting) return
+    setSegmenting(true)
+    setError('')
+    try {
+      const resp = await fetch(`/api/items/${item.id}/segment_point/`, {
+        method: 'POST',
+        headers: HEADERS,
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          image_index: currentImageIndex,
+          pos_points: [[x, y]],
+        }),
+      })
+      const j = await resp.json().catch(() => ({}))
+      if (!resp.ok) throw new Error(j.detail || `AI領域抽出に失敗しました (${resp.status})`)
+      if (j.box && Array.isArray(j.polygon) && j.polygon.length >= 3) {
+        const id = nextBoxId()
+        const initialChars = stampChar ? [stampChar] : []
+        setBoxes(prev => [...prev, {
+          id,
+          imageIndex: j.image_index ?? currentImageIndex,
+          box: j.box,
+          polygon: j.polygon,
+          characters: initialChars,
+        }])
+        if (!stampChar) {
+          setActiveBoxId(null)
+          setSelectedBoxIds(new Set([id]))
+        }
+        setCharQuery('')
+        if (onDirtyChange) onDirtyChange(true)
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSegmenting(false)
+    }
+  }
+
   function handleMouseDown(e) {
     if (e.target !== containerRef.current && e.target !== imgRef.current) return
     const { x, y } = toNaturalCoords(e.clientX, e.clientY)
+    if (drawMode === 'sam') {
+      runSegmentAtPoint(x, y)
+      return
+    }
     if (drawMode === 'poly') {
       // If clicking near the start vertex with >= 3 points, close the polygon
       if (polyPoints.length >= 3) {
@@ -699,6 +744,7 @@ export default function RegionAnnotator({
             { id: 'box', label: '⬜ 矩形' },
             { id: 'lasso', label: '✏️ 投げ縄' },
             { id: 'poly', label: '📐 多角形' },
+            { id: 'sam', label: segmenting ? '🪄 抽出中…' : '🪄 AIクリック' },
           ].map(m => (
             <button
               key={m.id}

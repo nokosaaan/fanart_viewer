@@ -379,3 +379,73 @@ class BrokenRegionsAndOutliersTests(TestCase):
         self.assertEqual(r_iss.status_code, 200)
         self.assertEqual([x["id"] for x in r_iss.json()["results"]], [it_oob.id])
         self.assertGreater(len(r_iss.json()["results"][0]["region_issues"]), 0)
+
+    def test_sam_segmenter_prompts_and_segment_point_endpoint(self):
+        import io
+        from unittest.mock import patch
+        import numpy as np
+        from PIL import Image
+        from item import sam_segmenter
+        from item.models import PreviewImage
+
+        buf = io.BytesIO()
+        Image.new("RGB", (200, 200), (220, 220, 220)).save(buf, format="PNG")
+        img_bytes = buf.getvalue()
+
+        captured_feeds = []
+
+        class _DummyIO:
+            def __init__(self, name, shape=None):
+                self.name = name
+                self.shape = shape or [1, 3, 1024, 1024]
+
+        class _FakeEncoder:
+            def get_inputs(self):
+                return [_DummyIO("input_image", [1, 3, 1024, 1024])]
+            def run(self, _out, _feed):
+                return [np.zeros((1, 256, 64, 64), dtype=np.float32)]
+
+        class _FakeDecoder:
+            def get_inputs(self):
+                return [
+                    _DummyIO("image_embeddings"),
+                    _DummyIO("point_coords"),
+                    _DummyIO("point_labels"),
+                    _DummyIO("mask_input"),
+                    _DummyIO("has_mask_input"),
+                    _DummyIO("orig_im_size"),
+                ]
+            def get_outputs(self):
+                return [_DummyIO("masks"), _DummyIO("iou_predictions"), _DummyIO("low_res_masks")]
+            def run(self, _out, feed):
+                captured_feeds.append(feed)
+                # Return a clean square mask inside [20:90, 20:90] for mask index 1 (highest IoU)
+                masks = np.full((1, 3, 200, 200), -5.0, dtype=np.float32)
+                masks[0, 1, 20:90, 20:90] = 5.0
+                ious = np.array([[0.3, 0.95, 0.5]], dtype=np.float32)
+                low = np.full((1, 3, 256, 256), -5.0, dtype=np.float32)
+                return [masks, ious, low]
+
+        sam_segmenter._embed_cache.clear()
+        with patch.object(sam_segmenter, "_load_sessions", return_value=(_FakeEncoder(), _FakeDecoder())):
+            boxes = [(10, 10, 120, 190), (80, 10, 190, 190)]
+            heads = [(30, 20, 70, 60), (110, 20, 150, 60)]
+            regions = sam_segmenter.segment_boxes(img_bytes, boxes, head_boxes=heads)
+            self.assertEqual(len(regions), 2)
+            self.assertIsNotNone(regions[0]["polygon"])
+            self.assertGreaterEqual(len(regions[0]["polygon"]), 3)
+            # First box prompt must include box (2, 3), own head pos point (1), and neighbor head neg point (0)
+            labels0 = list(captured_feeds[0]["point_labels"][0])
+            self.assertEqual(labels0, [2.0, 3.0, 1.0, 0.0])
+
+            # Also verify POST /api/items/<id>/segment_point/ endpoint
+            it = Item.objects.create(external_id=901, source="pixiv_bookmark", artist="S", situation="CP")
+            PreviewImage.objects.create(item=it, order=0, data=img_bytes)
+            r = self.client.post(f"/api/items/{it.id}/segment_point/", {
+                "image_index": 0,
+                "pos_points": [[50, 50]],
+            }, format="json")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertIn("polygon", data)
+            self.assertGreaterEqual(len(data["polygon"]), 3)

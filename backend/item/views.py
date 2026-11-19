@@ -5290,6 +5290,47 @@ class ItemViewSet(viewsets.ReadOnlyModelViewSet):
             'proposed_regions': proposed_regions,
         })
 
+    @action(detail=True, methods=['post'], url_path='segment_point')
+    def segment_point(self, request, pk=None):
+        """Interactive MobileSAM segmentation from user click point(s) on an
+        item's image. Body: `{image_index: int|null, pos_points: [[x, y], ...],
+        neg_points?: [[x, y], ...], box?: [x1, y1, x2, y2]}`.
+        Returns `{image_index, box, polygon}`.
+        """
+        from item import sam_segmenter
+
+        item = self.get_object()
+        data = request.data if isinstance(request.data, dict) else {}
+        image_index = data.get('image_index')
+        if image_index is not None:
+            try:
+                image_index = int(image_index)
+            except (TypeError, ValueError):
+                image_index = None
+
+        pos_points = data.get('pos_points') or []
+        neg_points = data.get('neg_points') or []
+        box = data.get('box')
+        if not pos_points and not box:
+            return Response({'detail': 'pos_points or box is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        image_bytes, resolved_index = _select_image_bytes(item, image_index)
+        if image_bytes is None:
+            return Response({'detail': 'No image available for this item'}, status=status.HTTP_404_NOT_FOUND)
+
+        result = sam_segmenter.segment_point(image_bytes, pos_points=pos_points, neg_points=neg_points, box=box)
+        if result is None:
+            return Response(
+                {'detail': 'MobileSAM による領域抽出に失敗しました（モデルのダウンロードまたは推論に失敗した可能性があります）'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response({
+            'image_index': resolved_index,
+            'box': result['box'],
+            'polygon': result['polygon'],
+        })
+
     @action(detail=True, methods=['post'], url_path='character_regions')
     def character_regions_view(self, request, pk=None):
         """Save human-assigned region↔character labels across ALL of this
