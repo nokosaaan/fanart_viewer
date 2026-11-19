@@ -784,43 +784,35 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
               )
             }
 
-            const { missingFields, needsRegion } = attentionReasons(it, activeFields)
-            const missingMeta = MISSING_FIELDS.filter(f => missingFields.includes(f.key))
+            const isSuggested = Boolean(suggestions[it.id] && suggestions[it.id].source && suggestions[it.id].source !== 'none')
             return (
               <div
                 key={it.id}
                 onClick={()=>selectItem(it.id)}
-                title={`#${it.id}`}
+                title={`#${it.id}${isSuggested ? '（提案完了）' : '（未提案）'}`}
                 style={{
                   padding:'6px 4px', cursor:'pointer',
                   background: it.id===selectedId ? 'var(--active-bg)' : 'transparent',
                   borderBottom:'1px solid var(--divider)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 3,
                 }}
               >
-                <div style={{fontSize:11, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                <span style={{fontSize:11, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
                   #{it.id}
-                </div>
-                <div style={{ display:'flex', flexWrap:'wrap', gap:2, marginTop:2, fontSize:11, lineHeight:1.2 }}>
-                  {missingMeta.map(f => (
-                    <span key={f.key} title={`${f.label}不足`}>{f.icon}</span>
-                  ))}
-                  {needsRegion && (
-                    <span title="領域未設定">🔲</span>
-                  )}
-                  {suggestions[it.id] && suggestions[it.id].source && suggestions[it.id].source !== 'none' && (
-                    <span
-                      title={
-                        (suggestions[it.id].source === 'db' ? '提案あり（既存データから）'
-                        : suggestions[it.id].source === 'tagger' ? '提案あり（画像解析から）'
-                        : '提案あり（既存データ＋画像解析）')
-                        + (suggestions[it.id].source.includes('danbooru') ? '・Danbooru照合で新規タイトル推論' : '')
-                      }
-                    >
-                      {suggestions[it.id].source === 'db' ? '📚' : suggestions[it.id].source === 'tagger' ? '🏷' : '📚🏷'}
-                      {suggestions[it.id].source.includes('danbooru') && '🌐'}
-                    </span>
-                  )}
-                </div>
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: isSuggested ? '#4ade80' : '#475569',
+                    flexShrink: 0,
+                  }}
+                >
+                  {isSuggested ? '✓' : '○'}
+                </span>
               </div>
             )
           })}
@@ -953,8 +945,8 @@ export default function ItemQueueManager({ onClose, standalone = false, allItems
   // own `display:flex` of equal selector specificity, which the `hidden`
   // attribute's UA-stylesheet default can't do on its own.
   return (
-    <div className="cgm-panel-backdrop" style={hidden ? {display:'none'} : undefined} onClick={handleClose}>
-      <div className="cgm-panel" style={{width:'98vw', maxWidth:'98vw', height:'96vh', maxHeight:'96vh'}} onClick={e=>e.stopPropagation()}>{content}</div>
+    <div className="cgm-panel-backdrop" style={hidden ? {display:'none'} : {padding:0}} onClick={handleClose}>
+      <div className="cgm-panel" style={{width:'100vw', maxWidth:'100vw', height:'100vh', maxHeight:'100vh', borderRadius:0}} onClick={e=>e.stopPropagation()}>{content}</div>
     </div>
   )
 }

@@ -816,7 +816,7 @@ export default function RegionAnnotator({
           draggable={false}
           style={{
             maxWidth: '100%',
-            maxHeight: compact ? '40vh' : undefined,
+            maxHeight: compact ? '46vh' : undefined,
             width: compact ? 'auto' : undefined,
             display: 'block',
           }}
@@ -1017,14 +1017,21 @@ export default function RegionAnnotator({
         })()}
       </div>
 
-      {/* Fixed right-side character assignment panel */}
+      {/* Right-side column: character assignment panel + region list */}
       <div
         onClick={ev => ev.stopPropagation()}
         onMouseDown={ev => ev.stopPropagation()}
         style={{
-          flex: '1 1 280px',
+          flex: '1 1 300px',
           minWidth: 260,
-          maxWidth: 420,
+          maxWidth: 480,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+      <div
+        style={{
           background: '#1e293b',
           border: '1px solid #334155',
           borderRadius: 6,
@@ -1127,24 +1134,13 @@ export default function RegionAnnotator({
         ) : (
           <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.6 }}>
             <div style={{ fontWeight: 600, color: '#cbd5e1', marginBottom: 4 }}>キャラ割り当て</div>
-            画像上の矩形、または下の領域一覧から矩形を選択するとここでキャラを割り当てられます（Shift/Ctrl+クリックで複数選択）。
+            画像上の領域、または下の領域一覧から選択するとここでキャラを割り当てられます（Shift/Ctrl+クリックで複数選択）。
           </div>
         )}
       </div>
-      </div>
-
-      {loupeEnabled && !drawRect && (
-        <ColorInspectLoupe
-          imgRef={imgRef}
-          sampler={colorSamplerRef.current}
-          sample={hoverColor}
-          cursorPos={cursorPos}
-        />
-      )}
 
       {visibleBoxes.length > 0 && (
         <div style={{
-          marginTop: 12,
           background: '#0f172a',
           border: '1px solid #334155',
           borderRadius: 6,
@@ -1153,12 +1149,9 @@ export default function RegionAnnotator({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>
               領域一覧 ({visibleBoxes.length}件)
-              <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>
-                重なって×が押せない領域もここから選択・削除できます（カーソルを合わせると画像上で強調表示）
-              </span>
             </span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: compact ? 130 : 220, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: compact ? 160 : 220, overflowY: 'auto' }}>
             {visibleBoxes.map((b, idx) => {
               const [x1, y1, x2, y2] = b.box
               const w = Math.max(0, Math.round(x2 - x1))
@@ -1263,8 +1256,19 @@ export default function RegionAnnotator({
           </div>
         </div>
       )}
+      </div>
+      </div>
 
-      <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      {loupeEnabled && !drawRect && (
+        <ColorInspectLoupe
+          imgRef={imgRef}
+          sampler={colorSamplerRef.current}
+          sample={hoverColor}
+          cursorPos={cursorPos}
+        />
+      )}
+
+      <div style={{ marginTop: compact ? 6 : 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {showOwnActions && (
           <button className="btn" style={{ background: '#3b82f6', color: '#fff', padding: '8px 20px', fontWeight: 600 }}
             onClick={save} disabled={saving}>

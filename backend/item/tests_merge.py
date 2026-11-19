@@ -325,3 +325,43 @@ class ItemMergeTestCase(TestCase):
         self.assertIn('TitleB', all_titles)
         self.assertIn('CharA', all_chars)
         self.assertIn('CharB', all_chars)
+
+    def test_cross_group_mismatch_and_crossover_threshold(self):
+        from item.models import CharacterGroup
+        from item.views import _reconcile_title_character_groups
+
+        CharacterGroup.objects.create(name='GrpA2', characters=['CharA2'], titles=['TitleA2'])
+        CharacterGroup.objects.create(name='GrpB2', characters=['CharB2'], titles=['TitleB2'])
+        known = {'TitleA2', 'TitleB2'}
+
+        # 1. Crossover character from another group with classifier conf 0.95 (<= 0.98) is suppressed
+        chars_low = [
+            {'name': 'CharA2', 'score': 3.6, 'contributors': [{'source': 'classifier', 'confidence': 0.9}]},
+            {'name': 'CharB2', 'score': 3.8, 'contributors': [{'source': 'classifier', 'confidence': 0.95}]},
+        ]
+        titles_a = [
+            {'name': 'TitleA2', 'score': 3.0, 'contributors': [{'source': 'character_group', 'confidence': 1.5}]},
+            {'name': 'TitleB2', 'score': 2.0, 'contributors': [{'source': 'tag_similarity', 'confidence': 1.0}]},
+        ]
+        f_chars, f_titles, mismatch, _detail = _reconcile_title_character_groups(
+            chars_low, titles_a, item_titles=[], known_titles=known
+        )
+        self.assertEqual([c['name'] for c in f_chars], ['CharA2'])
+        self.assertFalse(mismatch)
+        # TitleB2 is penalized and flagged as group_mismatch because CharA2 is not in TitleB2
+        tb = next(t for t in f_titles if t['name'] == 'TitleB2')
+        self.assertTrue(tb['group_mismatch'])
+        self.assertLess(tb['score'], 2.0)
+
+        # 2. Crossover character with classifier conf 0.99 (> 0.98) is allowed AND triggers mismatch warning
+        chars_high = [
+            {'name': 'CharA2', 'score': 3.6, 'contributors': [{'source': 'classifier', 'confidence': 0.9}]},
+            {'name': 'CharB2', 'score': 3.96, 'contributors': [{'source': 'classifier', 'confidence': 0.99}]},
+        ]
+        f_chars2, _f_titles2, mismatch2, detail2 = _reconcile_title_character_groups(
+            chars_high, titles_a, item_titles=[], known_titles=known
+        )
+        self.assertEqual([c['name'] for c in f_chars2], ['CharA2', 'CharB2'])
+        self.assertTrue(mismatch2)
+        self.assertIn('TitleA2', detail2)
+        self.assertIn('CharB2', detail2)

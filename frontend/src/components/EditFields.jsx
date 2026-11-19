@@ -170,6 +170,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     setSituation((item.situation || '').toUpperCase())
     setTags((item.tags || []).join(', '))
     setArtist(item.artist || '')
+    setTitleMismatchWarning('')
   }, [item.id, item.situation, item.titles, item.characters, item.tags, item.artist])
   const [allTitles, setAllTitles] = useState([])
   const [allChars,  setAllChars]  = useState([])
@@ -217,6 +218,7 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
   const [showAllChars, setShowAllChars] = useState(false)
   const [showAllTitles, setShowAllTitles] = useState(false)
   const [expandedTitleCandidate, setExpandedTitleCandidate] = useState(null)
+  const [titleMismatchWarning, setTitleMismatchWarning] = useState('')
   const [showManualCharsInRegion, setShowManualCharsInRegion] = useState(false)
   // Only offered once tagger_capabilities/ confirms the heavier 'timm'
   // backend is actually installed on this server (see requirements-timm.txt
@@ -407,6 +409,11 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     // hashtags/DB history). Surfaced in the UI so it's never ambiguous
     // which image a suggestion is based on — see _select_image_bytes.
     setSuggestionResult({ added, source: j.source || null, sampleSize: j.sample_size ?? null, imageIndex: j.image_index ?? null, imagesAnalyzed: j.images_analyzed ?? null })
+    setTitleMismatchWarning(
+      j.title_character_mismatch
+        ? (j.title_character_mismatch_detail || '提案タイトルとキャラの所属グループが一致していません')
+        : ''
+    )
     if(onSuggestionApplied) onSuggestionApplied(j)
   }
 
@@ -470,12 +477,44 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
     return hasNormal ? 'mixed' : 'low_only'
   }
 
-  // If ItemQueueManager already ran bulk suggestion for this item, apply the
-  // cached result immediately instead of re-running inference (~5s+/image).
+  function formatContributorsBrief(contributors){
+    if(!Array.isArray(contributors) || contributors.length === 0) return ''
+    const seen = new Set()
+    const parts = []
+    for(const ct of contributors){
+      const label = SOURCE_LABELS[ct.source] || ct.source
+      if(seen.has(label)) continue
+      seen.add(label)
+      const pct = ct.confidence != null && ct.confidence < 1 ? ` ${Math.round(ct.confidence * 100)}%` : ''
+      parts.push(`${label}${pct}`)
+    }
+    return parts.join(' / ')
+  }
+
+  function formatContributorsTooltip(c){
+    const lines = [`score: ${c.score}`]
+    if(Array.isArray(c.contributors)){
+      for(const ct of c.contributors){
+        const label = SOURCE_LABELS[ct.source] || ct.source
+        const conf = ct.confidence != null ? ` (${Math.round(ct.confidence * 100)}%)` : ''
+        const raw = ct.raw_name ? ` [${ct.raw_name}]` : ''
+        const imgs = ct.images_with != null && ct.images_total > 1 ? ` (${ct.images_with}/${ct.images_total}枚)` : ''
+        lines.push(`・${label}${conf}${raw}${imgs}`)
+      }
+    }
+    return lines.join('\n')
+  }
+
+  // If ItemQueueManager already ran (or finishes running while this item is open)
+  // bulk suggestion for this item, apply it immediately instead of requiring a re-select.
+  const lastAppliedSuggestionRef = useRef(null)
   useEffect(()=>{
-    if(initialSuggestion) applySuggestion(initialSuggestion)
+    if(initialSuggestion && initialSuggestion !== lastAppliedSuggestionRef.current){
+      lastAppliedSuggestionRef.current = initialSuggestion
+      applySuggestion(initialSuggestion)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [initialSuggestion])
 
   async function runSuggest(){
     if(suggestModel === 'canary' && !window.confirm('最新モデルは初回選択時にサーバー側で大きいモデル(約1.3GB)をダウンロードします。時間がかかる場合があります。続行しますか？')) return
@@ -691,7 +730,26 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
         <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 8, marginBottom: 8, alignItems: 'stretch', flexShrink: 0 }}>
           <div style={{ background: '#0f172a', borderRadius: 6, padding: '8px 10px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div>
-              <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>TITLE ★</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+                <label style={{ color: '#94a3b8', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', display: 'block' }}>TITLE ★</label>
+                {titleMismatchWarning && (
+                  <span
+                    title={titleMismatchWarning}
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: '1px 6px',
+                      borderRadius: 4,
+                      background: 'rgba(245, 158, 11, 0.2)',
+                      border: '1px solid #f59e0b',
+                      color: '#fde68a',
+                      cursor: 'help',
+                    }}
+                  >
+                    ⚠️ キャラと別グループ
+                  </span>
+                )}
+              </div>
               <TagField
                 label=""
                 hint=""
@@ -715,17 +773,17 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                           fontWeight: isAdded ? 700 : 500,
                           padding: '6px 12px',
                           borderRadius: 6,
-                          border: isAdded ? '1px solid #22c55e' : '1px solid #475569',
+                          border: isAdded ? '1px solid #22c55e' : (t.group_mismatch ? '1px solid #f59e0b' : '1px solid #475569'),
                           cursor: 'pointer',
-                          background: isAdded ? '#166534' : '#1e293b',
+                          background: isAdded ? '#166534' : (t.group_mismatch ? 'rgba(120, 53, 15, 0.45)' : '#1e293b'),
                           color: '#f1f5f9',
                           display: 'inline-flex',
                           alignItems: 'center',
                           gap: 6,
                         }}
-                        title={`score ${t.score}`}
+                        title={t.group_mismatch ? `⚠️ 提案キャラの所属グループと一致しません (score ${t.score})` : `score ${t.score}`}
                       >
-                        <span>{isAdded ? '✓' : '＋'} {t.name}</span>
+                        <span>{isAdded ? '✓' : '＋'} {t.group_mismatch ? '⚠️ ' : ''}{t.name}</span>
                         <span style={{ fontSize: 10, opacity: 0.75 }}>{t.score}</span>
                       </button>
                     )
@@ -813,6 +871,38 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
 
           {!isSolo ? (
             <div style={{ marginTop: 6 }}>
+              {charCandidates.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>提案キャラ根拠:</span>
+                  {(showAllChars ? charCandidates : charCandidates.slice(0, COLLAPSED_CANDIDATES)).map(c => {
+                    const isAdded = charList.includes(c.name)
+                    const brief = formatContributorsBrief(c.contributors)
+                    return (
+                      <button key={c.name} type="button" onClick={() => toggleCharCandidate(c.name)}
+                        style={{
+                          fontSize: 11, padding: '3px 8px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                          background: isAdded ? '#166534' : '#334155', color: '#f1f5f9',
+                          display: 'inline-flex', alignItems: 'center', gap: 5,
+                        }}
+                        title={formatContributorsTooltip(c)}
+                      >
+                        <span>{isAdded ? '✓ ' : '＋ '}{c.name}</span>
+                        <span style={{ fontSize: 10, opacity: 0.75 }}>({c.score})</span>
+                        {brief && (
+                          <span style={{ fontSize: 10, color: '#93c5fd', background: 'rgba(15,23,42,0.55)', padding: '1px 5px', borderRadius: 3 }}>
+                            {brief}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                  {charCandidates.length > COLLAPSED_CANDIDATES && (
+                    <button type="button" className="btn" onClick={() => setShowAllChars(v => !v)} style={{ fontSize: 10, padding: '2px 7px' }}>
+                      {showAllChars ? '▲' : `+${charCandidates.length - COLLAPSED_CANDIDATES}件`}
+                    </button>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 className="btn"
@@ -836,15 +926,23 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                   {(showAllChars ? charCandidates : charCandidates.slice(0, COLLAPSED_CANDIDATES)).map(c => {
                     const isAdded = charList.includes(c.name)
+                    const brief = formatContributorsBrief(c.contributors)
                     return (
                       <button key={c.name} type="button" onClick={() => toggleCharCandidate(c.name)}
                         style={{
                           fontSize: 12, padding: '4px 10px', borderRadius: 4, border: 'none', cursor: 'pointer',
                           background: isAdded ? '#166534' : '#334155', color: '#f1f5f9',
+                          display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
                         }}
-                        title={`score ${c.score}`}
+                        title={formatContributorsTooltip(c)}
                       >
-                        {isAdded ? '✓ ' : '＋ '}{c.name} <span style={{ fontSize: 10, opacity: 0.75 }}>({c.score})</span>
+                        <span>{isAdded ? '✓ ' : '＋ '}{c.name}</span>
+                        <span style={{ fontSize: 10, opacity: 0.75 }}>({c.score})</span>
+                        {brief && (
+                          <span style={{ fontSize: 10, color: '#93c5fd', background: 'rgba(15,23,42,0.55)', padding: '1px 5px', borderRadius: 3 }}>
+                            {brief}
+                          </span>
+                        )}
                       </button>
                     )
                   })}
@@ -1106,6 +1204,15 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
 
       {titleSuggestions.length > 0 && (
         <div style={{marginBottom:10, padding:'0 14px'}}>
+          {titleMismatchWarning && (
+            <div style={{
+              marginBottom: 6, padding: '6px 10px', borderRadius: 6,
+              background: 'rgba(245, 158, 11, 0.14)', border: '1px solid #f59e0b',
+              color: '#fde68a', fontSize: 12,
+            }}>
+              ⚠️ {titleMismatchWarning}
+            </div>
+          )}
           <div style={{fontSize:11, color:'#94a3b8', marginBottom:6}}>
             AI提案候補(スコア高い順、クリックで追加/解除。作品名データベースに無い新規タイトルの可能性もあります。どれも違う場合は下のTitlesで直接手動選択・入力してください):
           </div>
@@ -1121,8 +1228,14 @@ export function ItemEditForm({ item, onClose, onSaved, closeLabel = 'キャン�
                       style={{fontSize:12, background: isAdded ? '#166534' : '#334155', color:'#f1f5f9'}}>
                       {isAdded ? '✓ 追加済み' : '＋ 追加'}
                     </button>
-                    <span style={{fontSize:13, color:'#f1f5f9', fontWeight:600}}>{t.name}</span>
+                    <span style={{fontSize:13, color:'#f1f5f9', fontWeight:600}}>{t.group_mismatch ? '⚠️ ' : ''}{t.name}</span>
                     <span style={{fontSize:11, color:'#94a3b8'}}>score {t.score}</span>
+                    {t.group_mismatch && (
+                      <span title="提案キャラの所属グループと一致していないタイトルです"
+                        style={{fontSize:11, padding:'2px 6px', borderRadius:4, background:'rgba(245,158,11,0.2)', border:'1px solid #f59e0b', color:'#fde68a'}}>
+                        ⚠️ キャラと別グループ
+                      </span>
+                    )}
                     {tier === 'low_only' && (
                       <span title="作家履歴・タグ類似度など、他アイテムからの類推のみが根拠です。画像やハッシュタグを直接見て判断したものではありません"
                         style={{fontSize:11, padding:'2px 6px', borderRadius:4, background:'#78350f', color:'#fde68a'}}>
@@ -1488,8 +1601,11 @@ export function ItemQueuePanel({
   const regionSection = (
     <div>
       {showRegionSection ? (
-        <div style={{marginTop:16, marginBottom:16, background:'#0f172a', borderRadius:8, padding:'12px 14px'}}>
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10}}>
+        <div style={compactQueueLayout
+          ? {marginTop:4, marginBottom:6, background:'#0f172a', borderRadius:6, padding:'8px 10px'}
+          : {marginTop:16, marginBottom:16, background:'#0f172a', borderRadius:8, padding:'12px 14px'}
+        }>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: compactQueueLayout ? 6 : 10}}>
             <label style={{color:'#94a3b8', fontSize:11, fontWeight:600, letterSpacing:'0.08em', textTransform:'uppercase', display:'block'}}>
               領域ラベル付け <span style={{fontWeight:400, textTransform:'none', fontSize:11}}>— 複数キャラが写っている場合、どの矩形が誰かを割り当ててください</span>
             </label>

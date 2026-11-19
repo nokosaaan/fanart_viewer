@@ -1549,12 +1549,14 @@ def _predict_crop_character_scores(crop, tagger_backend):
     return scores
 
 
-def _derive_proposed_regions(results, candidate_characters, tagger_backend, image_indices=None, is_solo=False):
+def _derive_proposed_regions(results, candidate_characters, tagger_backend, image_indices=None, is_solo=False, allowed_titles=None):
     """Derive region bounding boxes with candidate character assignments across analysed images.
 
     results: list of (position, tagger_result)
     candidate_characters: list of candidate character names (str) or candidate dicts with 'name'
     image_indices: list of original image index per position in results (optional)
+    allowed_titles: optional list of title names; characters belonging to a different
+        CharacterGroup than `allowed_titles` require classifier confidence > 0.98.
     """
     proposed = []
     char_names = []
@@ -1567,6 +1569,10 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
             name = None
         if name and name not in char_names:
             char_names.append(name)
+
+    allowed_title_set = {t for t in (allowed_titles or []) if t}
+    char_to_titles, title_to_chars = _build_title_char_group_maps() if allowed_title_set else ({}, {})
+    enforce_group = any(t in title_to_chars for t in allowed_title_set)
 
     for position, r in results:
         img_idx = image_indices[position] if image_indices and position < len(image_indices) else None
@@ -1626,6 +1632,10 @@ def _derive_proposed_regions(results, candidate_characters, tagger_backend, imag
                         best_c = c_name
                 # Also consider strong direct recognition from the crop itself
                 top_crop_c, top_crop_s = max(scores.items(), key=lambda kv: kv[1]) if scores else (None, 0.0)
+                if top_crop_c and enforce_group and not _is_appearance_color_label(top_crop_c):
+                    ct = char_to_titles.get(_normalize_char_name(top_crop_c), set())
+                    if ct and not (ct & allowed_title_set) and top_crop_s <= _CROSSOVER_CLASSIFIER_MIN_CONF * 2.0:
+                        top_crop_c, top_crop_s = None, 0.0
                 if top_crop_c and top_crop_s >= 0.25 and top_crop_s > best_s:
                     box_assignments[b_idx] = top_crop_c
                 elif best_s > 0.12:
@@ -2348,6 +2358,8 @@ def _combine_candidates(entries, weights, min_score=0.0, top_k=1):
 
 
 _CLASSIFIER_NAMED_CHAR_MIN_CONF = 0.85
+_CROSSOVER_CLASSIFIER_MIN_CONF = 0.98
+_CROSS_GROUP_MISMATCH_PENALTY = 0.35
 _NAMED_CHAR_FALLBACK_THRESHOLD = 1.0
 
 
@@ -2490,6 +2502,177 @@ def _cross_boost_character_candidates(title_scores, known_titles):
         for char_name in (group.characters or []):
             boosts.append({'value': char_name, 'source': 'title_group', 'confidence': confidence})
     return boosts
+
+
+def _build_title_char_group_maps(known_titles=None):
+    """Build bidirectional normalized-character <-> title lookup maps from CharacterGroup."""
+    if known_titles is None:
+        known_titles = _known_titles()
+    char_to_titles = {}
+    title_to_chars = {}
+    for group in CharacterGroup.objects.all():
+        gtitles = set(_titles_for_group(group, known_titles))
+        if not gtitles:
+            continue
+        for c in (group.characters or []):
+            nc = _normalize_char_name(c)
+            if not nc:
+                continue
+            char_to_titles.setdefault(nc, set()).update(gtitles)
+            for t in gtitles:
+                title_to_chars.setdefault(t, set()).add(nc)
+    return char_to_titles, title_to_chars
+
+
+_STRONG_EXPLICIT_SOURCES = {'hashtag', 'danbooru', 'danbooru_description'}
+
+
+def _reconcile_title_character_groups(characters, titles, item_titles=None, known_titles=None, per_image=None):
+    """Enforce group coherence between proposed titles and characters:
+      1. If a named character belongs to a CharacterGroup whose titles do not
+         match the active/proposed title (or conflicts with the #1 character's
+         title group on the same image — i.e. a crossover), suppress it unless
+         it has an explicit text/external source OR classifier confidence > 0.98.
+      2. Conversely, penalize any proposed title whose CharacterGroup does not
+         contain the proposed named character(s) (unless backed by explicit
+         text/external evidence), and mark `group_mismatch=True`.
+      3. Return `(characters, titles, mismatch_bool, mismatch_detail)` so the UI
+         can show a warning icon on the title section when any mismatch remains.
+    """
+    char_to_titles, title_to_chars = _build_title_char_group_maps(known_titles)
+
+    fixed_titles = [t for t in (item_titles or []) if t]
+    # Map image_index -> top title for that image (for multi-image posts where
+    # each page may legitimately depict a different title/character).
+    per_image_top_title = {}
+    for pi in (per_image or []):
+        pi_titles = pi.get('titles') or []
+        if pi.get('image_index') is not None and pi_titles:
+            per_image_top_title[pi['image_index']] = pi_titles[0]['name']
+
+    # Anchor titles for checking character coherence: confirmed item titles if set,
+    # otherwise the top proposed title(s) (plus each page's own top title when
+    # multiple images were analyzed independently).
+    anchor_titles = set(fixed_titles)
+    if not anchor_titles:
+        if len(per_image_top_title) >= 2:
+            for t in per_image_top_title.values():
+                if t in title_to_chars:
+                    anchor_titles.add(t)
+        if not anchor_titles and titles:
+            top_t = titles[0]['name']
+            if top_t in title_to_chars:
+                anchor_titles.add(top_t)
+    anchor_has_groups = any(t in title_to_chars for t in anchor_titles)
+
+    def _char_image_indices(c):
+        idxs = set()
+        for co in (c.get('contributors') or []):
+            for ii in (co.get('image_indices') or []):
+                if ii is not None:
+                    idxs.add(ii)
+        return idxs
+
+    # Identify #1 named character's own title group(s) & image indices for same-image crossover suppression
+    primary_char_titles = set()
+    primary_char_images = set()
+    for c in characters:
+        if _is_appearance_color_label(c['name']):
+            continue
+        ct = char_to_titles.get(_normalize_char_name(c['name']))
+        if ct:
+            primary_char_titles = set(ct)
+            primary_char_images = _char_image_indices(c)
+            break
+
+    filtered_chars = []
+    for idx, c in enumerate(characters):
+        name = c['name']
+        if _is_appearance_color_label(name):
+            filtered_chars.append(c)
+            continue
+        nc = _normalize_char_name(name)
+        c_titles = char_to_titles.get(nc, set())
+        if not c_titles:
+            filtered_chars.append(c)
+            continue
+
+        c_images = _char_image_indices(c)
+        # Same-image crossover: both characters share an image (or no per-image indices recorded)
+        shares_image_with_primary = (
+            not primary_char_images or not c_images or bool(primary_char_images & c_images)
+        )
+        conflicts_with_anchor = anchor_has_groups and not (c_titles & anchor_titles)
+        conflicts_with_primary = (
+            (idx > 0)
+            and bool(primary_char_titles)
+            and shares_image_with_primary
+            and not (c_titles & primary_char_titles)
+        )
+
+        if conflicts_with_anchor or conflicts_with_primary:
+            contribs = c.get('contributors') or []
+            has_explicit = any(co.get('source') in _STRONG_EXPLICIT_SOURCES for co in contribs)
+            max_clf_conf = max(
+                (float(co.get('confidence') or 0.0) for co in contribs if co.get('source') == 'classifier'),
+                default=0.0,
+            )
+            # Suppress cross-group/crossover guesses unless classifier > 0.98 or explicit text hit
+            if not has_explicit and max_clf_conf <= _CROSSOVER_CLASSIFIER_MIN_CONF:
+                continue
+            c = {**c, 'group_mismatch': True}
+        filtered_chars.append(c)
+
+    # Reverse check: be cautious with titles whose CharacterGroup does not contain
+    # the surviving proposed named character(s)
+    surviving_char_titles = set()
+    surviving_grouped_chars = []
+    for c in filtered_chars:
+        if _is_appearance_color_label(c['name']):
+            continue
+        ct = char_to_titles.get(_normalize_char_name(c['name']), set())
+        if ct:
+            surviving_char_titles.update(ct)
+            surviving_grouped_chars.append(c['name'])
+
+    adjusted_titles = []
+    for t in titles:
+        t_name = t['name']
+        t_chars = title_to_chars.get(t_name, set())
+        if surviving_char_titles and t_chars and t_name not in surviving_char_titles:
+            contribs = t.get('contributors') or []
+            has_explicit = any(co.get('source') in _STRONG_EXPLICIT_SOURCES for co in contribs)
+            new_score = t['score'] if has_explicit else round(t['score'] * _CROSS_GROUP_MISMATCH_PENALTY, 4)
+            adjusted_titles.append({**t, 'score': new_score, 'group_mismatch': True})
+        else:
+            adjusted_titles.append({**t, 'group_mismatch': False})
+    adjusted_titles.sort(key=lambda t: -t['score'])
+
+    # Final mismatch flag for UI warning on the title section
+    check_titles = fixed_titles if fixed_titles else ([adjusted_titles[0]['name']] if adjusted_titles else [])
+    check_title_set = set(check_titles)
+    check_has_groups = any(t in title_to_chars for t in check_title_set)
+    mismatched_chars = []
+    if check_has_groups:
+        for c in filtered_chars:
+            if _is_appearance_color_label(c['name']):
+                continue
+            ct = char_to_titles.get(_normalize_char_name(c['name']), set())
+            if ct and not (ct & check_title_set):
+                mismatched_chars.append(c['name'])
+
+    top_title_mismatch = bool(adjusted_titles and adjusted_titles[0].get('group_mismatch'))
+    mismatch = bool(mismatched_chars) or top_title_mismatch
+    mismatch_detail = ''
+    if mismatch:
+        t_label = '、'.join(check_titles[:2])
+        c_label = '、'.join((mismatched_chars or surviving_grouped_chars)[:3])
+        mismatch_detail = (
+            f'タイトル「{t_label}」とキャラ「{c_label}」の所属グループが一致していません'
+            '（クロスオーバーまたは誤推論の可能性があります）'
+        )
+
+    return filtered_chars, adjusted_titles, mismatch, mismatch_detail
 
 
 # How many ranked character/title candidates the review list can hold. It used
@@ -2655,6 +2838,14 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         for name in title_values
     ]
 
+    characters, titles, title_char_mismatch, title_char_mismatch_detail = _reconcile_title_character_groups(
+        characters,
+        titles,
+        item_titles=item.titles or [],
+        known_titles=known_titles,
+        per_image=per_image_out,
+    )
+
     # Same last-resort OC fallback _suggest_for_item uses — nothing else
     # proposed a title at all, but the post's own text reads like an OC
     # disclaimer. No real source found this, so it gets a synthetic one
@@ -2673,11 +2864,14 @@ def _suggest_for_item_ensemble(item, external=False, tagger_backend='onnx',
         tagger_backend,
         image_indices=collected.get('image_indices'),
         is_solo=(item.situation or '').upper() == 'SOLO',
+        allowed_titles=item.titles or ([titles[0]['name']] if titles else []),
     )
 
     return {
         'characters': characters,
         'titles': titles,
+        'title_character_mismatch': title_char_mismatch,
+        'title_character_mismatch_detail': title_char_mismatch_detail,
         'tags': collected['tags'],
         'situation_hint': situation_values[0] if situation_values else None,
         'suggested_titles': [],
